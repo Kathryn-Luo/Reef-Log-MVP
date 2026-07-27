@@ -1,13 +1,21 @@
 // ReefLog — 資料模型草稿
 //
-// 來源：Epic #1「畫面建置」的 screen-1（首頁預設）與 screen-2（數據儀表板展開）。
+// 來源：Epic #1「畫面建置」的全部 7 張截圖：
+//   screen-1 首頁（預設收合）        screen-5 生物庫存
+//   screen-2 首頁（數據儀表板展開）   screen-6 生物詳情 · 死亡記錄
+//   screen-3 水質記錄                screen-7 保養提醒
+//   screen-4 趨勢圖
+//
 // 慣例依 docs/SCHEMA_GUIDE.md：model 單數 PascalCase、欄位 camelCase、
 // 主鍵 cuid()、每個 model 都有 createdAt / updatedAt、金額與量測值用 Decimal。
 //
 // 設計原則：畫面上任何「算得出來的東西」都不進資料庫，例如
-//   - 「存活 · 8 月」→ 由 addedOn 推算
-//   - 「2 需注意」、「偏低 ▼ / 偏高 ▲」→ 由 WaterReading.value 與 WaterParameterTarget 比較
-//   - 「更新於 4 小時前」→ 由最新一筆 WaterLog.measuredAt 推算
+//   - 「存活 · 8 月」、「在缸天數 189 天」→ 由 addedOn（死亡則到 diedOn）推算
+//   - 「觀察第 3 天」→ 由 observedSickOn 推算
+//   - 「2 需注意」、「偏低 ▼ / 偏高 ▲」→ WaterReading.value 與 WaterParameterTarget 比較
+//   - 「更新於 4 小時前」、「4 天前」→ 由 measuredAt 推算
+//   - 趨勢頁的平均 / 最高 / 最低 / 期間變化量 → 由該區間的 WaterReading 聚合
+//   - 保養的「下次到期」「3 天後」→ 由最後一次完成時間 + intervalDays 推算
 //   - 生物的總成本 / 存活價值 / 死亡價值 → 由 price + status 動態計算
 
 datasource db {
@@ -36,34 +44,44 @@ model User {
   tanks Tank[]
 }
 
-/// screen-1 頁首：「主缸 · 4 尺」／「SPS MIXED · 420L」與左側色塊。
+/// screen-1 / 3 / 4 / 7 頁首共用：「主缸 · 4 尺」「SPS MIXED · 420L」與左側色塊。
 model Tank {
-  id       String @id @default(cuid())
-  userId   String
+  id     String @id @default(cuid())
+  userId String
+
   /// 缸名，例：主缸
-  name     String
+  name String
+
   /// 尺寸標示（使用者自填的口語尺寸），例：4 尺
   sizeSpec String?
+
   /// 水量（公升），例：420
   volumeLiters Int?
+
   /// 飼養型態標示，例：SPS MIXED
   /// 草稿先用自由字串：「SPS MIXED」是複合詞，先不硬塞進 enum，待人類定案。
   setupType String?
+
   /// 缸的代表色（頁首色塊 / 切換選單），存 #RRGGBB
   colorHex String?
+
   /// 開缸日期（缸齡來源）
   startedOn DateTime? @db.Date
+
   /// 開啟 App 時預設顯示的缸；同一位使用者只應有一個為 true（由應用層維持）
   isDefault Boolean @default(false)
+
   /// 切換選單中的排序
   displayOrder Int @default(0)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user       User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  creatures  Creature[]
-  waterLogs  WaterLog[]
-  waterTargets WaterParameterTarget[]
+  user             User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  creatures        Creature[]
+  waterLogs        WaterLog[]
+  waterTargets     WaterParameterTarget[]
+  maintenanceTasks MaintenanceTask[]
 
   @@index([userId, displayOrder])
 }
@@ -72,18 +90,26 @@ model Tank {
 // 水質
 // ─────────────────────────────────────────────
 
-/// screen-1 的彩色數字列與 screen-2 的儀表板是「同一份資料」的兩種呈現，
-/// 因此只有這一組 model：一次下測 = 一筆 WaterLog，其下每個項目 = 一筆 WaterReading。
-/// 用「一筆量測事件 + 多筆讀數」而非把 6 個項目攤成 6 個欄位，理由：
-///   1. 使用者常常只測其中幾項，攤平會留下大量 null 且語意不明；
+/// 一次下測 = 一筆 WaterLog，其下每個測項 = 一筆 WaterReading。
+///
+/// screen-1 的彩色數字列、screen-2 的儀表板、screen-3 的歷史記錄、
+/// screen-4 的趨勢折線，全部是「這一組資料」的四種呈現，不另立 model。
+///
+/// 用「一筆量測事件 + 多筆讀數」而非把 6 個測項攤成 6 個欄位，理由：
+///   1. screen-3 明確允許只填部分測項（NO₃ / PO₄ / 鹽度 顯示「—」未填），
+///      攤平會留下大量語意不明的 null；
 ///   2. 之後要加測項（如 PH、溫度）不必改 schema；
-///   3. 每個項目的正常區間（screen-2 右側 7–9、380–450…）可直接以 parameter 對應。
+///   3. 每個測項的正常區間（screen-2 右側 7–9、380–450…）可直接以 parameter 對應。
 model WaterLog {
-  id        String   @id @default(cuid())
-  tankId    String
-  /// 實際量測時間（不是建檔時間）；screen-1 的「· 4h」與 screen-2 的「更新於 4 小時前」由此推算
+  id     String @id @default(cuid())
+  tankId String
+
+  /// 實際量測時間（screen-3 的日期 07/08 + 時間 21:30 合成，不是建檔時間）。
+  /// screen-1 的「· 4h」、screen-2 的「更新於 4 小時前」、screen-3 的「4 天前」由此推算。
   measuredAt DateTime
-  note      String?
+
+  note String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -93,44 +119,53 @@ model WaterLog {
   @@index([tankId, measuredAt])
 }
 
-/// 單一測項的讀數。screen-2 的走勢折線即是同一 parameter 依 measuredAt 排序的序列。
+/// 單一測項的讀數。
+/// screen-4 的折線 = 同一 parameter 依 measuredAt 排序的序列；
+/// screen-3 每個輸入框右側的「上次 8.0」= 同一 parameter 前一筆的 value。
 model WaterReading {
   id         String         @id @default(cuid())
   waterLogId String
   parameter  WaterParameter
-  /// 讀數值。用 Decimal 避免浮點誤差（鹽度 1.026、PO4 0.04 需要小數精度）
-  value      Decimal        @db.Decimal(10, 4)
-  createdAt  DateTime       @default(now())
-  updatedAt  DateTime       @updatedAt
+
+  /// 讀數值。用 Decimal 避免浮點誤差（鹽度 1.026、PO₄ 0.04 需要小數精度）
+  value Decimal @db.Decimal(10, 4)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   waterLog WaterLog @relation(fields: [waterLogId], references: [id], onDelete: Cascade)
 
-  // 同一次量測中，同一個測項只會有一筆讀數
+  /// 同一次量測中，同一個測項只會有一筆讀數。
+  /// 「未量測」以「不建立此列」表示，而不是存 null。
   @@unique([waterLogId, parameter])
   @@index([parameter])
 }
 
-/// 每個缸、每個測項的正常區間（screen-2 右側的 7–9、380–450、1250–1350…）。
+/// 每個缸、每個測項的正常區間（screen-2 右側的 7–9、380–450、1250–1350…，
+/// 同一份區間也是 screen-4 折線圖的背景色帶）。
 /// 放在 Tank 之下而非寫死常數：不同飼養型態（SPS / 軟體）目標值不同。
 /// 沒有設定的測項由應用層套用預設區間。
 model WaterParameterTarget {
   id        String         @id @default(cuid())
   tankId    String
   parameter WaterParameter
+
   /// 正常區間下限；低於此值 → screen-2 顯示「偏低 ▼」
-  minValue  Decimal        @db.Decimal(10, 4)
+  minValue Decimal @db.Decimal(10, 4)
+
   /// 正常區間上限；高於此值 → screen-2 顯示「偏高 ▲」
-  maxValue  Decimal        @db.Decimal(10, 4)
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
+  maxValue Decimal @db.Decimal(10, 4)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   tank Tank @relation(fields: [tankId], references: [id], onDelete: Cascade)
 
   @@unique([tankId, parameter])
 }
 
-/// 測項。單位（dKH / ppm / 無單位）是測項本身固有的性質，
-/// 屬於應用層常數，不重複存進資料庫。
+/// 測項。screen-1 / 2 / 3 / 4 的六項是同一組定義。
+/// 單位（dKH / ppm / SG）是測項本身固有的性質，屬於應用層常數，不重複存進資料庫。
 enum WaterParameter {
   KH
   CA
@@ -138,6 +173,7 @@ enum WaterParameter {
   NO3
   PO4
   SALINITY
+
   /// 以下兩項畫面上未出現，依 SCHEMA_GUIDE 的領域概念先預留
   PH
   TEMPERATURE
@@ -147,31 +183,59 @@ enum WaterParameter {
 // 生物
 // ─────────────────────────────────────────────
 
-/// screen-1 下半部的生物卡片。
+/// screen-1 的生物卡片、screen-5 的庫存列表、screen-6 的生物詳情，
+/// 是同一個 model 的三種呈現。
 model Creature {
-  id       String           @id @default(cuid())
-  tankId   String
-  /// 顯示名稱，例：藍倒吊、榔頭珊瑚
-  name     String
+  id     String @id @default(cuid())
+  tankId String
+
+  /// 俗名，例：藍倒吊、榔頭珊瑚、火焰仙
+  name String
+
+  /// 學名，例：Paracanthurus、Amphiprion、Centropyge loriculus
+  /// （screen-5 列表第二行、screen-6 名稱下方）
+  scientificName String?
+
   category CreatureCategory
-  /// 同一張卡片的數量，例：「公子小丑 ×2」
-  quantity Int              @default(1)
+
+  /// 細分類標籤，例：神仙（screen-6 的「魚 · 神仙」後半段）。
+  /// 用自由字串而非 enum：魚 / 珊瑚 的細分族群非常多，硬列舉會頻繁改 schema。
+  subCategory String?
+
+  /// 同一列代表的隻數，例：「公子小丑 ×2」。取捨與限制見 PR 說明。
+  quantity Int @default(1)
+
   /// 建檔時拍攝的照片；null → 畫面改用預設圖示
   photoUrl String?
-  /// 入缸日期；卡片上的「· 8 月」由此推算
-  addedOn  DateTime         @db.Date
+
+  /// 入缸日期（screen-6「入缸日 2025/11/12」）。
+  /// 「入缸 8 月」「在缸天數 189 天」由此推算——生物已死亡時算到 diedOn，否則算到今天。
+  addedOn DateTime @db.Date
+
   /// 購入單價。總成本 / 存活價值 / 死亡價值一律由 price + status 動態計算，不存衍生欄位
-  price    Decimal?         @db.Decimal(10, 2)
-  status   CreatureStatus   @default(ALIVE)
-  /// 觀察到生病的日期；卡片的「⚠ 觀察中」由 status = SICK 且此欄位有值推導
+  price Decimal? @db.Decimal(10, 2)
+
+  status CreatureStatus @default(ALIVE)
+
+  /// 發病日 / 觀察到生病的日期（screen-6 死亡記錄區的「發病日 05/16」）。
+  /// 生病中 → screen-1 的「⚠ 觀察中」、screen-5 的「觀察第 3 天」由此推算；
+  /// 已死亡 → 仍保留，作為死亡記錄的發病日。
+  /// 刻意讓「生病」與「死亡」共用同一欄，避免同一個日期在兩處各存一份而失去一致性。
   observedSickOn DateTime? @db.Date
-  /// 症狀／病名，例：白點（卡片顯示為「生病 · 白點」）
-  ailment      String?
-  diedOn       DateTime?  @db.Date
+
+  /// 症狀 / 病名，例：白點（screen-1「生病 · 白點」、screen-5「白點 · 觀察第 3 天」）
+  ailment String?
+
+  /// 死亡日（screen-6「死亡日 05/20」、screen-5「跳缸 · 05/20」）
+  diedOn DateTime? @db.Date
+
   causeOfDeath DeathCause?
-  note         String?
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+
+  /// 備註（screen-6 死亡記錄區的自由文字，例：「半夜跳出主缸，早上發現已乾。之後加裝上蓋防跳網。」）
+  note String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   tank Tank @relation(fields: [tankId], references: [id], onDelete: Cascade)
 
@@ -179,27 +243,95 @@ model Creature {
   @@index([tankId, category])
 }
 
-/// screen-1 的篩選 chip：全部 / 魚 / 珊瑚 / 其他
+/// screen-1 的篩選 chip 與 screen-5 的分類 tab：全部 / 魚 / 珊瑚 / 其他
 enum CreatureCategory {
   FISH
   CORAL
   OTHER
 }
 
-/// 卡片右上角狀態點：存活（綠）／生病・觀察中（橘）／死亡（灰）
+/// screen-1 卡片右上角狀態點、screen-5 的狀態 filter、screen-6 的狀態切換：
+/// 存活（綠）／生病 · 觀察中（橘）／死亡（灰）
 enum CreatureStatus {
   ALIVE
   SICK
   DEAD
 }
 
-/// 死因，對應 SCHEMA_GUIDE 列出的
+/// 死因。對應 screen-6 的六個選項，也對應 SCHEMA_GUIDE 列出的
 /// disease / water_quality / predation / jumped / starvation / unknown
 enum DeathCause {
+  /// 生病
   DISEASE
+  /// 水質變化
   WATER_QUALITY
+  /// 被獵食 / 打架
   PREDATION
+  /// 跳缸
   JUMPED
+  /// 餓死（不開口）
   STARVATION
+  /// 原因不明
   UNKNOWN
+}
+
+// ─────────────────────────────────────────────
+// 保養提醒（screen-7）
+// ─────────────────────────────────────────────
+
+/// 週期性保養任務的「定義」，例：換水 10%（每 7 天）、折射計校正（每 30 天）、餵食（每天）。
+///
+/// 「上次 07/01」「下次到期」「今天該做 / 3 天後」全部是推算值，不存欄位：
+///   lastCompletedAt = 最後一筆 MaintenanceCompletion.completedAt
+///   nextDueOn       = (lastCompletedAt 的日期 ?? startOn) + intervalDays
+model MaintenanceTask {
+  id     String @id @default(cuid())
+  tankId String
+
+  /// 任務名稱，例：換水 10%、洗前置棉、洗濾材 / 生化球、換活性碳、餵食
+  name String
+
+  /// 週期天數。「每天」= 1、「每 7 天」= 7、「每 30 天」= 30、「每 60 天」= 60
+  intervalDays Int
+
+  /// 尚無任何完成紀錄時，用來起算第一次到期日；null 則視為建立當天起算
+  startOn DateTime? @db.Date
+
+  /// 停用而不刪除（保留歷史完成紀錄）
+  isActive Boolean @default(true)
+
+  /// 清單內的排序
+  displayOrder Int @default(0)
+
+  note String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tank        Tank                     @relation(fields: [tankId], references: [id], onDelete: Cascade)
+  completions MaintenanceCompletion[]
+
+  @@index([tankId, isActive, displayOrder])
+}
+
+/// 單次「做完了」的紀錄——screen-7 勾選 checkbox 就新增一筆，取消勾選則刪除當天那筆。
+/// 與 MaintenanceTask 分開存而不是在 task 上塞一個 lastDoneOn 欄位，理由：
+///   1. screen-7 的「已完成 08:20」需要完成的「時刻」，不只是日期；
+///   2. 保留完整履歷，日後要做保養歷史 / 統計不必改 schema；
+///   3. 「上次 07/01」與「下次到期」因此都是推算值，不會與實際履歷不同步。
+model MaintenanceCompletion {
+  id     String @id @default(cuid())
+  taskId String
+
+  /// 實際完成時間（screen-7「已完成 08:20」）
+  completedAt DateTime @default(now())
+
+  note String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  task MaintenanceTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, completedAt])
 }

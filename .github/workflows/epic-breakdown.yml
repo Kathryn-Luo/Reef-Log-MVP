@@ -52,7 +52,10 @@ jobs:
           # 使用訂閱額度：走 OAuth token，絕對不要設 ANTHROPIC_API_KEY
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # 限制回合數，避免 agent 失控燒 token
-          claude_args: "--max-turns 15"
+          # claude_args: "--max-turns 15"
+          claude_args: >
+            --max-turns 15
+            --allowedTools "mcp__github__get_issue,mcp__github__create_issue,mcp__github__update_issue,mcp__github__add_issue_comment"
           prompt: |
             你正在處理一個 Epic issue（issue #${{ github.event.issue.number }}）。
 

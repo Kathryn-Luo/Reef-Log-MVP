@@ -127,8 +127,10 @@ jobs:
             ── 第一步：先確認哪些畫面「已經拆過」（務必先做）──
             本流程可能因為 turn 上限中斷後重跑，所以必須冪等。開工前先執行：
 
-                gh issue list --state all --limit 200 --json number,title,body \
+                gh issue list --state open --limit 200 --json number,title,body \
                   | jq -r '.[] | select(.body // "" | test("Epic #${{ github.event.issue.number }}(\\D|$)")) | "#\(.number) \(.title)"'
+
+            只看 open 的子 issue：已關閉代表人類判定作廢或已了結，不應該擋住重新拆解。
 
             把結果對照 Epic 中的畫面清單：
             - 已經有對應子 issue 的畫面 → 完全跳過，不要重建，也不要更新既有 issue
@@ -168,7 +170,7 @@ jobs:
         run: |
           # 用 jq 在本地比對，不依賴 GitHub search 對 # 的斷詞行為
           # （"Epic #1" 走 search 會誤中 Epic #10）
-          gh issue list --state all --limit 200 --json number,title,body \
+          gh issue list --state open --limit 200 --json number,title,body \
             | jq -r --arg epic "$EPIC" \
                 '.[] | select(.body // "" | test("Epic #\($epic)(\\D|$)")) | "- #\(.number) \(.title)"' \
             > subs.txt

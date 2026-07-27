@@ -67,7 +67,14 @@ Then  <預期結果>
        │      綜覽 Epic 內【所有截圖】→ prisma/schema.prisma 草稿 PR
        │      （附畫面 ↔ model 對照表）
        ▼
-② 人類 review 並 merge schema PR（schema 定案）
+② 人類 review schema PR
+       │
+       ├─ Request changes ──▶ 同一支 workflow 再跑一輪，
+       │      讀 PR 上的 review 逐項修正同一個 PR ──┐
+       │                                            │
+       └────────────────◀───────────────────────────┘
+       │
+       └─ Approve + merge（schema 定案）
        │
        ├─ 貼 epic:breakdown ──▶ Epic Breakdown workflow
        │      讀 Epic 截圖 +【已定案的 schema】→ 建立子 issue
@@ -102,6 +109,9 @@ Then  <預期結果>
 |-------|----------------|
 | `schema:design` | Schema Design — 產出 schema 草稿 PR（流程第一步） |
 | `epic:breakdown` | Epic Breakdown — 拆解子 issue（需 schema 已定案） |
+
+修改 schema 草稿不靠 label：在草稿 PR 上送出 **Request changes** 即會觸發 Schema Design
+再跑一輪，依 review 修正同一個 PR。修改 PR 的手勢留在 PR 上，不必回頭動 Epic 的 label。
 
 ## 提交規範
 - 分支命名：`feat/<issue-number>-<slug>`、`fix/<issue-number>-<slug>`

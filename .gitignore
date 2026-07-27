@@ -1,0 +1,41 @@
+# Nuxt
+.nuxt
+.nitro
+.cache
+.output
+dist
+
+# NuxtHub / Wrangler
+.data
+.wrangler
+
+# Dependencies
+node_modules
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Tests
+coverage
+test-results
+playwright-report
+blob-report
+.playwright
+
+# Editor / OS
+.DS_Store
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln

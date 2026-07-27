@@ -90,7 +90,7 @@ jobs:
           claude_args: >
             --model claude-opus-5
             --max-turns 80
-            --allowedTools "Read,Glob,Grep,Edit,Write,Bash(jq:*),Bash(gh issue view:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr create:*),Bash(gh pr edit:*),Bash(git fetch:*),Bash(git switch:*),Bash(git checkout:*),Bash(git status:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*)"
+            --allowedTools "Read,Glob,Grep,Edit,Write,Bash(jq:*),Bash(gh issue view:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(git fetch:*),Bash(git switch:*),Bash(git checkout:*),Bash(git status:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*)"
           prompt: |
             你正在為 ReefLog 專案設計資料庫 schema。這個 Epic 是 issue #${{ github.event.issue.number }}。
 
@@ -104,6 +104,16 @@ jobs:
 
             - 若已有 PR：切到既有分支 ${{ env.BRANCH }}，在現有 schema 草稿上
               「續作 / 修正」，並更新同一個 PR，不要另開新 PR。
+
+              接著「務必」讀取該 PR 上的人類 review 與留言：
+
+                  gh pr view <PR編號> --comments
+
+              重跑的最常見原因就是人類 review 後要求修改。review 中的每一項
+              要求都必須逐項處理，並在 PR 留言中回覆你怎麼處理的。
+              review 意見的優先序「高於」你上一輪自己的設計判斷——那是定案，不是建議。
+              若你認為某項要求有問題，照做並在回覆中說明疑慮，不要逕自忽略。
+
             - 若沒有 PR：從預設分支開出 ${{ env.BRANCH }}（若分支已存在就直接切過去）。
 
             任務（務必依序）：

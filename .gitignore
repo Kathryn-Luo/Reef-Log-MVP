@@ -1,5 +1,6 @@
 # Nuxt
 .nuxt
+.nuxtrc
 .nitro
 .cache
 .output

@@ -58,6 +58,34 @@ Then  <預期結果>
 
 ---
 
+## 開發流程順序（不可調換）
+
+```
+① Epic issue 建立（貼上畫面截圖與描述）
+       │
+       ├─ 貼 schema:design ──▶ Schema Design workflow
+       │      綜覽 Epic 內【所有截圖】→ prisma/schema.prisma 草稿 PR
+       │      （附畫面 ↔ model 對照表）
+       ▼
+② 人類 review 並 merge schema PR（schema 定案）
+       │
+       ├─ 貼 epic:breakdown ──▶ Epic Breakdown workflow
+       │      讀 Epic 截圖 +【已定案的 schema】→ 建立子 issue
+       ▼
+③ 人類 review 子 issue
+       │
+       ├─ 貼 agent-go ──▶ 進入 TDD 開發
+       ▼
+④ PR（含測試）→ review → merge
+```
+
+**為什麼 schema 必須先定案**：schema 是跨畫面的全局決策，子 issue 拆解是單一畫面的局部決策。
+若先拆 issue，各子 issue 的「涉及資料模型」只能逐畫面猜測，schema 定案後全部要回頭訂正。
+`epic-breakdown.yml` 有閘門：`prisma/schema.prisma` 不存在時拒絕啟動並貼 `needs-human`。
+
+**截圖的處理**：`gh issue view` 只會拿到 `<img src="...">` 這段 HTML 文字，agent 看不到圖。
+兩支 workflow 都有前置步驟把附件下載到 `.agent-images/`，agent 必須逐張 `Read` 後才動手。
+
 ## 風險分級與人類閘門
 
 | Label | 意義 | 是否需人類核准 |
@@ -68,6 +96,12 @@ Then  <預期結果>
 | `needs-design` | 有新 UI，需先確認畫面 | **是**（等 `design-approved`） |
 | `needs-human` | 任何需人工介入 | **是** |
 | `agent-go` | 人類已 review，放行開發 | 由人貼上才觸發開發 |
+
+觸發用 label（由人貼上，見上方流程順序）：
+| Label | 觸發的 workflow |
+|-------|----------------|
+| `schema:design` | Schema Design — 產出 schema 草稿 PR（流程第一步） |
+| `epic:breakdown` | Epic Breakdown — 拆解子 issue（需 schema 已定案） |
 
 ## 提交規範
 - 分支命名：`feat/<issue-number>-<slug>`、`fix/<issue-number>-<slug>`

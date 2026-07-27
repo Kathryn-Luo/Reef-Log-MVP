@@ -31,6 +31,33 @@ jobs:
     outputs:
       approved: ${{ steps.gate.outputs.approved }}
     steps:
+      - uses: actions/checkout@v4
+
+      # ── 順序閘門 ──
+      # 拆解必須在 schema 定案之後。schema 是全局決策、子 issue 是局部決策，
+      # 順序反過來的話子 issue 的「涉及資料模型」只能用猜的，schema 定案後還得回頭訂正。
+      # 擋在 authorize 這裡而不是 breakdown 裡，是為了讓 breakdown job 根本不啟動，
+      # 避免下游的 always() 步驟留下一則語意不明的「拆解結果」留言。
+      - name: 確認 schema 已定案
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EPIC: ${{ github.event.issue.number }}
+        run: |
+          if [ -f prisma/schema.prisma ]; then
+            exit 0
+          fi
+          gh issue comment "$EPIC" --body "$(printf '%s\n' \
+            '## 拆解未啟動：schema 尚未定案' \
+            '' \
+            '預設分支上找不到 `prisma/schema.prisma`。' \
+            '' \
+            '正確順序是先貼 `schema:design` 產出 schema 草稿 PR、review 並 merge 後，' \
+            '再貼 `epic:breakdown` 拆解子 issue——這樣子 issue 的「涉及資料模型」' \
+            '才能引用真實存在的 model，不必事後訂正。')"
+          gh issue edit "$EPIC" --add-label needs-human
+          echo "::error::prisma/schema.prisma 不存在，請先完成 Schema Design 流程"
+          exit 1
+
       - id: gate
         run: echo "approved=true" >> "$GITHUB_OUTPUT"
 
@@ -45,6 +72,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # gh issue view 拿回來的只是 <img src="..."> 這段 HTML 文字，agent 看不到圖。
+      # 在這裡先把附件抓成本地檔案，agent 才能用 Read 真的看過每一張畫面。
+      # 用確定性步驟而非讓 agent 自己 curl：省 turn，且下載失敗會直接讓 job 失敗，
+      # 不會變成「它以為自己看過圖」。
+      - name: 下載 Epic 內的截圖
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EPIC: ${{ github.event.issue.number }}
+        run: |
+          mkdir -p .agent-images
+          gh issue view "$EPIC" --json body --jq '.body' \
+            | grep -oE 'https://github\.com/user-attachments/assets/[0-9a-fA-F-]+' \
+            | awk '!seen[$0]++' \
+            | nl -w1 -s' ' \
+            | while read -r i url; do
+                curl -sSLf -o ".agent-images/screen-$i.png" "$url"
+              done
+          ls -l .agent-images
 
       - name: Run Claude – Epic breakdown
         uses: anthropics/claude-code-action@v1
@@ -63,12 +109,20 @@ jobs:
           claude_args: >
             --model claude-opus-5
             --max-turns 40
-            --allowedTools "Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh issue create:*),Bash(gh label list:*),Bash(jq:*)"
+            --allowedTools "Read,Glob,Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh issue create:*),Bash(gh label list:*),Bash(jq:*)"
           prompt: |
             你正在處理一個 Epic issue（issue #${{ github.event.issue.number }}）。
 
             任務：閱讀這個 Epic issue 的內文，裡面包含數張畫面截圖與文字描述。
             將每一個獨立的畫面 / 功能，拆解成一個個別的子 issue。
+
+            ── 素材：截圖與已定案的 schema ──
+            - Epic 內的截圖已下載到 `.agent-images/`（screen-1.png、screen-2.png…）。
+              動手前先逐張 `Read`，用實際畫面而不是只憑文字描述判斷畫面邊界。
+            - `prisma/schema.prisma` 是「已經由人類 review 定案」的資料模型，先讀過。
+              子 issue 的「涉及資料模型」段落必須引用其中真實存在的 model 與欄位，
+              不要自行發明或推測。畫面若需要 schema 裡沒有的欄位，不要偷改 schema——
+              在該子 issue 中明確寫出缺口並貼 `risk:schema`。
 
             ── 第一步：先確認哪些畫面「已經拆過」（務必先做）──
             本流程可能因為 turn 上限中斷後重跑，所以必須冪等。開工前先執行：
@@ -85,7 +139,7 @@ jobs:
             每個子 issue 必須包含：
             1. 一則 User Story，使用 Given / When / Then 格式描述驗收條件
             2. 對應的畫面截圖或描述（從 Epic 中引用）
-            3. 涉及的資料模型或 API 端點（若能從畫面推斷）
+            3. 涉及的資料模型：引用 prisma/schema.prisma 中真實存在的 model 與欄位
             4. 一個風險分級 label：
                - risk:low     → 純 UI、樣式、文案
                - risk:logic   → 既有邏輯調整、不動 schema

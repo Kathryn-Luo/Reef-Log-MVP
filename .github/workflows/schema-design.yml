@@ -89,7 +89,7 @@ jobs:
           #   沒有 gh issue comment：回報 Epic 改由下方確定性步驟負責。
           claude_args: >
             --model claude-opus-5
-            --max-turns 40
+            --max-turns 80
             --allowedTools "Read,Glob,Grep,Edit,Write,Bash(jq:*),Bash(gh issue view:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr create:*),Bash(gh pr edit:*),Bash(git fetch:*),Bash(git switch:*),Bash(git checkout:*),Bash(git status:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*)"
           prompt: |
             你正在為 ReefLog 專案設計資料庫 schema。這個 Epic 是 issue #${{ github.event.issue.number }}。

@@ -17,6 +17,7 @@ ReefLog 是一個海水缸記錄工具，同時作為展示「AI Agent + GitHub 
   server 端放根目錄 `server/`，共用型別放根目錄 `shared/`。**不要沿用 Nuxt 3 的根目錄 `pages/`、`components/`。**
 - TypeScript（全程）
 - Cloudflare 部署（NuxtHub / Workers）— 每個 PR 分支自動產生 preview URL
+- 資料庫：Neon（serverless PostgreSQL）+ Prisma 6（鎖定，勿升級至 7）
 - 測試：Vitest（unit）、Playwright（E2E，跑在 preview URL 上）
 - 前端工程師主導的 solo side project — 文件與 handoff 材料以個人維護規模撰寫，非團隊 onboarding
 

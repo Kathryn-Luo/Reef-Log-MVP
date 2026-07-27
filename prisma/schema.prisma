@@ -96,6 +96,10 @@ model Tank {
   waterLogs        WaterLog[]
   waterTargets     WaterParameterTarget[]
   maintenanceTasks MaintenanceTask[]
+
+  /// 支援「取某使用者的所有缸、依顯示順序排列」——缸切換選單與預設缸的查詢。
+  /// Prisma 不會為 relation 的外鍵自動建索引，userId 需要自己來。
+  @@index([userId, displayOrder])
 }
 
 // ─────────────────────────────────────────────

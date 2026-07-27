@@ -18,7 +18,7 @@
 //   - 保養的「下次到期」「3 天後」→ 由最後一次完成時間 + intervalDays 推算
 //   - 生物的總成本 / 存活價值 / 死亡價值 → 由 price + status 動態計算
 //   - 生物列表的「公子小丑 ×2」→ 由應用層依 name 分組計數（一隻生物 = 一列）
-//   - 「預設缸」→ 該使用者 displayOrder 最小的缸，不另設旗標
+//   - 「預設缸」→ 該使用者的缸依 displayOrder ASC, createdAt ASC 排序後的第一個，不另設旗標
 
 datasource db {
   provider  = "postgresql"
@@ -70,9 +70,17 @@ model Tank {
   /// 開缸日期（缸齡來源）
   startedOn DateTime? @db.Date
 
-  /// 切換選單中的排序。同時定義「預設缸」＝ 同一使用者中 displayOrder 最小的缸
-  /// （screen-1 開啟 App 時顯示哪個缸）。不另設 isDefault 旗標：
-  /// 「設為預設」等同「移到第一位」，兩個概念合一，不會出現兩個預設缸。
+  /// 切換選單中的排序。同時定義「預設缸」＝ 同一使用者的缸依
+  ///   ORDER BY displayOrder ASC, createdAt ASC LIMIT 1
+  /// 取出的那一個（screen-1 開啟 App 時顯示哪個缸）。
+  ///
+  /// 不另設 isDefault 旗標：「設為預設」等同「移到第一位」，兩個概念合一，
+  /// 不會出現兩個預設缸。
+  ///
+  /// 刻意不加 @@unique([userId, displayOrder])：唯一約束加在排序欄位上，
+  /// 會讓「重新排序」必須經過暫時值（Postgres 的 unique 預設非 DEFERRABLE，
+  /// 兩個缸對調得走三步），而重排正是這個欄位存在的理由；且與 @default(0)
+  /// 併用時建立第二個缸會直接失敗。確定性改由 createdAt 這個 tiebreaker 提供。
   displayOrder Int @default(0)
 
   /// 封存時間。缸只封存不真刪（軟刪除）——刪一個缸等於永久失去其下所有
@@ -88,9 +96,6 @@ model Tank {
   waterLogs        WaterLog[]
   waterTargets     WaterParameterTarget[]
   maintenanceTasks MaintenanceTask[]
-
-  /// 排序具確定性，且從結構上排除「兩個缸並列第一」的歧義
-  @@unique([userId, displayOrder])
 }
 
 // ─────────────────────────────────────────────
@@ -244,12 +249,11 @@ model Creature {
 
   causeOfDeath DeathCause?
 
-  /// 一般飼養備註（生物存活期間寫的觀察、餵食習性等）。
-  /// 與 deathNote 分開，避免死亡時究竟該覆蓋還是接在後面的語意不明。
-  note String?
-
-  /// 死亡記錄專用備註（screen-6 死亡記錄區塊內的自由文字，
-  /// 例：「半夜跳出主缸，早上發現已乾。之後加裝上蓋防跳網。」）
+  /// 死亡記錄專用備註。「只」對應 screen-6 死亡記錄區塊內的那一個備註欄，
+  /// 例：「半夜跳出主缸，早上發現已乾。之後加裝上蓋防跳網。」
+  /// 不是生物的通用備註——目前 7 張畫面沒有「存活期間的飼養備註」輸入位置，
+  /// 因此刻意不預留通用的 note 欄位（加 nullable 欄位是無痛 migration，
+  /// 先留著反而讓對照表出現無畫面對應、日後被誤認為漏做 UI 的欄位）。
   deathNote String?
 
   createdAt DateTime @default(now())

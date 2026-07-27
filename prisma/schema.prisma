@@ -17,6 +17,8 @@
 //   - 趨勢頁的平均 / 最高 / 最低 / 期間變化量 → 由該區間的 WaterReading 聚合
 //   - 保養的「下次到期」「3 天後」→ 由最後一次完成時間 + intervalDays 推算
 //   - 生物的總成本 / 存活價值 / 死亡價值 → 由 price + status 動態計算
+//   - 生物列表的「公子小丑 ×2」→ 由應用層依 name 分組計數（一隻生物 = 一列）
+//   - 「預設缸」→ 該使用者 displayOrder 最小的缸，不另設旗標
 
 datasource db {
   provider  = "postgresql"
@@ -68,22 +70,27 @@ model Tank {
   /// 開缸日期（缸齡來源）
   startedOn DateTime? @db.Date
 
-  /// 開啟 App 時預設顯示的缸；同一位使用者只應有一個為 true（由應用層維持）
-  isDefault Boolean @default(false)
-
-  /// 切換選單中的排序
+  /// 切換選單中的排序。同時定義「預設缸」＝ 同一使用者中 displayOrder 最小的缸
+  /// （screen-1 開啟 App 時顯示哪個缸）。不另設 isDefault 旗標：
+  /// 「設為預設」等同「移到第一位」，兩個概念合一，不會出現兩個預設缸。
   displayOrder Int @default(0)
+
+  /// 封存時間。缸只封存不真刪（軟刪除）——刪一個缸等於永久失去其下所有
+  /// 生物的死亡記錄與多年水質歷史，這兩者是本 App 的核心資產。
+  /// 非 null 即視為已封存，不出現在 screen-1 的缸切換選單。
+  archivedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user             User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user             User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   creatures        Creature[]
   waterLogs        WaterLog[]
   waterTargets     WaterParameterTarget[]
   maintenanceTasks MaintenanceTask[]
 
-  @@index([userId, displayOrder])
+  /// 排序具確定性，且從結構上排除「兩個缸並列第一」的歧義
+  @@unique([userId, displayOrder])
 }
 
 // ─────────────────────────────────────────────
@@ -137,8 +144,12 @@ model WaterReading {
 
   /// 同一次量測中，同一個測項只會有一筆讀數。
   /// 「未量測」以「不建立此列」表示，而不是存 null。
+  ///
+  /// 刻意不加 @@index([parameter])：只有 6 個值、選擇性極低，planner 不會選它。
+  /// screen-4 的趨勢查詢實際走 WaterLog 的 [tankId, measuredAt] 撈出區間，
+  /// 再 join readings 過濾 parameter；單缸一年約 50–100 筆 log，join 不是瓶頸，
+  /// 也因此不把 tankId / measuredAt 反正規化到這裡。
   @@unique([waterLogId, parameter])
-  @@index([parameter])
 }
 
 /// 每個缸、每個測項的正常區間（screen-2 右側的 7–9、380–450、1250–1350…，
@@ -166,6 +177,8 @@ model WaterParameterTarget {
 
 /// 測項。screen-1 / 2 / 3 / 4 的六項是同一組定義。
 /// 單位（dKH / ppm / SG）是測項本身固有的性質，屬於應用層常數，不重複存進資料庫。
+/// 只列畫面上實際出現的六項：enum 加值是無痛 migration、減值才痛，
+/// 所以不預留 PH / TEMPERATURE。
 enum WaterParameter {
   KH
   CA
@@ -173,10 +186,6 @@ enum WaterParameter {
   NO3
   PO4
   SALINITY
-
-  /// 以下兩項畫面上未出現，依 SCHEMA_GUIDE 的領域概念先預留
-  PH
-  TEMPERATURE
 }
 
 // ─────────────────────────────────────────────
@@ -185,6 +194,12 @@ enum WaterParameter {
 
 /// screen-1 的生物卡片、screen-5 的庫存列表、screen-6 的生物詳情，
 /// 是同一個 model 的三種呈現。
+///
+/// 一隻生物 = 一列。screen-1 / screen-5 的「公子小丑 ×2」由應用層依 name
+/// （或 scientificName）分組計數呈現，schema 不設 quantity 欄位：
+/// status / observedSickOn / diedOn / causeOfDeath / price 全都是「單一個體」
+/// 的屬性，2 隻死 1 隻是常見情境，共用一列無法表達；同時也解掉了
+/// 「不同時間、不同價格購入」在同一列存不下的問題。
 model Creature {
   id     String @id @default(cuid())
   tankId String
@@ -202,9 +217,6 @@ model Creature {
   /// 用自由字串而非 enum：魚 / 珊瑚 的細分族群非常多，硬列舉會頻繁改 schema。
   subCategory String?
 
-  /// 同一列代表的隻數，例：「公子小丑 ×2」。取捨與限制見 PR 說明。
-  quantity Int @default(1)
-
   /// 建檔時拍攝的照片；null → 畫面改用預設圖示
   photoUrl String?
 
@@ -212,7 +224,8 @@ model Creature {
   /// 「入缸 8 月」「在缸天數 189 天」由此推算——生物已死亡時算到 diedOn，否則算到今天。
   addedOn DateTime @db.Date
 
-  /// 購入單價。總成本 / 存活價值 / 死亡價值一律由 price + status 動態計算，不存衍生欄位
+  /// 這一隻的購入價。總成本 / 存活價值 / 死亡價值一律由 price + status
+  /// 動態計算（跨列聚合），不存衍生欄位
   price Decimal? @db.Decimal(10, 2)
 
   status CreatureStatus @default(ALIVE)
@@ -231,8 +244,13 @@ model Creature {
 
   causeOfDeath DeathCause?
 
-  /// 備註（screen-6 死亡記錄區的自由文字，例：「半夜跳出主缸，早上發現已乾。之後加裝上蓋防跳網。」）
+  /// 一般飼養備註（生物存活期間寫的觀察、餵食習性等）。
+  /// 與 deathNote 分開，避免死亡時究竟該覆蓋還是接在後面的語意不明。
   note String?
+
+  /// 死亡記錄專用備註（screen-6 死亡記錄區塊內的自由文字，
+  /// 例：「半夜跳出主缸，早上發現已乾。之後加裝上蓋防跳網。」）
+  deathNote String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -326,6 +344,11 @@ model MaintenanceCompletion {
   /// 實際完成時間（screen-7「已完成 08:20」）
   completedAt DateTime @default(now())
 
+  /// 完成日（completedAt 的日期部分），用於保證一天一筆。
+  /// screen-7 的行為是「勾選 = 新增一筆、取消 = 刪除當天那筆」，
+  /// 沒有這道約束時連點兩下或多裝置同步都會產生假重複的保養履歷。
+  completedOn DateTime @db.Date
+
   note String?
 
   createdAt DateTime @default(now())
@@ -333,5 +356,6 @@ model MaintenanceCompletion {
 
   task MaintenanceTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
+  @@unique([taskId, completedOn])
   @@index([taskId, completedAt])
 }

@@ -10,6 +10,7 @@ on:
 permissions:
   contents: read
   issues: write        # 需要建立子 issue
+  id-token: write      # claude-code-action 用 OIDC 驗證，必要
 
 # 避免同一個 Epic 被連續觸發多次
 concurrency:

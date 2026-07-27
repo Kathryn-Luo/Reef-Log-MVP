@@ -9,9 +9,15 @@ name: Schema Design
 # schema 是全局決策、子 issue 拆解是局部決策，全局的先定案才不會事後返工。
 # 因此本流程只讀 Epic 本身，不依賴子 issue——此時子 issue 還不存在。
 
+# 兩個觸發點，對應迴路的兩段：
+#   issues.labeled            貼 schema:design → 從 Epic 產出第一版草稿
+#   pull_request_review       在草稿 PR 上 Request changes → 依 review 修正同一個 PR
+# 後者讓「改 PR」的手勢留在 PR 上，不必回頭去動 Epic 的 label。
 on:
   issues:
     types: [labeled]
+  pull_request_review:
+    types: [submitted]
 
 permissions:
   contents: write        # 需要開 branch、commit schema 草稿
@@ -19,26 +25,68 @@ permissions:
   pull-requests: write   # 產出 schema 草稿的 PR
   id-token: write        # claude-code-action 用 OIDC 驗證，必要
 
+# 兩種觸發都收斂到同一條分支上，避免同一個草稿被並行修改
 concurrency:
-  group: schema-design-${{ github.event.issue.number }}
+  group: schema-design-${{ github.event.issue.number || github.event.pull_request.head.ref }}
   cancel-in-progress: false
-
-env:
-  # 固定分支名，重跑時續用同一條 → 冪等的基礎。
-  # 命名沿用 CLAUDE.md 的 feat/<issue-number>-<slug> 慣例。
-  BRANCH: feat/${{ github.event.issue.number }}-schema-draft
 
 jobs:
   authorize:
-    # 授權：只有 OWNER/MEMBER 貼上 schema:design label 才觸發
+    # ── 授權 ──
+    # issues 觸發：只有 OWNER/MEMBER 開的 issue 被貼上 schema:design。
+    # review 觸發：只認 OWNER/MEMBER 送出的 Request changes，且 PR 必須來自
+    #   本 repo 的 schema 草稿分支。
+    #
+    #   same-repo 檢查不可省：public repo 上 pull_request_review 是在 base repo
+    #   的權限脈絡下執行、拿得到 secrets。少了這行，外人開一個 fork PR 再自己
+    #   送 review 就能碰到 token。
     if: >
-      github.event.label.name == 'schema:design' &&
-      (github.event.issue.author_association == 'OWNER' ||
-       github.event.issue.author_association == 'MEMBER')
+      (
+        github.event_name == 'issues' &&
+        github.event.label.name == 'schema:design' &&
+        (github.event.issue.author_association == 'OWNER' ||
+         github.event.issue.author_association == 'MEMBER')
+      ) || (
+        github.event_name == 'pull_request_review' &&
+        github.event.review.state == 'changes_requested' &&
+        (github.event.review.author_association == 'OWNER' ||
+         github.event.review.author_association == 'MEMBER') &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        startsWith(github.event.pull_request.head.ref, 'feat/') &&
+        endsWith(github.event.pull_request.head.ref, '-schema-draft')
+      )
     runs-on: ubuntu-latest
     outputs:
       approved: ${{ steps.gate.outputs.approved }}
+      epic: ${{ steps.ctx.outputs.epic }}
+      branch: ${{ steps.ctx.outputs.branch }}
     steps:
+      # 兩種觸發拿到的欄位不同，在這裡收斂成 epic / branch 兩個值，下游只吃這兩個。
+      #   issues 觸發：有 issue 編號 → 推出分支名
+      #   review 觸發：有分支名     → 反解出 Epic 編號
+      - id: ctx
+        env:
+          EVENT: ${{ github.event_name }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          if [ "$EVENT" = "issues" ]; then
+            EPIC="$ISSUE_NUMBER"
+            BRANCH="feat/${EPIC}-schema-draft"
+          else
+            BRANCH="$HEAD_REF"
+            EPIC="${BRANCH#feat/}"
+            EPIC="${EPIC%%-*}"
+            case "$EPIC" in
+              ''|*[!0-9]*)
+                echo "::error::無法從分支名 $BRANCH 解析 Epic 編號"
+                exit 1
+                ;;
+            esac
+          fi
+          echo "epic=$EPIC" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
       - id: gate
         run: echo "approved=true" >> "$GITHUB_OUTPUT"
 
@@ -46,6 +94,11 @@ jobs:
     needs: authorize
     if: needs.authorize.outputs.approved == 'true'
     runs-on: ubuntu-latest
+    env:
+      EPIC: ${{ needs.authorize.outputs.epic }}
+      # 固定分支名，重跑時續用同一條 → 冪等的基礎。
+      # 命名沿用 CLAUDE.md 的 feat/<issue-number>-<slug> 慣例。
+      BRANCH: ${{ needs.authorize.outputs.branch }}
     # ── 人工核准閘門 ──
     # 這支的權限比 epic-breakdown 高（contents: write + pull-requests: write），
     # 更需要 environment protection。設定同樣在 Settings → Environments → agent。
@@ -55,6 +108,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # 兩種觸發都從預設分支起跑，起點一致；agent 自己 fetch + switch 到草稿分支
+          ref: ${{ github.event.repository.default_branch }}
 
       # gh issue view 拿回來的只是 <img src="..."> 這段 HTML 文字，agent 看不到圖。
       # 在這裡先把附件抓成本地檔案，agent 才能用 Read 真的看過每一張畫面。
@@ -63,7 +118,6 @@ jobs:
       - name: 下載 Epic 內的截圖
         env:
           GH_TOKEN: ${{ github.token }}
-          EPIC: ${{ github.event.issue.number }}
         run: |
           mkdir -p .agent-images
           gh issue view "$EPIC" --json body --jq '.body' \
@@ -92,7 +146,7 @@ jobs:
             --max-turns 80
             --allowedTools "Read,Glob,Grep,Edit,Write,Bash(jq:*),Bash(gh issue view:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(git fetch:*),Bash(git switch:*),Bash(git checkout:*),Bash(git status:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*)"
           prompt: |
-            你正在為 ReefLog 專案設計資料庫 schema。這個 Epic 是 issue #${{ github.event.issue.number }}。
+            你正在為 ReefLog 專案設計資料庫 schema。這個 Epic 是 issue #${{ env.EPIC }}。
 
             背景：這是海水缸記錄工具，技術棧為 Nuxt 4 + Prisma 6 + Neon（PostgreSQL）。
             請先閱讀 repo 根目錄的 CLAUDE.md 與 docs/SCHEMA_GUIDE.md 了解慣例。
@@ -117,8 +171,8 @@ jobs:
             - 若沒有 PR：從預設分支開出 ${{ env.BRANCH }}（若分支已存在就直接切過去）。
 
             任務（務必依序）：
-            1. 讀取 Epic issue #${{ github.event.issue.number }} 的內文
-               （`gh issue view ${{ github.event.issue.number }}`），並「逐張 Read」
+            1. 讀取 Epic issue #${{ env.EPIC }} 的內文
+               （`gh issue view ${{ env.EPIC }}`），並「逐張 Read」
                `.agent-images/` 下的所有截圖（screen-1.png、screen-2.png…）。
                這些就是全部的畫面——本流程跑在子 issue 拆解之前，此時還沒有子 issue，
                你必須直接從截圖與 Epic 內文推導，一次綜覽全部畫面。
@@ -151,11 +205,12 @@ jobs:
       # ── 收尾：確定性步驟，不交給 agent ──
       # if: always() 保證即使 Claude 撞到 --max-turns 被砍，也一定會回報現況，
       # 不會留下「開了半個 PR 但沒人知道」的狀態。
-      - name: 回報 schema 草稿結果到 Epic
+      - name: 回報結果
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-          EPIC: ${{ github.event.issue.number }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           STATUS: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -165,27 +220,46 @@ jobs:
             echo "## Schema 草稿：$STATUS"
             echo
             if [ -n "$PR_URL" ]; then
-              echo "草稿 PR：$PR_URL"
-              echo
-              echo "這是 **schema 草稿**。review 並 merge 這個 PR 讓 schema 定案後，"
-              echo "再回到本 Epic 貼上 \`epic:breakdown\` 展開子 issue——"
-              echo "屆時子 issue 會直接引用已定案的 model，不需要事後訂正。"
+              if [ "$EVENT" = "issues" ]; then
+                echo "草稿 PR：$PR_URL"
+                echo
+                echo "這是 **schema 草稿**。review 並 merge 這個 PR 讓 schema 定案後，"
+                echo "再回到本 Epic 貼上 \`epic:breakdown\` 展開子 issue——"
+                echo "屆時子 issue 會直接引用已定案的 model，不需要事後訂正。"
+              else
+                echo "已依上一則 review 修正本 PR。請再次 review："
+                echo "- 滿意 → Approve 並 merge，schema 即定案"
+                echo "- 仍要調整 → 再送一次 **Request changes**，會再跑一輪"
+              fi
             else
               echo "沒有產出 PR（分支 \`$BRANCH\` 上找不到開啟中的 PR）。"
             fi
             echo
             if [ "$STATUS" != "success" ]; then
               echo "> 執行未正常結束（可能撞到 \`--max-turns\`）。"
-              echo "> 本流程是冪等的：重貼 \`schema:design\` label 會在同一條分支與同一個 PR 上續作，不會另開新 PR。"
+              echo "> 本流程是冪等的：會在同一條分支與同一個 PR 上續作，不會另開新 PR。"
               echo
             fi
             echo "[執行紀錄]($RUN_URL)"
           } > comment.md
 
-          gh issue comment "$EPIC" --body-file comment.md
+          # 第一次產草稿 → 回報到 Epic；依 review 修正 → 回報到 PR 本身，
+          # 不去洗 Epic 的留言區。
+          if [ "$EVENT" = "issues" ]; then
+            gh issue comment "$EPIC" --body-file comment.md
+          else
+            gh pr comment "$PR_NUMBER" --body-file comment.md
+          fi
 
       - name: 失敗時標記需要人工介入
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh issue edit "${{ github.event.issue.number }}" --add-label needs-human
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "$EVENT" = "issues" ]; then
+            gh issue edit "$EPIC" --add-label needs-human
+          else
+            gh pr edit "$PR_NUMBER" --add-label needs-human
+          fi

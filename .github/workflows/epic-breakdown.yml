@@ -48,14 +48,18 @@ jobs:
 
       - name: Run Claude – Epic breakdown
         uses: anthropics/claude-code-action@v1
+        env:
+          # gh CLI 需要，用 workflow 自身的 token（權限即上方 permissions 宣告的範圍）
+          GH_TOKEN: ${{ github.token }}
         with:
           # 使用訂閱額度：走 OAuth token，絕對不要設 ANTHROPIC_API_KEY
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # 限制回合數，避免 agent 失控燒 token
-          # claude_args: "--max-turns 15"
+          # --max-turns：限制回合數，避免 agent 失控燒 token
+          # --allowedTools：Bash 預設不開，必須逐項允許。
+          #   用 gh CLI 而非 GitHub MCP；前綴比對把權限收在 issue 讀寫這幾個子命令內。
           claude_args: >
             --max-turns 15
-            --allowedTools "mcp__github__get_issue,mcp__github__create_issue,mcp__github__update_issue,mcp__github__add_issue_comment"
+            --allowedTools "Bash(gh issue view:*),Bash(gh issue create:*),Bash(gh issue comment:*),Bash(gh label list:*)"
           prompt: |
             你正在處理一個 Epic issue（issue #${{ github.event.issue.number }}）。
 

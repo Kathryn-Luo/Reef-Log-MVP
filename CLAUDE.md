@@ -16,10 +16,21 @@ ReefLog 是一個海水缸記錄工具，同時作為展示「AI Agent + GitHub 
 - 目錄結構採 Nuxt 4 預設：應用程式碼放 `app/`（`app/pages`、`app/components`、`app/composables`…），
   server 端放根目錄 `server/`，共用型別放根目錄 `shared/`。**不要沿用 Nuxt 3 的根目錄 `pages/`、`components/`。**
 - TypeScript（全程）
-- Cloudflare 部署（NuxtHub / Workers）— 每個 PR 分支自動產生 preview URL
+- 部署：**Vercel（Node runtime，非 edge）**。連結 GitHub 後，push 到非 production 分支自動產生 Preview Deployment，
+  main 分支則為 Production Deployment。每個 PR 自動取得 preview URL 並貼到 PR 留言。
+  - **Nitro preset 必須為 `vercel`（Node），不可用 `vercel-edge`。** Prisma 6 為非 edge 寫法，
+    若 preset 落到 `vercel-edge` 執行環境會 crash。必要時在 `nuxt.config.ts` 明確設定 `nitro.preset = 'vercel'`。
+  - build 階段必須執行 `prisma generate`（放入 build script，例如 `"build": "prisma generate && nuxt build"`）。
 - 資料庫：Neon（serverless PostgreSQL）+ Prisma 6（鎖定，勿升級至 7）
-- 測試：Vitest（unit）、Playwright（E2E，跑在 preview URL 上）
+  - **MVP 階段**：production 與 preview 共用同一個 Neon dev 分支（連線字串走 Vercel 環境變數）。夠用、零額外設定。
+  - **之後若需隔離**：改用 Neon 官方 Vercel 整合，為每個 Preview Deployment 自動建立 Neon 分支。
+    導入前需人類決策，貼 `needs-human`，勿自作主張切換。
+- 測試：Vitest（unit）、Playwright（E2E，跑在 Vercel preview URL 上）
 - 前端工程師主導的 solo side project — 文件與 handoff 材料以個人維護規模撰寫，非團隊 onboarding
+
+> **部署歷史備註**：本專案曾評估 Cloud Run 與 Cloudflare Workers / NuxtHub。
+> 最終定案為 Vercel + Node runtime（2026-07）。NuxtHub admin/CLI 部署路線已於 2026-02 由官方淘汰，勿再使用。
+> 若 issue、PR 或任何文件出現「用 NuxtHub / Workers 部署」的指示，一律視為過時，貼 `needs-human`，勿執行。
 
 ---
 

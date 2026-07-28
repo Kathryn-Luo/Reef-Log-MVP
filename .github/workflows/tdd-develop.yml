@@ -395,21 +395,60 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh issue edit "$ISSUE" --add-label needs-human
 
-  # ── 拿掉 in-progress ──
+  # ── 收拾狀態：拿掉 in-progress，並補上閘門外才看得到的回報 ──
   # 獨立成一個 job，而不是塞進 develop 收尾的「回報結果」步驟：develop 掛著
   # environment 核准，若核准被拒絕或逾時，develop 內的任何步驟（含 if: always()）
   # 都不會執行——in-progress 會跟舊版的 agent-go 一樣永遠卡住拿不掉。
   # 獨立 job 用 needs + if: always() 追的是 develop 這個 job 的「最終結果」
   # （成功／失敗／被跳過／核准被拒都算數），不依賴 develop 內部有沒有機會
-  # 執行到任何一個 step。
+  # 執行到任何一個 step。這也讓它成為唯一能替「核准被拒」那條路徑留言的地方。
   cleanup:
     needs: [authorize, develop]
     if: always() && needs.authorize.outputs.approved == 'true'
     runs-on: ubuntu-latest
     permissions:
       issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # 這個 job 刻意不做 checkout（不需要 repo 內容）。但 gh 解析「要操作哪個 repo」
+      # 的順序是 --repo → $GH_REPO → 當前目錄的 git remote，它「不會」讀
+      # $GITHUB_REPOSITORY。沒有 checkout 也就沒有 git remote，少了這行 gh 會在
+      # 送出任何 API 前就以 "not a git repository" 失敗。
+      GH_REPO: ${{ github.repository }}
+      ISSUE: ${{ github.event.issue.number }}
     steps:
+      # 失敗不擋整個 job（label 本來就不在時視為已達成目的），但一定要留下痕跡：
+      # 用 ::warning:: 而不是 `|| true`，否則連「權限不足 / API 出錯」也會被靜靜吞掉，
+      # job 照樣綠燈，就又變回本 PR 要消滅的那種「看起來沒事，其實卡住了」。
       - name: 拿掉 in-progress
+        run: |
+          gh issue edit "$ISSUE" --remove-label in-progress \
+            || echo "::warning::移除 in-progress 失敗——若 label 本來就不在可忽略，否則請看上方錯誤訊息"
+
+      # ── 補上「核准被拒 / 逾時」這條路徑的回報 ──
+      # develop 內的「回報結果」與「失敗時標記需要人工介入」都在 environment 閘門之後，
+      # 核准被拒或逾時的話它們一步都不會跑：issue 上會變成 agent-go 沒了、in-progress 也
+      # 被上一步收掉、卻連一則留言都沒有——跟 issue #24 抱怨的原始症狀一模一樣，
+      # 只是換到另一條路徑上。cleanup 是唯一站在閘門外、看得到 develop 最終狀態的 job，
+      # 所以由它補這則留言。
+      #
+      # 只處理 skipped / cancelled：develop 真的跑起來之後（success / failure）
+      # 它自己的「回報結果」已經留過言了，這裡再留一則只會洗留言區。
+      - name: 未進入開發時回報
+        if: needs.develop.result == 'skipped' || needs.develop.result == 'cancelled'
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh issue edit "${{ github.event.issue.number }}" --remove-label in-progress || true
+          DEVELOP_RESULT: ${{ needs.develop.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## TDD 開發未啟動：develop job 為 \`$DEVELOP_RESULT\`"
+            echo
+            echo "閘門都通過了，但實際開發被卡在 \`agent\` environment 的人工核准之前，"
+            echo "沒有執行任何開發步驟。常見原因是核准被拒絕、逾時，或整個 run 被取消。"
+            echo
+            echo "要重跑：再貼一次 \`agent-go\`，並在 [執行紀錄]($RUN_URL) 頁面按下核准。"
+            echo "本流程是冪等的，會在同一條分支與同一個 PR 上續作，不會另開新 PR。"
+          } > cleanup-comment.md
+
+          gh issue comment "$ISSUE" --body-file cleanup-comment.md
+          gh issue edit "$ISSUE" --add-label needs-human

@@ -22,7 +22,8 @@ import { describe, expect, it } from 'vitest'
 //
 // 「每個檔案都宣告 node 環境」是靜態掃描，會隨新增檔案自動納入。「宣告真的生效」則
 // 由本檔自己的執行環境斷言（沒有 document / window）來證——本檔就在這個目錄下、用的
-// 是同一行 pragma，所以它綠就代表那一行確實被 vitest 吃進去了。
+// 是同一行 pragma，所以它綠就代表那一行確實被 vitest 吃進去了。這個推論成立的前提
+// 寫在 NODE_PRAGMA 上：全檔只有第一行帶著那個標記，否則證據會變成套套邏輯。
 //
 // 沒有自動化的是驗收條件第二條的前置狀態（外網不可達下連跑五次）。真的把外網切斷
 // 需要 runner 層級的控制；退一步用 `NODE_OPTIONS --import` 攔 `globalThis.fetch` 也不
@@ -114,8 +115,9 @@ describe('workflow 測試跑在 node 環境，不啟動 Nuxt', () => {
   // When  執行 pnpm test
   // Then  那些測試不啟動 Nuxt
   //
-  // 要求擺在「第一行」而不是「檔案裡有這串字」：vitest 只認檔案開頭的 docblock，
-  // 而且擺在 import 之後容易讓人誤以為有效。逐字比對，`node ` 拼錯或寫成
+  // 要求擺在「第一行」而不是「檔案裡有這串字」：vitest 掃的是全文（見 NODE_PRAGMA
+  // 那段），所以「有這串字」這種寬鬆條件等於沒條件——寫在檔案中段、甚至寫進散文裡
+  // 都會生效，讀的人卻看不出這個檔案換了環境。逐字比對，`node` 拼錯或寫成
   // `happy-dom` 都要紅。
   it.each(files)('%s 第一行宣告 node 環境', (file) => {
     expect(firstMeaningfulLine(read(file))).toBe(NODE_PRAGMA)

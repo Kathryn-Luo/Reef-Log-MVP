@@ -53,9 +53,15 @@ function runOf(step: string): string {
   return collected.join('\n')
 }
 
+/**
+ * 這個步驟有沒有執行某個 pnpm script。
+ * `(\s|$)` 的邊界是必要的：少了它，`pnpm test:e2e` 會被誤認成 `pnpm test`。
+ */
+const runsScript = (step: string, script: string) =>
+  new RegExp(`(^|\\s)pnpm ${script}(\\s|$)`, 'm').test(runOf(step))
+
 /** 找出「執行某個 pnpm script」的步驟。 */
-const stepRunning = (script: string) =>
-  steps().find(step => new RegExp(`(^|\\s)pnpm ${script}(\\s|$)`, 'm').test(runOf(step)))
+const stepRunning = (script: string) => steps().find(step => runsScript(step, script))
 
 describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
   it('workflow 檔案存在', () => {
@@ -76,10 +82,19 @@ describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
     expect(on).toMatch(/main/)
   })
 
-  // Then 三項檢查各自有一個步驟，且沒有被合併成一行——
-  // 合併的話 lint 一失敗就看不到測試結果，等於少了兩個訊號。
-  it.each(['lint', 'typecheck', 'test'])('有獨立的 pnpm %s 步驟', (script) => {
-    expect(stepRunning(script), `找不到執行 pnpm ${script} 的步驟`).toBeDefined()
+  // Then 三項檢查各自有一個「獨立的」步驟。
+  //
+  // 只驗「找得到跑 pnpm lint 的步驟」是不夠的：`run: pnpm lint && pnpm typecheck`
+  // 會讓同一個步驟同時滿足兩個 script，那正是這條要防的事——合併之後 lint 一紅，
+  // typecheck 就永遠不會執行，三個訊號少掉兩個。所以驗的是「落在三個相異的步驟」。
+  it('三項檢查各自是一個獨立步驟', () => {
+    const all = steps()
+    const indexes = ['lint', 'typecheck', 'test'].map((script) => {
+      const index = all.findIndex(step => runsScript(step, script))
+      expect(index, `找不到執行 pnpm ${script} 的步驟`).toBeGreaterThanOrEqual(0)
+      return index
+    })
+    expect(new Set(indexes).size, '三項檢查被合併進同一個步驟').toBe(3)
   })
 
   // 前一項失敗不該讓後兩項被跳過：三個訊號要一次看齊，否則修一輪只知道一件事。
@@ -95,27 +110,28 @@ describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
     expect(code(raw())).not.toContain('continue-on-error')
   })
 
-  // `|| true` / `|| echo` 同理：指令失敗被吞掉，step 仍然回 0。
-  it('檢查步驟不吞掉非零結束碼', () => {
-    for (const script of ['lint', 'typecheck', 'test']) {
-      expect(runOf(stepRunning(script)!)).not.toMatch(/\|\|/)
-    }
-  })
-
-  // vitest 預設在「一個測試都沒收到」時失敗。加上 --passWithNoTests 會讓
-  // 「測試檔被整批刪掉」這種最粗暴的作弊手法變成綠燈。
-  it('pnpm test 不加 --passWithNoTests，也不縮限成單一檔案', () => {
-    const run = runOf(stepRunning('test')!)
-    expect(run).not.toContain('passWithNoTests')
-    expect(run.trim()).toBe('pnpm test')
+  // 每一步只跑那一個指令，逐字比對。這一條同時擋掉三種手法：
+  // - `|| true` / `|| echo`：指令失敗被吞掉，step 仍然回 0
+  // - `--passWithNoTests`：vitest 預設在「一個測試都沒收到」時失敗，
+  //   加上它會讓「測試檔被整批刪掉」這種最粗暴的作弊變成綠燈
+  // - `pnpm test tests/unit/foo.test.ts`：把範圍縮限到剛好會過的那幾個檔
+  it.each(['lint', 'typecheck', 'test'])('pnpm %s 步驟只跑那一個指令', (script) => {
+    expect(runOf(stepRunning(script)!).trim()).toBe(`pnpm ${script}`)
   })
 
   // ── 以下是權限面 ──
 
   // 這支不呼叫 agent，不需要寫入權限，也不需要任何 secret。
-  // 一旦要了 write，PR 上的檢查就成了 fork PR 可觸及的寫入管道。
-  it('權限只有 contents: read', () => {
+  //
+  // 不能只驗頂層那一段：job 層的 permissions 會「整個覆蓋」workflow 層，
+  // 所以「檔案裡有一段 contents: read」不等於「這支 workflow 只有讀權限」。
+  // fork PR 的 GITHUB_TOKEN 會被 GitHub 強制降為唯讀，但同 repo 分支不會——
+  // 而同 repo 分支正好是 agent 開 PR 的地方，也就是這支要防的威脅模型本身。
+  it('全檔只有一處 permissions，且沒有任何寫入權限', () => {
+    const text = code(raw())
+    expect(text.match(/^\s*permissions:/gm) ?? []).toHaveLength(1)
     expect(topLevel('permissions')?.trim()).toBe('contents: read')
+    expect(text).not.toMatch(/:\s*write\b/)
   })
 
   it('不使用任何 secret', () => {

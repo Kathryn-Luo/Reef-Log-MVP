@@ -118,7 +118,11 @@ Then  <預期結果>
 狀態用 label（由 workflow 自動增減，人類不需手動貼）：
 | Label | 意義 |
 |-------|------|
-| `in-progress` | `agent-go` 通過檢查後 workflow 立刻換上，取代被移除的 `agent-go`，避免 issue 上「label 憑空消失、什麼反應都沒有」。TDD Develop 這一輪結束（成功／失敗／人工核准被拒）後由 workflow 自動拿掉，見 `tdd-develop.yml`。
+| `in-progress` | `agent-go` 通過檢查後由 workflow 貼上（先加 `in-progress` 再移除 `agent-go`，兩者會短暫並存），避免 issue 上「label 憑空消失、什麼反應都沒有」。TDD Develop 這一輪結束後由 `cleanup` job 自動拿掉——包含核准被拒、逾時、run 被取消，見 `tdd-develop.yml`。 |
+
+TDD Develop 若沒有成功走完（含人工核准被拒 / 逾時 / run 被取消），`cleanup` job 會留言說明並**自動貼上 `needs-human`**。
+`needs-human` 會被風險閘門擋住，所以要重跑必須「先移除 `needs-human`，再貼一次 `agent-go`」。
+回報一律由 `cleanup` 負責（它是唯一站在 environment 閘門外的 job），`develop` 內不再自己留言。
 
 觸發用 label（由人貼上，見上方流程順序）：
 | Label | 觸發的 workflow |

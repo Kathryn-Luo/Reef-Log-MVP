@@ -224,6 +224,16 @@ jobs:
           echo "--- .agent-review.md ---"
           cat .agent-review.md
 
+          # review 觸發代表「剛剛確實有一位 OWNER/MEMBER 送出 Request changes」，
+          # 此時檔案是空的就是自相矛盾——例如 PR 已被關閉，`gh pr list --state open`
+          # 撈不到，連 review 都不會去抓。
+          # 少了這道，prompt 會走到「檔案是空的 → 照 Epic 重新設計」那條分支，
+          # agent 把整份 schema 重做並覆蓋掉上一輪草稿，而 run 仍回報 success。
+          if [ "$GITHUB_EVENT_NAME" = "pull_request_review" ] && [ ! -s .agent-review.md ]; then
+            echo "::error::review 觸發卻取不到任何人類意見（PR 是否已關閉？）"
+            exit 1
+          fi
+
       - name: Run Claude – Schema design
         uses: anthropics/claude-code-action@v1
         env:
@@ -429,6 +439,8 @@ jobs:
                   echo "- 滿意 → Approve 並 merge，schema 即定案"
                   echo "- 仍要調整 → 再送一次 **Request changes**，會再跑一輪"
                 fi
+                echo
+                echo "> 只有 repo 擁有者 / 成員的 review 主體、PR 留言與 diff 行內留言會被讀取。"
               else
                 # 非 success 時這個 PR 可能是上一輪留下的、內容不完整，
                 # 邀請 merge 會誤導人 merge 沒做完的 schema。

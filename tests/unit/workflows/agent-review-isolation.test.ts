@@ -82,8 +82,11 @@ describe.each(cases)('$file 的 review 隔離', ({ file, gatedJob }) => {
 
   // ── 第一道：確定性步驟 ──
 
+  // 斷言步驟本身存在，而不是「job 裡有 .agent-review.md 這個字串」——
+  // prompt 也在同一個 job 裡而且必然提到這個檔名，所以後者對「整個步驟被刪掉」
+  // 完全不敏感（實測：刪掉整個步驟，只驗字串的版本仍然綠）。
   it('workflow 自己把人類 review 過濾成 .agent-review.md', () => {
-    expect(job(file, gatedJob)).toContain('.agent-review.md')
+    expect(job(file, gatedJob)).toContain('- name: 取出 PR 上的人類 review')
   })
 
   // 沒有作者過濾，這一步就只是把陌生人的留言換個地方放。
@@ -147,5 +150,28 @@ describe.each(cases)('$file 的 review 隔離', ({ file, gatedJob }) => {
     const tools = allowedTools(file)
     expect(tools).toContain('Read')
     expect(tools).toContain('Bash(gh pr comment:*)')
+  })
+
+  // ── 第四道：把過濾這件事告訴人 ──
+  // 過濾是靜默的。日後若加了 COLLABORATOR 身分的協作者，他在 PR 上留言後會以為
+  // agent 會照做，實際上被 jq 濾掉而畫面上沒有任何跡象。回報留言要講明白。
+  it('回報留言說明只有擁有者 / 成員的意見會被讀取', () => {
+    expect(code(file)).toContain('只有 repo 擁有者 / 成員的 review 主體、PR 留言與 diff 行內留言會被讀取')
+  })
+})
+
+// schema-design 專有：`pull_request_review` 觸發代表「剛剛確實有一位 OWNER/MEMBER
+// 送出 Request changes」，此時 .agent-review.md 是空的就是自相矛盾的狀態
+// （例如 PR 已被關閉 → `gh pr list --state open` 撈不到 → 連 review 都不會去抓）。
+//
+// 少了這道，prompt 會走到「檔案是空的 → 照 Epic 重新設計」那條分支，
+// agent 把整份 schema 重做並覆蓋掉上一輪草稿，而 run 仍然回報 success。
+// tdd-develop 沒有這個觸發，所以這條只驗 schema-design。
+describe('schema-design.yml 的 review 觸發不容許空的 .agent-review.md', () => {
+  it('review 觸發卻取不到任何人類意見時，步驟要失敗', () => {
+    const body = job('schema-design.yml', 'design')
+    expect(body).toContain('GITHUB_EVENT_NAME" = "pull_request_review"')
+    expect(body).toMatch(/-s\s+\.agent-review\.md/)
+    expect(body).toContain('::error::')
   })
 })

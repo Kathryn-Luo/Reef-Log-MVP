@@ -115,6 +115,11 @@ Then  <預期結果>
 | `needs-human` | 任何需人工介入 | **是** |
 | `agent-go` | 人類已 review，放行開發 | 由人貼上才觸發開發 |
 
+狀態用 label（由 workflow 自動增減，人類不需手動貼）：
+| Label | 意義 |
+|-------|------|
+| `in-progress` | `agent-go` 通過檢查後 workflow 立刻換上，取代被移除的 `agent-go`，避免 issue 上「label 憑空消失、什麼反應都沒有」。TDD Develop 這一輪結束（成功／失敗／人工核准被拒）後由 workflow 自動拿掉，見 `tdd-develop.yml`。
+
 觸發用 label（由人貼上，見上方流程順序）：
 | Label | 觸發的 workflow |
 |-------|----------------|

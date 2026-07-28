@@ -122,6 +122,21 @@ jobs:
       - id: gate
         run: echo "approved=true" >> "$GITHUB_OUTPUT"
 
+      # ── 讓「agent-go 消失」不等於「沒反應」──
+      # 走到這裡代表閘門全部通過、即將進入 develop job；但 develop 掛著
+      # environment 的人工核准，實際開始跑 Claude 之前可能會停在「等待核准」
+      # 好一陣子。若這裡什麼都不做，issue 上只會看到 agent-go 憑空消失、
+      # 什麼反應都沒有，讀者分不出「壞了」還是「排隊中」。
+      # 換上 in-progress 補這段空窗；結束時（成功／失敗／核准被拒）由下面
+      # 獨立的 cleanup job 拿掉，理由與「移除 agent-go 為何放在 authorize」相同。
+      - name: 標記處理中
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          gh label create in-progress --color FBCA04 --description "agent 正在處理（TDD Develop 執行中，含等待人工核准 environment）" --force
+          gh issue edit "$ISSUE" --add-label in-progress
+
       # ── 一律移除 agent-go，且必須在這裡（authorize）而不是在 develop ──
       # GitHub 不會為「已經存在的 label」再發一次 issues.labeled，所以 label 不拿掉，
       # 「重貼 agent-go」就是一個做不到的指示。
@@ -379,3 +394,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh issue edit "$ISSUE" --add-label needs-human
+
+  # ── 拿掉 in-progress ──
+  # 獨立成一個 job，而不是塞進 develop 收尾的「回報結果」步驟：develop 掛著
+  # environment 核准，若核准被拒絕或逾時，develop 內的任何步驟（含 if: always()）
+  # 都不會執行——in-progress 會跟舊版的 agent-go 一樣永遠卡住拿不掉。
+  # 獨立 job 用 needs + if: always() 追的是 develop 這個 job 的「最終結果」
+  # （成功／失敗／被跳過／核准被拒都算數），不依賴 develop 內部有沒有機會
+  # 執行到任何一個 step。
+  cleanup:
+    needs: [authorize, develop]
+    if: always() && needs.authorize.outputs.approved == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: 拿掉 in-progress
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue edit "${{ github.event.issue.number }}" --remove-label in-progress || true

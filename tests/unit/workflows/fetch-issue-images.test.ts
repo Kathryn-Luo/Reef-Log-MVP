@@ -1,5 +1,5 @@
-import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -204,16 +204,20 @@ describe('fetch-issue-images.sh', () => {
 
   // 防守用：curl 回 0 卻沒真的產出檔案時，數量斷言要接住。
   // 少了這道，agent 會拿著半套素材硬做。
-  it('數量對不上時失敗', () => {
+  //
+  // 斷言要比對完整語意而不是「輸出裡有沒有 3」——成功路徑的訊息本身就含數字，
+  // 只驗數字的話這條會被那些訊息滿足，變成只驗到 status !== 0。
+  it('數量對不上時失敗，並說出期望與實際', () => {
     const result = run(bodyWith(3), { CURL_NOWRITE: '1' })
     expect(result.status).not.toBe(0)
-    expect(result.stdout + result.stderr).toMatch(/3/)
+    expect(result.stdout + result.stderr).toContain('內文有 3 張，實際下載到 0 張')
   })
 
   // 內文裡的 URL 數量是唯一的真相來源，訊息要講得出來。
+  // 同上：不能只驗 /2/，收尾的「已下載 2 張」會讓這條真空通過。
   it('回報內文裡有幾張截圖', () => {
     const result = run(bodyWith(2))
-    expect(result.stdout).toMatch(/2/)
+    expect(result.stdout).toContain('內文含 2 張')
   })
 })
 
@@ -237,8 +241,11 @@ describe('三支 workflow 都改用共用 script', () => {
     expect(text).not.toMatch(/curl -sSLf -o/)
   })
 
+  // 少了 exec bit，workflow 的 `run: .github/scripts/…sh` 會直接 permission denied。
+  // 用 statSync 而不是 `stat -c`：後者是 GNU 專屬，本機在 macOS 上會直接爆
+  // （BSD 的 stat 用 -f）。位元遮罩也比字串比對精確。
   it('script 有可執行權限', () => {
-    const mode = execFileSync('stat', ['-c', '%a', script], { encoding: 'utf8' }).trim()
-    expect(mode, `.github/scripts/fetch-issue-images.sh 權限是 ${mode}`).toMatch(/[157]{1}[157]{1}[157]{1}/)
+    const mode = statSync(script).mode
+    expect(mode & 0o111, `權限是 ${(mode & 0o777).toString(8)}`).toBe(0o111)
   })
 })

@@ -6,6 +6,12 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/main.css'],
 
+  // 全站深色主題：html 上就掛好 .dark，避免載入初期閃一下淺色
+  colorMode: {
+    preference: 'dark',
+    fallback: 'dark',
+  },
+
   future: {
     compatibilityVersion: 4,
   },

@@ -39,6 +39,7 @@ jobs:
       # 擋在 authorize 這裡而不是 breakdown 裡，是為了讓 breakdown job 根本不啟動，
       # 避免下游的 always() 步驟留下一則語意不明的「拆解結果」留言。
       - name: 確認 schema 已定案
+        id: schema
         env:
           GH_TOKEN: ${{ github.token }}
           EPIC: ${{ github.event.issue.number }}
@@ -46,6 +47,10 @@ jobs:
           if [ -f prisma/schema.prisma ]; then
             exit 0
           fi
+          # ::error:: 一定要排在留言之前（同 tdd-develop.yml 的作法）：留言若失敗，
+          # errexit 會當場中止步驟，排在後面的 annotation 就不會產生——擋下的原因
+          # 會完全消失，只剩 gh 的 stderr。
+          echo "::error::prisma/schema.prisma 不存在，請先完成 Schema Design 流程"
           gh issue comment "$EPIC" --body "$(printf '%s\n' \
             '## 拆解未啟動：schema 尚未定案' \
             '' \
@@ -54,12 +59,55 @@ jobs:
             '正確順序是先貼 `schema:design` 產出 schema 草稿 PR、review 並 merge 後，' \
             '再貼 `epic:breakdown` 拆解子 issue——這樣子 issue 的「涉及資料模型」' \
             '才能引用真實存在的 model，不必事後訂正。')"
-          gh issue edit "$EPIC" --add-label needs-human
-          echo "::error::prisma/schema.prisma 不存在，請先完成 Schema Design 流程"
+          # 只有留言確實送出才算「已經跟使用者說過話」，留言失敗時這行不會執行，
+          # 下方的 fallback 步驟就會接手。
+          echo "reported=true" >> "$GITHUB_OUTPUT"
+          gh issue edit "$EPIC" --add-label needs-human \
+            || echo "::warning::貼上 needs-human 失敗"
           exit 1
 
       - id: gate
         run: echo "approved=true" >> "$GITHUB_OUTPUT"
+
+      # ── 最後一道防線：authorize 沒走完，卻沒有任何人留言過 ──
+      # report job 的兩個步驟都被 approved == 'true' 守住，所以只要 authorize
+      # 沒走到 gate，整條路徑就會靜默：checkout 掛掉、schema 閘門成立但
+      # `gh issue comment` 本身失敗（bash -e 下當場中止，連 exit 1 都跑不到）、
+      # 或整個 run 被取消。這些情況下 Epic 上會什麼都沒有。
+      #
+      # 這一步刻意放在 authorize 內、而不是 report：「把回報搬到閘門外」的理由
+      # 只適用於 breakdown（它掛著 environment 核准，被拒就一步都不跑）。
+      # authorize 沒有 environment，一定跑得到自己的 always() 步驟，讀的也是同一個
+      # job 的 steps context，不必依賴「失敗 job 的 outputs 會不會跨 job 傳遞」。
+      #
+      # 用 always() 而非 failure()：run 被取消時 failure() 不成立，那條路徑就會靜默。
+      - name: 授權階段未留言時補上回報
+        if: >
+          always()
+          && steps.gate.outputs.approved != 'true'
+          && steps.schema.outputs.reported != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EPIC: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## 拆解未啟動：授權階段沒有走完"
+            echo
+            echo "拆解沒有開始，而且沒有任何閘門留下說明。可能是授權階段本身出錯"
+            echo "（checkout 失敗、呼叫 GitHub API 失敗），或這次 run 被取消，"
+            echo "也可能是閘門判定成立、但那則說明留言送不出去。請看執行紀錄判斷。"
+            echo
+            echo "排除問題後要重跑，請把 \`epic:breakdown\` 移除後重新貼上"
+            echo "（GitHub 不會為既存的 label 再發一次事件），並順手清掉 \`needs-human\`。"
+            echo
+            echo "[執行紀錄]($RUN_URL)"
+          } > authorize-failure.md
+
+          gh issue comment "$EPIC" --body-file authorize-failure.md \
+            || echo "::warning::連回報留言都送不出去，請直接看執行紀錄"
+          gh issue edit "$EPIC" --add-label needs-human \
+            || echo "::warning::貼上 needs-human 失敗"
 
   breakdown:
     needs: authorize
@@ -106,7 +154,7 @@ jobs:
           #   每讀一張截圖、每建一個子 issue 都至少吃一回合，畫面數量直接放大用量。
           # --allowedTools：Bash 預設不開，必須逐項允許。
           #   用 gh CLI 而非 GitHub MCP；前綴比對把權限收在 issue 讀寫這幾個子命令內。
-          #   沒有 gh issue comment：總結留言改由下方確定性步驟負責，不花 agent 的 turn。
+          #   沒有 gh issue comment：總結留言改由閘門外的 report job 負責，不花 agent 的 turn。
           claude_args: >
             --model claude-opus-5
             --max-turns 80
@@ -179,12 +227,18 @@ jobs:
     # 刻意不用 needs.authorize.outputs.approved 當 job 層條件：失敗 job 的 outputs
     # 是否傳遞，官方文件與 runner 的實際行為說法不一致。改看 event payload 就沒有
     # 這層不確定性——條件與 authorize 的 job 層 if 相同。
+    # 括號內必須與 authorize 的 job 層 if 逐字相同——測試會比對這件事，
+    # 免得日後在 authorize 加了條件卻忘了同步，report 就會在 authorize 被 skip
+    # 的情況下照樣啟動。
     if: >
-      always() &&
-      github.event.label.name == 'epic:breakdown' &&
-      (github.event.issue.author_association == 'OWNER' ||
-       github.event.issue.author_association == 'MEMBER')
+      always() && (
+        github.event.label.name == 'epic:breakdown' &&
+        (github.event.issue.author_association == 'OWNER' ||
+         github.event.issue.author_association == 'MEMBER')
+      )
     runs-on: ubuntu-latest
+    # 收尾 job 不該吃預設的 360 分鐘：它卡住會讓整個 run 一起掛著。
+    timeout-minutes: 10
     permissions:
       issues: write        # 列出子 issue、留言、貼 needs-human
     env:
@@ -199,17 +253,25 @@ jobs:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       # 用 approved 而不是 authorize.result：schema 未定案的閘門自己已經留過說明並
-      # 貼了 needs-human，這裡不該重複。approved 正好切在這條線上。
+      # 貼了 needs-human，這裡不該重複；閘門之外的 authorize 失敗則由它最後那道
+      # always() 的防線負責。approved 正好切在這條線上，三邊互斥不重複。
       # 這裡「可以」依賴失敗 job 的 output（job 層刻意避開的那件事）：最壞情況只是
       # 少一則留言，而 job 層若賭錯，賠掉的是整個 job 不執行。取捨不同，是刻意的。
       - name: 回報拆解結果到 Epic
         if: always() && needs.authorize.outputs.approved == 'true'
         run: |
+          # set -o pipefail 不可省。GitHub Actions 沒寫 `shell:` 時用的是
+          # `bash -e {0}`——「沒有」pipefail（只有明寫 shell: bash 才會加上）。
+          # 少了這行，下面這條管線的 exit status 取決於最後一段的 jq：gh 掛掉
+          # （rate limit、502…）時 stdout 是空的，jq 讀空輸入照樣 exit 0，
+          # 於是 SUBS_LOOKUP_OK=true、subs.txt 為空，留言就會謊報成
+          # 「沒有找到任何子 issue」——拆解其實成功，卻在 Epic 上宣告一個都沒有。
+          set -o pipefail
+
           # 用 jq 在本地比對，不依賴 GitHub search 對 # 的斷詞行為
           # （"Epic #1" 走 search 會誤中 Epic #10）。
-          # 用 if 包住而不是裸的指令：預設 shell 是 `bash -e`，查詢一失敗
-          # （rate limit、502…）整個步驟就會死在 gh issue comment 之前——
-          # 這是唯一的回報步驟，那等於整條路徑靜默。
+          # 用 if 包住而不是裸的指令：errexit 下查詢一失敗，整個步驟就會死在
+          # gh issue comment 之前——這是唯一的回報步驟，那等於整條路徑靜默。
           # 另外要分清「沒有子 issue」與「查詢失敗」，否則會謊報成「沒有找到」。
           if gh issue list --state open --limit 200 --json number,title,body \
             | jq -r --arg epic "$EPIC" \
@@ -259,7 +321,13 @@ jobs:
             echo
             if [ "$BREAKDOWN_RESULT" != "success" ]; then
               echo "> 拆解流程是冪等的：會從未完成的畫面接續，不會重建上列 issue。"
-              echo "> 要重跑請**先移除 \`needs-human\`**（本流程會貼上），再貼一次 \`epic:breakdown\`。"
+              # 本流程「不」移除 epic:breakdown（label 留在原地就是「排隊中」的訊號，
+              # 見 issue #26 的決定），而 GitHub 不會為既存的 label 再發一次
+              # issues.labeled。所以重跑的動作是「移除後重新貼上」，不是「再貼一次」。
+              # 另外 needs-human 在本流程沒有閘門會讀它（authorize 只檢查 schema），
+              # 它純粹是給人看的標記，不會擋住重跑——不要謊稱要先移除它才能重跑。
+              echo "> 要重跑請把 \`epic:breakdown\` **移除後重新貼上**"
+              echo "> （GitHub 不會為既存的 label 再發一次事件），並順手清掉 \`needs-human\`。"
               echo
             fi
             echo "review 後對子 issue 貼上 \`agent-go\` label 才會進入開發。"

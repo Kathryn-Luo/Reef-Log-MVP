@@ -37,6 +37,13 @@ jobs:
     if: github.event.label.name == 'agent-go'
     outputs:
       approved: ${{ steps.gate.outputs.approved }}
+      # 「有沒有人已經跟使用者說過話了」——閘門擋下時它自己會留言，cleanup 就不該重複。
+      # 但 authorize 也可能在「還沒判定出任何閘門結論」時就失敗（checkout 掛掉、
+      # 閘門自己要讀 label 的 gh 呼叫失敗、甚至留言本身失敗），那時沒有任何人留言，
+      # 而 agent-go 仍會被移除——issue 上就變成 label 憑空消失、零留言，正是 #24 的症狀。
+      # 每個閘門在「留言成功之後」才寫入這個值，所以留言失敗時它會是空的，
+      # cleanup 便知道要補一則。
+      reported: ${{ steps.trust.outputs.reported || steps.schema.outputs.reported || steps.risk.outputs.reported }}
     steps:
       - uses: actions/checkout@v4
 
@@ -46,6 +53,7 @@ jobs:
       # 這裡認「repo 擁有者 / 成員」或「本專案自己的 bot」；外人開的 issue 即使被誤貼
       # label 也不會進入開發。
       - name: 確認 issue 來源可信
+        id: trust
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE: ${{ github.event.issue.number }}
@@ -59,12 +67,14 @@ jobs:
             'claude[bot]'|'github-actions[bot]') exit 0 ;;
           esac
           gh issue comment "$ISSUE" --body "$(printf '## 開發未啟動：issue 來源不可信\n\n作者 `%s`（%s）不在允許清單內。本流程只處理 repo 擁有者 / 成員，或由本專案 workflow 建立的子 issue。' "$AUTHOR" "$ASSOC")"
+          echo "reported=true" >> "$GITHUB_OUTPUT"
           echo "::error::issue #$ISSUE 由 $AUTHOR ($ASSOC) 建立，不在允許清單內"
           exit 1
 
       # ── 順序閘門：schema 必須已定案 ──
       # 與 epic-breakdown 同樣的理由，擋在 authorize 讓下游 job 根本不啟動。
       - name: 確認 schema 已定案
+        id: schema
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE: ${{ github.event.issue.number }}
@@ -76,6 +86,7 @@ jobs:
             '## 開發未啟動：schema 尚未定案' \
             '' \
             '預設分支上找不到 `prisma/schema.prisma`。請先完成 Schema Design 流程。')"
+          echo "reported=true" >> "$GITHUB_OUTPUT"
           gh issue edit "$ISSUE" --add-label needs-human
           echo "::error::prisma/schema.prisma 不存在"
           exit 1
@@ -86,6 +97,7 @@ jobs:
       # 快照，人類可能先貼 agent-go 再補上其他 label。
       # 每個 case 都用 [ -z "$BLOCK" ] 守住，讓訊息停在「最硬的那一個」原因上。
       - name: 風險分級閘門
+        id: risk
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE: ${{ github.event.issue.number }}
@@ -115,6 +127,7 @@ jobs:
 
           if [ -n "$BLOCK" ]; then
             gh issue comment "$ISSUE" --body "$(printf '## 開發未啟動\n\n%s' "$BLOCK")"
+            echo "reported=true" >> "$GITHUB_OUTPUT"
             echo "::error::風險閘門擋下：$BLOCK"
             exit 1
           fi
@@ -129,13 +142,21 @@ jobs:
       # 什麼反應都沒有，讀者分不出「壞了」還是「排隊中」。
       # 換上 in-progress 補這段空窗；結束時（成功／失敗／核准被拒）由下面
       # 獨立的 cleanup job 拿掉，理由與「移除 agent-go 為何放在 authorize」相同。
+      #
+      # 這一步刻意「不」讓 job 失敗：in-progress 只是給人看的狀態提示，貼不上去
+      # 不該擋掉真正要做的開發。而且它若能讓 authorize 紅掉，就會多出一條
+      # 「閘門過了但 job 失敗」的路徑，害 develop 變成 skipped、還得靠讀
+      # 失敗 job 的 output 才知道發生什麼事——那個行為本身沒保證。
+      # 兩個指令都掛 ::warning::，讓它最多是「少了個提示」而不是流程分岔。
       - name: 標記處理中
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE: ${{ github.event.issue.number }}
         run: |
-          gh label create in-progress --color FBCA04 --description "agent 正在處理（TDD Develop 執行中，含等待人工核准 environment）" --force
-          gh issue edit "$ISSUE" --add-label in-progress
+          gh label create in-progress --color FBCA04 --description "agent 正在處理（TDD Develop 執行中，含等待人工核准 environment）" --force \
+            || echo "::warning::建立 in-progress label 失敗，後續貼 label 可能也會失敗"
+          gh issue edit "$ISSUE" --add-label in-progress \
+            || echo "::warning::貼上 in-progress 失敗——issue 上不會顯示「處理中」，但開發仍會照常進行"
 
       # ── 一律移除 agent-go，且必須在這裡（authorize）而不是在 develop ──
       # GitHub 不會為「已經存在的 label」再發一次 issues.labeled，所以 label 不拿掉，
@@ -397,7 +418,10 @@ jobs:
       # 送出任何 API 前就以 "not a git repository" 失敗。
       GH_REPO: ${{ github.repository }}
       ISSUE: ${{ github.event.issue.number }}
-      # 與 develop 的 BRANCH same 算法，這裡自己推導以免多一個 job 間傳值。
+      # 與 develop 的 BRANCH 用同一個算法。刻意在這裡重新推導、而不是接 authorize
+      # 的 output：cleanup 必須在 authorize 失敗時也能正常運作，而失敗 job 的 output
+      # 是否傳遞並無保證，接了反而可能拿到空字串。
+      # 【改命名規則時，這裡與 develop 的 BRANCH 要一起改。】
       BRANCH: feat/${{ github.event.issue.number }}-dev
     steps:
       # 失敗不擋整個 job（label 本來就不在時視為已達成目的），但一定要留下痕跡：
@@ -409,13 +433,18 @@ jobs:
       - name: 拿掉 in-progress
         if: always()
         run: |
-          HAS=$(gh issue view "$ISSUE" --json labels --jq 'any(.labels[].name; . == "in-progress")')
-          if [ "$HAS" != "true" ]; then
+          # `|| echo unknown` 不可省：run 的預設 shell 是 `bash -e`，`VAR=$(失敗的指令)`
+          # 會讓整個步驟當場中止——移除動作連試都不會試，也不會吐 warning，
+          # in-progress 就永久卡在 issue 上（正是本 PR 要消滅的 bug class）。
+          HAS=$(gh issue view "$ISSUE" --json labels --jq 'any(.labels[].name; . == "in-progress")' || echo unknown)
+          # 只有「明確知道不在上面」才跳過。unknown 一律照樣嘗試移除：
+          # 多送一次 API 很便宜，label 卡住很貴。
+          if [ "$HAS" = "false" ]; then
             echo "in-progress 不在 issue #$ISSUE 上，無須移除"
             exit 0
           fi
           gh issue edit "$ISSUE" --remove-label in-progress \
-            || echo "::warning::移除 in-progress 失敗，label 仍留在 issue #$ISSUE 上——請手動移除，並看上方錯誤訊息"
+            || echo "::warning::移除 in-progress 失敗，label 可能仍留在 issue #$ISSUE 上——請手動移除，並看上方錯誤訊息"
 
       # ── 這裡「可以」用 authorize 的 output，跟 job 層的 if 不同 ──
       # 判斷依據是 approved 而不是 authorize.result：被閘門擋下時（risk:schema /
@@ -432,7 +461,17 @@ jobs:
           DEVELOP_RESULT: ${{ needs.develop.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          PR_URL=$(gh pr list --state open --head "$BRANCH" --json url --jq '.[0].url // ""')
+          # 用 if 包住而不是裸的 `VAR=$(...)`：預設 shell 是 `bash -e`，查詢一失敗
+          # （rate limit、502…）整個步驟就會死在 gh issue comment 之前——這是唯一的
+          # 回報步驟，那等於整條路徑靜默。if 的條件式不受 errexit 影響。
+          # 另外要分清「查不到 PR」與「查詢失敗」，否則會謊報成「沒有開啟中的 PR」。
+          if PR_URL=$(gh pr list --state open --head "$BRANCH" --json url --jq '.[0].url // ""'); then
+            PR_LOOKUP_OK=true
+          else
+            PR_LOOKUP_OK=false
+            PR_URL=""
+            echo "::warning::查詢 PR 連結失敗，留言中將略過 PR 連結"
+          fi
 
           {
             case "$DEVELOP_RESULT" in
@@ -440,11 +479,11 @@ jobs:
                 echo "## TDD 開發完成"
                 ;;
               skipped)
-                # develop 的 if 在 authorize 成功時必為真，所以 skipped 只可能是
-                # authorize 在 gate 之後失敗——也就是貼 in-progress 那一步出錯。
+                # 「標記處理中」改為非致命之後，authorize 在 gate 之後已經不會失敗，
+                # 所以這條理論上到不了。留著當防線，並且不硬猜原因。
                 echo "## TDD 開發未啟動"
                 echo
-                echo "授權閘門通過了，但在啟動開發前的準備步驟出錯（見執行紀錄），開發沒有開始。"
+                echo "授權通過了，但開發 job 沒有被啟動（見執行紀錄）。"
                 ;;
               cancelled)
                 echo "## TDD 開發已中止"
@@ -457,6 +496,7 @@ jobs:
                 echo "可能的原因（無法從 workflow 內部區分，請點下方執行紀錄確認）："
                 echo "- \`agent\` environment 的人工核准被拒絕或逾時 → 開發完全沒有開始"
                 echo "- 開發過程中失敗，例如撞到 \`--max-turns\`、測試或 lint 沒過"
+                echo "- 開發超過 job 的 \`timeout-minutes: 60\` 被砍掉"
                 ;;
             esac
             echo
@@ -475,8 +515,10 @@ jobs:
                 echo
                 echo "> 這個 PR 來自這一輪或之前的執行，內容可能不完整，先別 merge。"
               fi
-            else
+            elif [ "$PR_LOOKUP_OK" = "true" ]; then
               echo "目前分支 \`$BRANCH\` 上沒有開啟中的 PR。"
+            else
+              echo "查詢 PR 連結失敗，請自行看分支 \`$BRANCH\`（詳見執行紀錄）。"
             fi
             echo
             if [ "$DEVELOP_RESULT" != "success" ]; then
@@ -493,6 +535,36 @@ jobs:
 
       # 非成功一律貼 needs-human，包含核准被拒與 run 被取消：這兩種都是「人動過手，
       # 且流程沒走完」，需要人決定下一步。上面的留言已寫明重貼 agent-go 前要先移除它。
+      # ── 最後一道防線：authorize 失敗、卻沒有任何人留言過 ──
+      # 閘門擋下時閘門自己會留言（並寫入 reported）。但 authorize 也可能在還沒得出
+      # 任何閘門結論前就失敗：checkout 掛掉、風險閘門要讀 label 的 gh 呼叫失敗
+      # （`bash -e` 下 `LABELS=$(...)` 失敗會當場中止，連 exit 1 都跑不到）、
+      # 或閘門判定成立但 gh issue comment 本身失敗。
+      # 那些情況下沒有人跟使用者說過話，而「移除 agent-go」是 if: always()、照樣執行——
+      # issue 上就變成 label 憑空消失、零留言，正是 #24 的原始症狀。
+      - name: 授權階段意外失敗時回報
+        if: always() && needs.authorize.result == 'failure' && needs.authorize.outputs.approved != 'true' && needs.authorize.outputs.reported != 'true'
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## 開發未啟動：授權階段意外失敗"
+            echo
+            echo "這不是被風險閘門擋下（那會有各自的說明留言），而是授權階段本身出錯，"
+            echo "例如 checkout 失敗或呼叫 GitHub API 失敗。請看執行紀錄判斷。"
+            echo
+            echo "\`agent-go\` 已被移除。排除問題後重貼一次即可重新觸發。"
+            echo
+            echo "[執行紀錄]($RUN_URL)"
+          } > authorize-failure.md
+
+          gh issue comment "$ISSUE" --body-file authorize-failure.md \
+            || echo "::warning::連回報留言都送不出去，請直接看執行紀錄"
+          gh issue edit "$ISSUE" --add-label needs-human \
+            || echo "::warning::貼上 needs-human 失敗"
+
       - name: 未成功時標記需要人工介入
         if: always() && needs.authorize.outputs.approved == 'true' && needs.develop.result != 'success'
-        run: gh issue edit "$ISSUE" --add-label needs-human
+        run: |
+          gh issue edit "$ISSUE" --add-label needs-human \
+            || echo "::warning::貼上 needs-human 失敗——請手動貼上，否則重跑時不會被閘門提醒"

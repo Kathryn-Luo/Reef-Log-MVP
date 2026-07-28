@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import type { CreatureCardModel } from '../../shared/utils/creatureCards'
-import { CREATURE_CATEGORY_LABELS } from '../../shared/utils/creatureCards'
-import type { CreatureStatusKey } from '../../shared/types/home'
+import type { CreatureCardModel } from '#shared/utils/creatureCards'
+import { CREATURE_CATEGORY_LABELS } from '#shared/utils/creatureCards'
+import type { CreatureStatusKey } from '#shared/types/home'
 
 const props = defineProps<{ card: CreatureCardModel }>()
 

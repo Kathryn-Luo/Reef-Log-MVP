@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { WaterReadingDto, WaterTargetDto } from '../../../shared/types/home'
+import type { WaterReadingDto, WaterTargetDto } from '#shared/types/home'
 import {
   DEFAULT_WATER_TARGETS,
   WATER_PARAMETER_LABELS,
@@ -8,7 +8,7 @@ import {
   readingStatus,
   resolveWaterTarget,
   summarizeWaterReadings,
-} from '../../../shared/utils/waterQuality'
+} from '#shared/utils/waterQuality'
 
 // screen-1 的水質摘要列：KH 7.8 / Ca 412 / Mg 1180 / NO₃ 12 / PO₄ .04 / 鹽 1.026，
 // 其中 Mg 偏低（藍）、NO₃ 偏高（橘），其餘正常（綠）→ 徽章「2 需注意」。

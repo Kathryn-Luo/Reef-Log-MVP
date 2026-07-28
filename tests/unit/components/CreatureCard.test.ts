@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import CreatureCard from '../../../app/components/CreatureCard.vue'
-import type { CreatureCardModel } from '../../../shared/utils/creatureCards'
+import type { CreatureCardModel } from '#shared/utils/creatureCards'
 
 const ALIVE: CreatureCardModel = {
   id: 'c1',

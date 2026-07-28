@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { CreatureCategoryKey, TankHomeData, TankOption } from '../../shared/types/home'
+import type { CreatureCategoryKey, TankHomeData, TankOption } from '#shared/types/home'
 import {
   CREATURE_CATEGORY_LABELS,
   CREATURE_CATEGORY_ORDER,
   buildCreatureCards,
   countCreaturesByCategory,
-} from '../../shared/utils/creatureCards'
+} from '#shared/utils/creatureCards'
 
 useSeoMeta({
   title: 'ReefLog',

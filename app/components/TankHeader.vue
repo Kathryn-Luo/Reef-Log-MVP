@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { TankOption } from '../../shared/types/home'
+import type { TankOption } from '#shared/types/home'
 
 const props = defineProps<{
   tanks: TankOption[]

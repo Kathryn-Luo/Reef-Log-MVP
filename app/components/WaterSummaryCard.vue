@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import type { WaterSummaryDto } from '../../shared/types/home'
-import type { ReadingStatus } from '../../shared/utils/waterQuality'
-import { summarizeWaterReadings } from '../../shared/utils/waterQuality'
-import { formatRelativeTime } from '../../shared/utils/relativeTime'
+import type { WaterSummaryDto } from '#shared/types/home'
+import type { ReadingStatus } from '#shared/utils/waterQuality'
+import { summarizeWaterReadings } from '#shared/utils/waterQuality'
+import { formatRelativeTime } from '#shared/utils/relativeTime'
 
 const props = defineProps<{
   /** 該缸最新一筆水質記錄；尚無任何記錄時為 null */

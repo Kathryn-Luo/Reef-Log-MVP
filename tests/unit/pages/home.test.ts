@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, registerEndpoint } from '@nuxt/test-utils/runtime'
 import { enableAutoUnmount, flushPromises } from '@vue/test-utils'
 import HomePage from '../../../app/pages/index.vue'
-import type { CreatureDto, TankHomeData, TankOption } from '../../../shared/types/home'
+import type { CreatureDto, TankHomeData, TankOption } from '#shared/types/home'
 
 const MAIN_TANK: TankOption = {
   id: 'tank-1',

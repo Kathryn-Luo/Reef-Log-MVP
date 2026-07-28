@@ -1,5 +1,5 @@
 import type { PrismaClient } from '@prisma/client'
-import type { CreatureDto, TankHomeData, TankOption, WaterSummaryDto } from '../../shared/types/home'
+import type { CreatureDto, TankHomeData, TankOption, WaterSummaryDto } from '#shared/types/home'
 
 // 首頁（screen-1）的資料查詢。
 //

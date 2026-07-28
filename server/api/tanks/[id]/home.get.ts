@@ -1,4 +1,4 @@
-import type { TankHomeData } from '../../../../shared/types/home'
+import type { TankHomeData } from '#shared/types/home'
 
 // screen-1 單一缸的內容：最新一筆水質記錄 + 該缸全部生物。
 //

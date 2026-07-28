@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatRelativeTime } from '../../../shared/utils/relativeTime'
+import { formatRelativeTime } from '#shared/utils/relativeTime'
 
 const NOW = new Date('2026-07-28T12:00:00.000Z')
 

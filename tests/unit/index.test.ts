@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { mountSuspended, registerEndpoint } from '@nuxt/test-utils/runtime'
 import IndexPage from '../../app/pages/index.vue'
-import type { TankOption } from '../../shared/types/home'
+import type { TankOption } from '#shared/types/home'
 
 // 首頁的驗收條件逐條覆蓋在 tests/unit/pages/home.test.ts；
 // 這裡留的是 issue #9「已知缺口」列到的那一項——「＋ 新增」按鈕本身。

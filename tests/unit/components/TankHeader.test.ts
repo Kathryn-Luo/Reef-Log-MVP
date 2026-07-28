@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import TankHeader from '../../../app/components/TankHeader.vue'
-import type { TankOption } from '../../../shared/types/home'
+import type { TankOption } from '#shared/types/home'
 
 const MAIN_TANK: TankOption = {
   id: 'tank-1',

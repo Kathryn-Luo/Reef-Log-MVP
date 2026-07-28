@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import type { CreatureDto } from '../../../shared/types/home'
+import type { CreatureDto } from '#shared/types/home'
 import {
   CREATURE_CATEGORY_LABELS,
   buildCreatureCards,
   countCreaturesByCategory,
   monthsInTank,
-} from '../../../shared/utils/creatureCards'
+} from '#shared/utils/creatureCards'
 
 const NOW = new Date('2026-07-28T09:41:00.000Z')
 

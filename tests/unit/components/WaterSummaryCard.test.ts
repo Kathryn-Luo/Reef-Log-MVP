@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import WaterSummaryCard from '../../../app/components/WaterSummaryCard.vue'
-import type { WaterSummaryDto } from '../../../shared/types/home'
+import type { WaterSummaryDto } from '#shared/types/home'
 
 const NOW = new Date('2026-07-28T09:41:00.000Z')
 

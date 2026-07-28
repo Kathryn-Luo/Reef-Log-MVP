@@ -3,6 +3,8 @@
 .nitro
 .cache
 .output
+.vercel
+.nuxtrc
 dist
 
 # NuxtHub / Wrangler

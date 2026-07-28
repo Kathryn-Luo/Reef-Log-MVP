@@ -37,6 +37,10 @@ blob-report
 # Agent 在 CI 上下載的 Epic 截圖（workflow 產生，不進版控）
 .agent-images
 
+# workflow 取出的 issue 內文與過濾後的人類 review（只在 CI 上產生，不進版控）
+.agent-issue.md
+.agent-review.md
+
 # Editor / OS
 .DS_Store
 .idea

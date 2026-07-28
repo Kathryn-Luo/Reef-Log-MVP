@@ -170,19 +170,13 @@ jobs:
       # 在這裡先把附件抓成本地檔案，agent 才能用 Read 真的看過每一張畫面。
       # 用確定性步驟而非讓 agent 自己 curl：省 turn，且下載失敗會直接讓 job 失敗，
       # 不會變成「它以為自己看過圖」。
+      #
+      # 邏輯放在共用 script：三支 workflow 原本各自維護幾乎相同的 pipeline，
+      # 結果是「修一支忘兩支」（issue #27）。
       - name: 下載 Epic 內的截圖
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p .agent-images
-          gh issue view "$EPIC" --json body --jq '.body' \
-            | grep -oE 'https://github\.com/user-attachments/assets/[0-9a-fA-F-]+' \
-            | awk '!seen[$0]++' \
-            | nl -w1 -s' ' \
-            | while read -r i url; do
-                curl -sSLf -o ".agent-images/screen-$i.png" "$url"
-              done
-          ls -l .agent-images
+        run: .github/scripts/fetch-issue-images.sh "$EPIC" .agent-issue.md .agent-images
 
       - name: Run Claude – Schema design
         uses: anthropics/claude-code-action@v1

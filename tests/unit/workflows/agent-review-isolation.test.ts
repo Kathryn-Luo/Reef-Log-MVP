@@ -152,6 +152,25 @@ describe.each(cases)('$file 的 review 隔離', ({ file, gatedJob }) => {
     expect(tools).toContain('Bash(gh pr comment:*)')
   })
 
+  // ── review 內部自相矛盾時的出路（issue #37）──
+  //
+  // 「照做並在回覆中說明疑慮」假設每一項要求各自獨立、都做得到。多項要求彼此
+  // 衝突時，「照做」在邏輯上做不到——滿足其中一項必然違反另一項。PR #34 的
+  // review 就同時要求「全檔只能有一處 exclude:」與「coverage.exclude 不該誤紅」，
+  // 兩者無法並存。少了這段，agent 要嘛硬做出自相矛盾的實作，要嘛卡住；
+  // 而這條路徑每一輪都燒掉一次 environment 的人工核准。
+  it('說明衝突後可以偏離，是唯一許可的例外', () => {
+    const text = prompt(file)
+    expect(text).toContain('彼此衝突')
+    expect(text).toContain('不要硬做')
+  })
+
+  // 這個例外必須收緊在「可證明的邏輯衝突」，否則會退化成
+  // 「agent 自行判斷要不要聽 review」。
+  it('不衝突時仍然一律照做', () => {
+    expect(prompt(file)).toContain('其他情況仍然照做')
+  })
+
   // ── 第四道：把過濾這件事告訴人 ──
   // 過濾是靜默的。日後若加了 COLLABORATOR 身分的協作者，他在 PR 上留言後會以為
   // agent 會照做，實際上被 jq 濾掉而畫面上沒有任何跡象。回報留言要講明白。

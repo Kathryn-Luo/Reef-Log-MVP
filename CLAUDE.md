@@ -145,6 +145,36 @@ TDD Develop 每一種結束方式都會在 issue 上留下一則留言，**沒�
 修改 schema 草稿不靠 label：在草稿 PR 上送出 **Request changes** 即會觸發 Schema Design
 再跑一輪，依 review 修正同一個 PR。修改 PR 的手勢留在 PR 上，不必回頭動 Epic 的 label。
 
+### 只有真人做得到的兩件事
+
+這兩道閘門是**機制性**的，不是靠 prompt 或自律維持。agent（含本 repo 自己的
+automation、以及用 GitHub API 操作的 Claude session）做不到，試了會失敗：
+
+| 動作 | 為什麼 agent 做不到 |
+|---|---|
+| **貼上觸發用 label**（`agent-go`、`schema:design`、`epic:breakdown`） | `anthropics/claude-code-action` 會拒絕由 bot 觸發的 run：`Workflow initiated by non-human actor: claude (type: Bot)`。前置步驟會全部成功，直到呼叫 Claude 那一步才失敗——**白白燒掉一次已經按下的人工核准**。 |
+| **按 `environment: agent` 的核准** | GitHub 不讓 App token 當 deployment reviewer。`GET /actions/runs/{id}/pending_deployments` 回傳的 `current_user_can_approve` 是 `false`。 |
+
+agent 可以「建議你貼」，不能代貼。已經踩過一次，見 issue #36。
+
+**為什麼容易誤判**：GitHub 對同一個 App token 在三個脈絡給出不同答案——
+
+| 脈絡 | 呈現 |
+|---|---|
+| issue / PR 留言的作者 | `Kathryn-Luo`，`author_association: OWNER` |
+| workflow run 的 actor | `claude[bot]`，type `Bot` |
+| deployment reviewer | 不具資格 |
+
+第一欄會讓人以為「App 就等於使用者本人」。`tdd-develop.yml` 的「來源可信」閘門看的
+正是 `author_association`，所以它會**放行**——擋下來的是更後面的 `claude-code-action`。
+
+**核准只能在網頁版操作。GitHub 手機 App 不支援核准 environment 部署**（畫面上只會出現
+`Cancel workflow`）。手機上請用瀏覽器開 run 頁面，點上方橫幅的 **Review deployments**。
+
+> 不要為了讓 agent 能自我觸發而設定 `allowed_bots`。這兩道閘門是本專案的展示重點之一：
+> 人類把關是機制性的，不是自律。拿掉之後整條流程就變成 agent 自己觸發自己、自己核准自己。
+> 若將來真有需要（例如排程觸發），另開 issue 討論，不要順手做掉。
+
 ## 提交規範
 - 分支命名：`feat/<issue-number>-<slug>`、`fix/<issue-number>-<slug>`
 - 每個 PR 對應一個子 issue，PR 內文連回該 issue

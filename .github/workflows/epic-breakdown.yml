@@ -158,38 +158,108 @@ jobs:
               上面的冪等比對就是靠這個字串，漏掉會導致重跑時建出重複 issue。
             - 不需要在 Epic 留總結留言，workflow 會自動處理。做完就結束。
 
-      # ── 收尾：確定性步驟，不交給 agent ──
-      # if: always() 保證即使 Claude 撞到 --max-turns 被砍，也一定會回報現況，
-      # 不會留下「做到一半但沒人知道」的狀態。
+      # 這個 job 刻意「不」自己回報結果。原本這裡有 if: always() 的回報步驟與
+      # if: failure() 的標記步驟，但 environment 核准被拒 / 逾時時整個 job 一步都
+      # 不會跑，那條路徑上等於沒有回報。責任已整批移到閘門外的 report job。
+
+  # ── 收尾：站在 environment 閘門外回報結果 ──
+  # 為什麼一定要在閘門外：GitHub 的 environment 人工核准若被拒絕或逾時，
+  # breakdown 內的任何步驟（含 if: always() 與 if: failure()）都不會執行。
+  # 留在 breakdown 裡的回報在那條路徑上等於不存在——Epic 上完全看不出發生過
+  # 什麼事，正是 issue #26 抱怨的症狀。做法沿用 #25 在 tdd-develop.yml 定案的
+  # cleanup job。
+  #
+  # 為什麼不用 needs.breakdown.result 判斷「是不是被拒絕」：
+  # 官方文件寫明 "If a job is rejected, the workflow will fail."，逾時亦然，
+  # 所以「核准被拒」與「breakdown 真的執行失敗」的 result 都是 failure，無法區分
+  # （community discussion #66483）。因此這裡不去猜原因，failure 一律把可能性
+  # 都列出來並附上執行紀錄連結，由人點進去看。
+  report:
+    needs: [authorize, breakdown]
+    # 刻意不用 needs.authorize.outputs.approved 當 job 層條件：失敗 job 的 outputs
+    # 是否傳遞，官方文件與 runner 的實際行為說法不一致。改看 event payload 就沒有
+    # 這層不確定性——條件與 authorize 的 job 層 if 相同。
+    if: >
+      always() &&
+      github.event.label.name == 'epic:breakdown' &&
+      (github.event.issue.author_association == 'OWNER' ||
+       github.event.issue.author_association == 'MEMBER')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write        # 列出子 issue、留言、貼 needs-human
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # 這個 job 刻意不做 checkout（不需要 repo 內容）。但 gh 解析「要操作哪個 repo」
+      # 的順序是 --repo → $GH_REPO → 當前目錄的 git remote，它「不會」讀
+      # $GITHUB_REPOSITORY。沒有 checkout 也就沒有 git remote，少了這行 gh 會在
+      # 送出任何 API 前就以 "not a git repository" 失敗。
+      GH_REPO: ${{ github.repository }}
+      EPIC: ${{ github.event.issue.number }}
+      BREAKDOWN_RESULT: ${{ needs.breakdown.result }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      # 用 approved 而不是 authorize.result：schema 未定案的閘門自己已經留過說明並
+      # 貼了 needs-human，這裡不該重複。approved 正好切在這條線上。
+      # 這裡「可以」依賴失敗 job 的 output（job 層刻意避開的那件事）：最壞情況只是
+      # 少一則留言，而 job 層若賭錯，賠掉的是整個 job 不執行。取捨不同，是刻意的。
       - name: 回報拆解結果到 Epic
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EPIC: ${{ github.event.issue.number }}
-          STATUS: ${{ job.status }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        if: always() && needs.authorize.outputs.approved == 'true'
         run: |
           # 用 jq 在本地比對，不依賴 GitHub search 對 # 的斷詞行為
-          # （"Epic #1" 走 search 會誤中 Epic #10）
-          gh issue list --state open --limit 200 --json number,title,body \
+          # （"Epic #1" 走 search 會誤中 Epic #10）。
+          # 用 if 包住而不是裸的指令：預設 shell 是 `bash -e`，查詢一失敗
+          # （rate limit、502…）整個步驟就會死在 gh issue comment 之前——
+          # 這是唯一的回報步驟，那等於整條路徑靜默。
+          # 另外要分清「沒有子 issue」與「查詢失敗」，否則會謊報成「沒有找到」。
+          if gh issue list --state open --limit 200 --json number,title,body \
             | jq -r --arg epic "$EPIC" \
                 '.[] | select(.body // "" | test("Epic #\($epic)(\\D|$)")) | "- #\(.number) \(.title)"' \
             > subs.txt
+          then
+            SUBS_LOOKUP_OK=true
+          else
+            SUBS_LOOKUP_OK=false
+            : > subs.txt
+            echo "::warning::查詢子 issue 清單失敗，留言中將略過清單"
+          fi
 
           {
-            echo "## 拆解結果：$STATUS"
+            case "$BREAKDOWN_RESULT" in
+              success)
+                echo "## 拆解完成"
+                ;;
+              skipped)
+                echo "## 拆解未啟動"
+                echo
+                echo "授權通過了，但 breakdown job 沒有被啟動——通常是這次 run 被取消。請看執行紀錄。"
+                ;;
+              cancelled)
+                echo "## 拆解已中止"
+                echo
+                echo "這次 run 被取消。"
+                ;;
+              *)
+                echo "## 拆解未正常結束"
+                echo
+                echo "可能的原因（無法從 workflow 內部區分，請點下方執行紀錄確認）："
+                echo "- \`agent\` environment 的人工核准被拒絕或逾時 → 拆解完全沒有開始"
+                echo "- 拆解過程中失敗，例如撞到 \`--max-turns\`、截圖下載失敗"
+                ;;
+            esac
             echo
             if [ -s subs.txt ]; then
               echo "目前屬於本 Epic 的子 issue："
               echo
               cat subs.txt
-            else
+            elif [ "$SUBS_LOOKUP_OK" = "true" ]; then
               echo "沒有找到任何子 issue。"
+            else
+              echo "查詢子 issue 清單失敗（詳見執行紀錄）。"
             fi
             echo
-            if [ "$STATUS" != "success" ]; then
-              echo "> 執行未正常結束（可能撞到 \`--max-turns\`）。"
-              echo "> 拆解流程是冪等的，重貼 \`epic:breakdown\` label 會從未完成的畫面接續，不會重建上列 issue。"
+            if [ "$BREAKDOWN_RESULT" != "success" ]; then
+              echo "> 拆解流程是冪等的：會從未完成的畫面接續，不會重建上列 issue。"
+              echo "> 要重跑請**先移除 \`needs-human\`**（本流程會貼上），再貼一次 \`epic:breakdown\`。"
               echo
             fi
             echo "review 後對子 issue 貼上 \`agent-go\` label 才會進入開發。"
@@ -199,8 +269,12 @@ jobs:
 
           gh issue comment "$EPIC" --body-file comment.md
 
-      - name: 失敗時標記需要人工介入
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh issue edit "${{ github.event.issue.number }}" --add-label needs-human
+      # 非成功一律貼 needs-human，包含核准被拒與 run 被取消：這兩種都是「人動過手，
+      # 且流程沒走完」，需要人決定下一步。上面的留言已寫明重跑前要先移除它。
+      # 不用 `|| true`：那會把權限 / API 錯誤一起吞掉，job 照樣綠燈，
+      # 就又變回本 PR 要消滅的那種「看起來沒事，其實沒人被通知」。
+      - name: 未成功時標記需要人工介入
+        if: always() && needs.authorize.outputs.approved == 'true' && needs.breakdown.result != 'success'
+        run: |
+          gh issue edit "$EPIC" --add-label needs-human \
+            || echo "::warning::在 Epic #$EPIC 貼上 needs-human 失敗，請手動貼上"

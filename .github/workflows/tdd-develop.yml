@@ -269,21 +269,12 @@ jobs:
       # 所以這個檔案就是它能看到的全部 issue 內容。
       #
       # 截圖：agent 看不到 <img src="..."> 這段 HTML 文字，先抓成本地檔案才能 Read。
-      # 沒有截圖不算失敗（例如純邏輯 issue），所以這步允許抓不到東西。
+      # 沒有截圖不算失敗（例如純邏輯 issue），所以這步允許抓不到東西——
+      # 但那與「gh 失敗」是兩回事，共用 script 會把兩者分開（issue #27）。
       - name: 取出 issue 內文與截圖
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p .agent-images
-          gh issue view "$ISSUE" --json body --jq '.body' > .agent-issue.md
-          gh issue view "$ISSUE" --json body --jq '.body' \
-            | grep -oE 'https://github\.com/user-attachments/assets/[0-9a-fA-F-]+' \
-            | awk '!seen[$0]++' \
-            | nl -w1 -s' ' \
-            | while read -r i url; do
-                curl -sSLf -o ".agent-images/screen-$i.png" "$url"
-              done
-          ls -l .agent-images || true
+        run: .github/scripts/fetch-issue-images.sh "$ISSUE" .agent-issue.md .agent-images
 
       # ── 只把「人類的」review 交給 agent ──
       # 這是 public repo：任何 GitHub 使用者都能在 PR 或 issue 底下留言。

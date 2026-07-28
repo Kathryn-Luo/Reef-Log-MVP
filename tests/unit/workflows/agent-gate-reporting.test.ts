@@ -147,7 +147,9 @@ describe.each(cases)('$file 的核准被拒回報', ({ file, gatedJob, trigger }
     const gatedRun = runScripts(gated)
     // 正向錨點：runScripts 若因縮排慣例改變而解析成空字串，下面三條 not.toContain
     // 會集體真空通過。先確認它真的抓到了這個 job 的 shell。
-    expect(gatedRun).toContain('curl -sSLf')
+    // （原本錨在 `curl -sSLf` 上；#27 把截圖下載抽成共用 script 之後，
+    //   這個 job 的 shell 裡改成呼叫那支 script，錨點跟著換。）
+    expect(gatedRun).toContain('fetch-issue-images.sh')
     expect(gatedRun).not.toContain('gh issue comment')
     expect(gatedRun).not.toContain('gh pr comment')
     expect(gatedRun).not.toContain('needs-human')

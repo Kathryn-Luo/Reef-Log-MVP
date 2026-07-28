@@ -115,6 +115,27 @@ Then  <預期結果>
 | `needs-human` | 任何需人工介入 | **是** |
 | `agent-go` | 人類已 review，放行開發 | 由人貼上才觸發開發 |
 
+狀態用 label（由 workflow 自動增減，人類不需手動貼）：
+| Label | 意義 |
+|-------|------|
+| `in-progress` | `agent-go` 通過檢查後由 workflow 貼上（先加 `in-progress` 再移除 `agent-go`，兩者會短暫並存），避免 issue 上「label 憑空消失、什麼反應都沒有」。TDD Develop 這一輪結束後由 `cleanup` job 自動拿掉——包含核准被拒、逾時、run 被取消，見 `tdd-develop.yml`。 |
+
+TDD Develop 每一種結束方式都會在 issue 上留下一則留言，**沒有靜默的路徑**。
+凡是留言時一併貼上 `needs-human` 的情況，都會被風險閘門擋住，
+所以要重跑一律是「先移除 `needs-human`，再貼一次 `agent-go`」。
+
+| 結束方式 | 誰留言 | 加 `needs-human`？ |
+|---|---|---|
+| 開發成功 | `cleanup` | 不加 |
+| 開發失敗 / 核准被拒 / 逾時 / 取消 | `cleanup` | **加** |
+| 被風險閘門擋下（`risk:schema`、`needs-human`、`needs-design` 未核准、來源不可信） | 該閘門自己 | 不加（要改的是 label 或 issue 本身） |
+| schema 未定案 | 該閘門自己 | **加** |
+| 授權階段沒走完又沒有閘門留言（checkout 或 API 失敗、閘門留言送不出去、run 被取消） | `authorize` 最後的 `always()` 防線 | **加** |
+
+`develop` 內**不留言**，因為它掛著 `environment: agent`：核准被拒或逾時時它一步都不會跑，
+留在裡面的回報在那條路徑上等於不存在。回報責任因此分給兩個沒有 environment 的 job——
+授權階段的結果由 `authorize` 自己回報，開發階段的結果由 `cleanup` 回報。
+
 觸發用 label（由人貼上，見上方流程順序）：
 | Label | 觸發的 workflow |
 |-------|----------------|

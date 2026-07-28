@@ -26,7 +26,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  checks:
+  # job id 就是 check run 的名字，也是 branch ruleset 裡 required status check
+  # 要挑的那個字串。取一個看得懂的名字，設定頁上才分辨得出來——
+  # 改名會讓已設定的 required check 永遠等不到回報，要改請連同 ruleset 一起改。
+  lint-typecheck-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

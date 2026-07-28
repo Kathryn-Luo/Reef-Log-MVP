@@ -1,3 +1,6 @@
+// @vitest-environment node
+// 跑的是本機 shell script，不需要 Nuxt 環境；理由見 test-environment.test.ts（issue #38）
+
 import { spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

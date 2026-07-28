@@ -1,3 +1,6 @@
+// @vitest-environment node
+// 純文字比對，不需要 Nuxt 環境；理由見 test-environment.test.ts（issue #38）
+
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'

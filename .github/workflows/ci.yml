@@ -1,0 +1,80 @@
+name: CI
+
+# 用途：PR 上唯一「獨立於 agent」的綠燈訊號。
+#
+# TDD Develop 的 agent 會在自己的 job 裡跑測試、再自己在 PR 內文回報「全綠」——
+# 那是同一個來源的自我陳述。CLAUDE.md 禁止刪測試、`.skip` / `.only`、竄改斷言，
+# 但少了第二個來源就只有人類肉眼在把關。這支重跑一次同樣的檢查，動過手腳的 PR
+# 會在這裡露餡。
+#
+# 這支「不」呼叫 agent，也不碰任何 secret：純粹裝依賴、跑三項檢查。
+# 因此它不需要 environment 的人工核准，每個 PR 都會自動跑完。
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# 只讀。這支不寫 repo、不留言、不動 label——
+# 一旦要了寫入權限，PR 上的自動檢查就成了一條寫入管道。
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # PR 上連續推 commit 時取消舊的跑；main 上不取消，
+  # 每個進入 main 的 commit 都要留下自己的結論。
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # job id 就是 check run 的名字，也是 branch ruleset 裡 required status check
+  # 要挑的那個字串。取一個看得懂的名字，設定頁上才分辨得出來——
+  # 改名會讓已設定的 required check 永遠等不到回報，要改請連同 ruleset 一起改。
+  lint-typecheck-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 前置與 tdd-develop.yml 對齊：那邊跑得起來、這邊也要跑得起來，
+      # 否則綠燈與 agent 的實際環境不是同一件事。
+      # pnpm/action-setup 要在 setup-node 之前，setup-node 的 cache: pnpm 才找得到 store。
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # --frozen-lockfile：lockfile 與 package.json 對不上就失敗，
+      # 而不是默默解析出一組跟本機不同的依賴。
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 不需要連得到資料庫，只是把 @prisma/client 的型別生出來——
+      # 少了這步 typecheck 會以「找不到型別」這種無關的理由紅。
+      - name: Prisma generate
+        run: pnpm prisma generate
+
+      # 三項檢查各自一個步驟，且都掛 !cancelled()：
+      # 前一項失敗時後兩項照跑，一輪就把三個訊號都看齊。
+      # 步驟本身仍然會讓 job 失敗，這裡放寬的只是「要不要跑」，不是「算不算過」。
+      # 用 !cancelled() 而不是 always()：run 被取消時就不必再耗 runner。
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: pnpm lint
+
+      - name: Typecheck
+        if: ${{ !cancelled() }}
+        run: pnpm typecheck
+
+      # 這個 job 沒有 DATABASE_URL。unit 測試一律 mock Prisma Client，
+      # 這正是 tdd-develop.yml prompt 對 agent 的要求——在這裡變成強制的。
+      #
+      # E2E 不在這裡：需要瀏覽器與 Vercel preview URL，是另一條流程（見 #23）。
+      # vitest.config.ts 已 exclude tests/e2e/**，所以 pnpm test 不會誤收 Playwright spec。
+      - name: Unit tests
+        if: ${{ !cancelled() }}
+        run: pnpm test

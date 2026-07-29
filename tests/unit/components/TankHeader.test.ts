@@ -92,6 +92,27 @@ describe('TankHeader', () => {
     expect(header.find('[data-testid="tank-menu"]').exists()).toBe(false)
   })
 
+  // Given 我已經有至少一個缸 / When 我點擊頁首缸名旁的 ∨
+  // Then 切換選單底部同樣有「新增缸」的入口
+  it('切換選單底部有「新增缸」的入口，連向建立缸的表單', async () => {
+    const header = await mountHeader([MAIN_TANK, SECOND_TANK])
+
+    await header.get('[data-testid="tank-switch"]').trigger('click')
+
+    const create = header.get('[data-testid="tank-menu-create"]')
+    expect(create.text()).toContain('新增缸')
+    expect(create.attributes('href')).toBe('/tanks/new')
+
+    // 入口不是缸，不能混進 listbox 的選項裡被當成「切到某個缸」
+    expect(header.get('[data-testid="tank-menu"]').findAll('[role="option"]')).toHaveLength(2)
+  })
+
+  it('選單收合時看不到「新增缸」的入口', async () => {
+    const header = await mountHeader([MAIN_TANK])
+
+    expect(header.find('[data-testid="tank-menu-create"]').exists()).toBe(false)
+  })
+
   // issue 的「已知缺口」：右上角圓形圖示在 schema 中沒有任何對應，
   // 本 issue 先渲染為無作用的裝飾按鈕，實際行為待人類確認後另開 issue
   it('右上角的圓形圖示是無作用的裝飾，不進入 tab 順序', async () => {

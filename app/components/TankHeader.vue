@@ -123,28 +123,48 @@ function select(tankId: string) {
       </button>
     </div>
 
-    <ul
+    <div
       v-if="open"
       data-testid="tank-menu"
-      role="listbox"
-      aria-label="切換缸"
       class="mt-3 overflow-hidden rounded-xl border border-default bg-elevated"
     >
-      <li
-        v-for="tank in tanks"
-        :key="tank.id"
+      <ul
+        role="listbox"
+        aria-label="切換缸"
       >
-        <button
-          type="button"
-          role="option"
-          :aria-selected="tank.id === currentTankId ? 'true' : 'false'"
-          class="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accented"
-          :class="tank.id === currentTankId ? 'text-primary' : 'text-default'"
-          @click="select(tank.id)"
+        <li
+          v-for="tank in tanks"
+          :key="tank.id"
         >
-          {{ titleOf(tank) }}
-        </button>
-      </li>
-    </ul>
+          <button
+            type="button"
+            role="option"
+            :aria-selected="tank.id === currentTankId ? 'true' : 'false'"
+            class="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accented"
+            :class="tank.id === currentTankId ? 'text-primary' : 'text-default'"
+            @click="select(tank.id)"
+          >
+            {{ titleOf(tank) }}
+          </button>
+        </li>
+      </ul>
+
+      <!--
+        「新增缸」不是缸，所以留在 listbox 外面——混進 role="option" 裡的話，
+        螢幕報讀會把它念成「可以切過去的第 N 個缸」。
+      -->
+      <NuxtLink
+        data-testid="tank-menu-create"
+        to="/tanks/new"
+        class="flex w-full items-center gap-2 border-t border-default px-4 py-3 text-left text-sm font-semibold text-primary transition-colors hover:bg-accented"
+        @click="open = false"
+      >
+        <UIcon
+          name="i-lucide-plus"
+          class="size-4"
+        />
+        新增缸
+      </NuxtLink>
+    </div>
   </header>
 </template>

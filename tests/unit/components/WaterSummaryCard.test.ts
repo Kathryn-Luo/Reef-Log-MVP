@@ -19,8 +19,8 @@ const WATER: WaterSummaryDto = {
   targets: [],
 }
 
-function mountCard(water: WaterSummaryDto | null) {
-  return mountSuspended(WaterSummaryCard, { route: '/', props: { water, now: NOW } })
+function mountCard(water: WaterSummaryDto | null, collapsed = false) {
+  return mountSuspended(WaterSummaryCard, { route: '/', props: { water, now: NOW, collapsed } })
 }
 
 describe('WaterSummaryCard — 有水質記錄', () => {
@@ -87,6 +87,39 @@ describe('WaterSummaryCard — 有水質記錄', () => {
 
     expect(card.find('[data-testid="water-attention"]').exists()).toBe(false)
     expect(card.get('[data-testid="water-measured-at"]').text()).toBe('· 4h')
+  })
+})
+
+// When 我向下捲動 / Then 水質摘要列收合成單行 pill，只留「水質」「N 需注意」與相對時間
+describe('WaterSummaryCard — 收合', () => {
+  it('收合時六格數字收起，標題、需注意徽章與相對時間留著', async () => {
+    const card = await mountCard(WATER, true)
+
+    expect(card.findAll('[data-testid="water-reading"]')).toHaveLength(0)
+    expect(card.get('[data-testid="water-title"]').text()).toBe('水質')
+    expect(card.get('[data-testid="water-attention"]').text()).toBe('2 需注意')
+    expect(card.get('[data-testid="water-measured-at"]').text()).toBe('· 4h')
+  })
+
+  it('收合時整張卡片維持單行——內容全排在同一列', async () => {
+    const card = await mountCard(WATER, true)
+
+    expect(card.get('[data-testid="water-summary-row"]').classes()).toContain('flex')
+  })
+
+  // Given 該缸尚無任何水質記錄 / When 我向下捲動 / Then 空狀態內容照常顯示
+  it('收合時尚無記錄的缸仍看得到空狀態與記錄入口', async () => {
+    const card = await mountCard(null, true)
+
+    expect(card.get('[data-testid="water-empty"]').text()).toContain('還沒有水質記錄')
+    expect(card.get('[data-testid="water-empty-action"]').attributes('href')).toBe('/log')
+    expect(card.find('[data-testid="water-attention"]').exists()).toBe(false)
+  })
+
+  it('預設不收合，未指定時與展開時一致', async () => {
+    const card = await mountSuspended(WaterSummaryCard, { route: '/', props: { water: WATER, now: NOW } })
+
+    expect(card.findAll('[data-testid="water-reading"]')).toHaveLength(6)
   })
 })
 

@@ -28,6 +28,8 @@ const state = {
   body: null as Record<string, unknown> | null,
   calls: 0,
   fail: false,
+  /** 這一輪要讓 API 回哪一種失敗（fail 為 true 時才看） */
+  failure: { statusCode: 400, statusMessage: 'Invalid tank input', message: null as string | null },
 }
 
 /**
@@ -45,7 +47,13 @@ registerEndpoint('/api/tanks', {
     state.body = JSON.parse((event as unknown as MockNodeEvent).node.req.body ?? 'null')
 
     if (state.fail) {
-      throw createError({ statusCode: 400, statusMessage: 'Invalid tank input' })
+      // 與 server/api/tanks/index.post.ts 同一個形狀：statusMessage 只留 ASCII，
+      // 可以給使用者看的中文訊息放在 data.message
+      throw createError({
+        statusCode: state.failure.statusCode,
+        statusMessage: state.failure.statusMessage,
+        data: state.failure.message === null ? undefined : { message: state.failure.message },
+      })
     }
 
     return { tank: CREATED_TANK }
@@ -58,6 +66,7 @@ beforeEach(() => {
   state.body = null
   state.calls = 0
   state.fail = false
+  state.failure = { statusCode: 400, statusMessage: 'Invalid tank input', message: null }
   navigateToMock.mockReset()
 })
 
@@ -313,5 +322,53 @@ describe('建立缸的表單 — 送出', () => {
 
     expect(navigateToMock).not.toHaveBeenCalled()
     expect(page.get('[data-testid="tank-form-error"]').exists()).toBe(true)
+  })
+
+  // API 把可以直接顯示的訊息放在 data.message（statusMessage 只留 ASCII，h3 會濾掉中文）。
+  // 不讀它的話，「沒有可用的使用者」這種說得出原因的失敗會被蓋成一句無用的通用訊息。
+  it('API 說明了失敗原因時，原樣顯示那則訊息', async () => {
+    state.fail = true
+    state.failure = {
+      statusCode: 401,
+      statusMessage: 'No current user',
+      message: '目前沒有可用的使用者，無法決定這個缸屬於誰。',
+    }
+
+    const page = await mountForm()
+
+    await fill(page, { name: '主缸' })
+    await submit(page)
+
+    expect(navigateToMock).not.toHaveBeenCalled()
+    expect(page.get('[data-testid="tank-form-error"]').text()).toBe(
+      '目前沒有可用的使用者，無法決定這個缸屬於誰。',
+    )
+  })
+
+  // 連不上、逾時、500——說不出原因時仍然要有話可說
+  it('API 沒有說明原因時退回通用訊息', async () => {
+    state.fail = true
+    state.failure = { statusCode: 500, statusMessage: 'Internal Server Error', message: null }
+
+    const page = await mountForm()
+
+    await fill(page, { name: '主缸' })
+    await submit(page)
+
+    expect(page.get('[data-testid="tank-form-error"]').text()).toBe('建立失敗，請稍後再試。')
+  })
+
+  // 缸這時候已經建好了。把導頁一起包在 try 裡的話，導頁被中止會顯示「建立失敗」，
+  // 使用者照著重送就會建出第二個一模一樣的缸。
+  it('建立成功之後導頁失敗，不會回報成建立失敗', async () => {
+    navigateToMock.mockRejectedValueOnce(new Error('navigation aborted'))
+
+    const page = await mountForm()
+
+    await fill(page, { name: '主缸' })
+    await submit(page)
+
+    expect(state.calls).toBe(1)
+    expect(page.find('[data-testid="tank-form-error"]').exists()).toBe(false)
   })
 })

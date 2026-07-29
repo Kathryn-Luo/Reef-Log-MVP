@@ -30,6 +30,24 @@ const selectedColor = computed(() => form.colorHex.trim().toLowerCase())
 // 送出後也會被 parseTankInput 擋掉，兩邊的判準必須一致。
 const canSubmit = computed(() => form.name.trim().length > 0)
 
+const GENERIC_ERROR = '建立失敗，請稍後再試。'
+
+/**
+ * API 的錯誤訊息。說得出原因的失敗（例如「目前沒有可用的使用者」）都把可以直接
+ * 顯示的中文放在 `createError` 的 `data.message`——statusMessage 過不了 h3 的
+ * ASCII 過濾，讀它只會拿到 'No current user' 這種給不了使用者任何幫助的字串。
+ * 連不上或 500 這類說不出原因的，退回通用訊息。
+ *
+ * 取值要往下鑽兩層：FetchError 的 `data` 是「整包回應內容」
+ * （`{ statusCode, statusMessage, data }`），我們要的那則在它的 `data.message`。
+ */
+function messageOf(cause: unknown): string {
+  const body = (cause as { data?: { data?: { message?: unknown } } })?.data
+  const message = body?.data?.message
+
+  return typeof message === 'string' && message.trim() ? message : GENERIC_ERROR
+}
+
 // disabled 的按鈕按不動，但表單仍可能被 Enter 送出，所以這裡不看 canSubmit，
 // 一律交給 parseTankInput 判斷並產生訊息
 async function submit() {
@@ -43,22 +61,28 @@ async function submit() {
   error.value = null
   submitting.value = true
 
+  let created: CreateTankResponse
+
   try {
-    const { tank } = await $fetch<CreateTankResponse>('/api/tanks', {
+    created = await $fetch<CreateTankResponse>('/api/tanks', {
       method: 'POST',
       body: parsed.value,
     })
-
-    // 帶著新缸的 id 導回首頁，讓它成為當前缸。新缸的 displayOrder 最大，
-    // 不指名的話首頁預設看的會是排序第一個的舊缸。
-    await navigateTo({ path: '/', query: { tank: tank.id } })
   }
-  catch {
-    error.value = '建立失敗，請稍後再試。'
+  catch (cause) {
+    error.value = messageOf(cause)
+    return
   }
   finally {
     submitting.value = false
   }
+
+  // 導頁刻意留在 try 外面：缸到這裡已經建好了，導頁被中止不該顯示「建立失敗」——
+  // 使用者照著那句話重送，就會建出第二個一模一樣的缸。
+  //
+  // 帶著新缸的 id 導回首頁，讓它成為當前缸。新缸的 displayOrder 最大，
+  // 不指名的話首頁預設看的會是排序第一個的舊缸。
+  await navigateTo({ path: '/', query: { tank: created.tank.id } })
 }
 </script>
 

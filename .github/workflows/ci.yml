@@ -7,7 +7,7 @@ name: CI
 # 但少了第二個來源就只有人類肉眼在把關。這支重跑一次同樣的檢查，動過手腳的 PR
 # 會在這裡露餡。
 #
-# 這支「不」呼叫 agent，也不碰任何 secret：純粹裝依賴、跑三項檢查。
+# 這支「不」呼叫 agent，也不碰任何 secret：純粹裝依賴、跑四項檢查。
 # 因此它不需要 environment 的人工核准，每個 PR 都會自動跑完。
 on:
   pull_request:
@@ -58,8 +58,8 @@ jobs:
       - name: Prisma generate
         run: pnpm prisma generate
 
-      # 三項檢查各自一個步驟，且都掛 !cancelled()：
-      # 前一項失敗時後兩項照跑，一輪就把三個訊號都看齊。
+      # 四項檢查各自一個步驟，且都掛 !cancelled()：
+      # 前一項失敗時後面的照跑，一輪就把四個訊號都看齊。
       # 步驟本身仍然會讓 job 失敗，這裡放寬的只是「要不要跑」，不是「算不算過」。
       # 用 !cancelled() 而不是 always()：run 被取消時就不必再耗 runner。
       - name: Lint
@@ -78,3 +78,17 @@ jobs:
       - name: Unit tests
         if: ${{ !cancelled() }}
         run: pnpm test
+
+      # 「只有打包才會炸」的錯誤，前面三項一個都攔不到——例如 app/ 用相對路徑
+      # 跨出 srcDir 匯入根目錄的 shared/：原始碼位置正確，所以 typecheck 全綠，
+      # 錯誤只發生在 Nitro 把 Vite 的 chunk 搬家之後再打包一次的那一刻（見 #43、#44）。
+      # 少了這一步，那一整類問題要等 Vercel 的 preview deployment 才會紅，
+      # 而 Vercel 的 log 要點進 dashboard 才看得到。
+      #
+      # 放在最後：前面三項是秒級的快訊號，先讓它們回報完，再花 30–60 秒打包。
+      # `pnpm build` 是 `prisma generate && nuxt build`——上面那步 generate 重跑是冪等的，
+      # 也一樣不需要 DATABASE_URL（prisma generate 只讀 schema）。
+      # preset 照 nuxt.config.ts 用 vercel，驗的就是實際部署的目標環境。
+      - name: Build
+        if: ${{ !cancelled() }}
+        run: pnpm build

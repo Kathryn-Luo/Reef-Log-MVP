@@ -140,17 +140,30 @@ const cards = computed(() =>
     </div>
 
     <template v-else>
-      <TankHeader
-        :tanks="tanks"
-        :current-tank-id="currentTank.id"
-        @select="selectedTankId = $event"
-      />
+      <!--
+        向下捲看生物時要一直看得到的兩層：缸名列（我在看哪一缸）與水質 pill（有沒有異常）。
+        純 CSS sticky，沒有門檻也沒有狀態——捲動只改變位置，內容全程不變。
 
-      <div class="mt-4 px-4">
-        <WaterSummaryCard
-          :water="home?.water ?? null"
-          :now="now"
+        間距一律給在容器內部：容器若留外距，捲動的卡片會從縫隙穿過去，backdrop blur 就破了。
+        z-30 要低於 BottomTabBar 的 z-50（tab 列不能被蓋住），又高於生物卡片（卡片從下方穿過）。
+        不能加 overflow-*，否則 TankHeader 的切換缸選單會被裁掉。
+      -->
+      <div
+        data-testid="home-sticky-header"
+        class="sticky top-0 z-30 border-b border-default bg-default/80 pb-4 backdrop-blur pt-[env(safe-area-inset-top)]"
+      >
+        <TankHeader
+          :tanks="tanks"
+          :current-tank-id="currentTank.id"
+          @select="selectedTankId = $event"
         />
+
+        <div class="mt-4 px-4">
+          <WaterSummaryCard
+            :water="home?.water ?? null"
+            :now="now"
+          />
+        </div>
       </div>
 
       <section class="mt-6 px-4">

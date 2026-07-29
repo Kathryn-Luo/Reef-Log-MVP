@@ -10,6 +10,7 @@
 // 執行：pnpm db:seed（Node 22 原生跑 .ts，不需要額外的 TS runner）
 
 import { PrismaClient } from '@prisma/client'
+import { upsertGuestUser } from './seedUser.ts'
 
 const prisma = new PrismaClient()
 
@@ -23,20 +24,13 @@ function dateOnly(value: Date): Date {
   return new Date(value.toISOString().slice(0, 10))
 }
 
-const USER_ID = 'seed-user-kathryn'
 const TANK_ID = 'seed-tank-main'
 const WATER_LOG_ID = 'seed-waterlog-latest'
 
 async function main() {
-  const user = await prisma.user.upsert({
-    where: { id: USER_ID },
-    update: { displayName: 'Kathryn' },
-    create: {
-      id: USER_ID,
-      email: 'demo@reeflog.local',
-      displayName: 'Kathryn',
-    },
-  })
+  // 示範資料的擁有者是訪客帳號（#47）——登入頁的「以訪客身分瀏覽」看到的就是這一份。
+  // 帳號本身與既有資料的搬遷都在 seedUser.ts。
+  const user = await upsertGuestUser(prisma)
 
   // screen-1 頁首：「主缸 · 4 尺」／「SPS MIXED · 420L」／左側色塊
   const tank = await prisma.tank.upsert({

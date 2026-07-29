@@ -360,15 +360,26 @@ describe('建立缸的表單 — 送出', () => {
 
   // 缸這時候已經建好了。把導頁一起包在 try 裡的話，導頁被中止會顯示「建立失敗」，
   // 使用者照著重送就會建出第二個一模一樣的缸。
+  //
+  // 導頁失敗刻意「不」在 submit() 內接住，讓它照常往上拋。這裡掛一個 app 層的
+  // errorHandler 收下它——少了這個，Vue 會把它重新丟成 unhandled rejection，
+  // 那會讓整個 vitest run 以非零狀態結束（測試本身全過也一樣）。
   it('建立成功之後導頁失敗，不會回報成建立失敗', async () => {
-    navigateToMock.mockRejectedValueOnce(new Error('navigation aborted'))
+    const navigationError = new Error('navigation aborted')
+    const caught: unknown[] = []
 
-    const page = await mountForm()
+    navigateToMock.mockRejectedValueOnce(navigationError)
+
+    const page = await mountSuspended(NewTankPage, {
+      route: '/tanks/new',
+      global: { config: { errorHandler: (cause: unknown) => void caught.push(cause) } },
+    })
 
     await fill(page, { name: '主缸' })
     await submit(page)
 
     expect(state.calls).toBe(1)
     expect(page.find('[data-testid="tank-form-error"]').exists()).toBe(false)
+    expect(caught).toEqual([navigationError])
   })
 })

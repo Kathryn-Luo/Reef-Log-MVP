@@ -23,6 +23,15 @@ function mountCard(water: WaterSummaryDto | null, collapsed = false) {
   return mountSuspended(WaterSummaryCard, { route: '/', props: { water, now: NOW, collapsed } })
 }
 
+/** 從 class 陣列取出 duration-<ms> 的毫秒數。過場的實際播放不在 unit 測試範圍，時長設定則驗得到 */
+function transitionDurationMs(classes: string[]): number {
+  const token = classes.find(name => /^duration-\d+$/.test(name))
+
+  expect(token, `預期 class 中有 duration-<ms>，實際為 ${classes.join(' ')}`).toBeDefined()
+
+  return Number(token!.slice('duration-'.length))
+}
+
 describe('WaterSummaryCard — 有水質記錄', () => {
   // Then 水質摘要列顯示「水質」標題、橘色徽章「2 需注意」與相對時間「· 4h」
   it('顯示標題、需注意徽章與相對時間', async () => {
@@ -91,26 +100,71 @@ describe('WaterSummaryCard — 有水質記錄', () => {
 })
 
 // When 我向下捲動 / Then 水質摘要列收合成單行 pill，只留「水質」「N 需注意」與相對時間
+//
+// issue #55：讓位從 v-if 換成可補間的形式（外層 grid，1fr → 0fr）。六格數字留在 DOM 裡，
+// 所以判準從「數字不存在」換成「整塊收到 0 高、並對輔助技術隱藏」。
 describe('WaterSummaryCard — 收合', () => {
-  it('收合時六格數字收起，標題、需注意徽章與相對時間留著', async () => {
+  it('收合時六格數字整塊讓位，並對輔助技術隱藏', async () => {
+    const card = await mountCard(WATER, true)
+    const slot = card.get('[data-testid="water-readings-slot"]')
+
+    expect(slot.attributes('data-collapsed')).toBe('true')
+    expect(slot.classes()).toContain('grid-rows-[0fr]')
+    expect(slot.classes()).toContain('opacity-0')
+
+    // 畫面上看不見的六格數字不能讓螢幕報讀念到
+    expect(slot.attributes('aria-hidden')).toBe('true')
+  })
+
+  it('收合時六格數字留在 DOM 裡——移掉節點就沒得補間了', async () => {
     const card = await mountCard(WATER, true)
 
-    expect(card.findAll('[data-testid="water-reading"]')).toHaveLength(0)
+    expect(card.findAll('[data-testid="water-reading"]')).toHaveLength(6)
+  })
+
+  it('收合時標題、需注意徽章與相對時間留著', async () => {
+    const card = await mountCard(WATER, true)
+
     expect(card.get('[data-testid="water-title"]').text()).toBe('水質')
     expect(card.get('[data-testid="water-attention"]').text()).toBe('2 需注意')
     expect(card.get('[data-testid="water-measured-at"]').text()).toBe('· 4h')
   })
 
-  it('收合時整張卡片維持單行——內容全排在同一列', async () => {
+  it('展開時六格數字區塊還原，不再對輔助技術隱藏', async () => {
+    const card = await mountCard(WATER)
+    const slot = card.get('[data-testid="water-readings-slot"]')
+
+    expect(slot.attributes('data-collapsed')).toBe('false')
+    expect(slot.classes()).toContain('grid-rows-[1fr]')
+    expect(slot.classes()).toContain('opacity-100')
+    expect(slot.attributes('aria-hidden')).toBeUndefined()
+  })
+
+  // Given 系統設定為「減少動態效果」/ Then 直接切換、不播放過場
+  it('讓位區塊帶著過場，且「減少動態效果」時停用', async () => {
+    const classes = (await mountCard(WATER, true)).get('[data-testid="water-readings-slot"]').classes()
+
+    expect(classes.some(name => name.startsWith('transition-'))).toBe(true)
+    expect(classes).toContain('motion-reduce:transition-none')
+
+    // backdrop blur 已經夠貴，過場再長會在中階手機上看得出掉幀
+    expect(transitionDurationMs(classes)).toBeGreaterThanOrEqual(150)
+    expect(transitionDurationMs(classes)).toBeLessThanOrEqual(250)
+  })
+
+  // 有水質記錄時，六格數字讓位之後標題列本來就自成一列。
+  // 這時若再把外層切成 flex，讓位中的區塊會在 gap 上佔一份寬度，收合後右側多出一段空白。
+  it('有水質記錄時收合不改用併排版面', async () => {
     const card = await mountCard(WATER, true)
 
-    expect(card.get('[data-testid="water-summary-row"]').classes()).toContain('flex')
+    expect(card.get('[data-testid="water-summary-row"]').classes()).not.toContain('flex')
   })
 
   // Given 該缸尚無任何水質記錄 / When 我向下捲動 / Then 空狀態內容照常顯示
-  it('收合時尚無記錄的缸仍看得到空狀態與記錄入口', async () => {
+  it('收合時尚無記錄的缸仍看得到空狀態與記錄入口，且與標題排在同一列', async () => {
     const card = await mountCard(null, true)
 
+    expect(card.get('[data-testid="water-summary-row"]').classes()).toContain('flex')
     expect(card.get('[data-testid="water-empty"]').text()).toContain('還沒有水質記錄')
     expect(card.get('[data-testid="water-empty-action"]').attributes('href')).toBe('/log')
     expect(card.find('[data-testid="water-attention"]').exists()).toBe(false)
@@ -120,6 +174,7 @@ describe('WaterSummaryCard — 收合', () => {
     const card = await mountSuspended(WaterSummaryCard, { route: '/', props: { water: WATER, now: NOW } })
 
     expect(card.findAll('[data-testid="water-reading"]')).toHaveLength(6)
+    expect(card.get('[data-testid="water-readings-slot"]').attributes('data-collapsed')).toBe('false')
   })
 })
 

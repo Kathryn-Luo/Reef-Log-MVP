@@ -1,2 +1,17 @@
 @import "tailwindcss";
 @import "@nuxt/ui";
+
+/*
+ * 「這一幀不要動」：掛著這個 class 的子樹一律不播過場。
+ *
+ * 瀏覽器還原捲動位置時，首頁頁首掛載後會立刻對一次捲動位置。沒有這個開關的話，
+ * 第一幀就會把「展開 → 收合」演一遍給人看。首幀先掛上、下一幀移除，
+ * 過場只在之後真正由捲動觸發的翻轉時播（見 app/composables/useHeaderCollapse.ts）。
+ *
+ * 刻意不放進 @layer：Tailwind 的 transition-* 都在 layer 裡，未分層的規則勝過分層的，
+ * 才蓋得掉逐元素寫上去的過場設定。
+ */
+.reef-motion-off,
+.reef-motion-off * {
+  transition: none !important;
+}

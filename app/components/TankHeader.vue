@@ -61,7 +61,7 @@ function select(tankId: string) {
 
 <template>
   <header
-    class="px-4"
+    class="px-4 transition-[padding] duration-200 ease-out motion-reduce:transition-none"
     :class="collapsed ? 'pt-2' : 'pt-4'"
   >
     <div class="flex items-start justify-between gap-3">
@@ -70,11 +70,11 @@ function select(tankId: string) {
           data-testid="tank-color"
           :data-color="color"
           :style="{ backgroundColor: tintedColor }"
-          class="grid shrink-0 place-items-center rounded-2xl"
+          class="grid shrink-0 place-items-center rounded-2xl transition-[width,height] duration-200 ease-out motion-reduce:transition-none"
           :class="collapsed ? 'size-9' : 'size-12'"
         >
           <span
-            class="rounded-[5px]"
+            class="rounded-[5px] transition-[width,height] duration-200 ease-out motion-reduce:transition-none"
             :class="collapsed ? 'size-3' : 'size-4'"
             :style="{ backgroundColor: color }"
           />
@@ -83,7 +83,7 @@ function select(tankId: string) {
         <div class="min-w-0">
           <div class="flex items-center gap-1">
             <h1
-              class="truncate font-semibold"
+              class="truncate font-semibold transition-[font-size] duration-200 ease-out motion-reduce:transition-none"
               :class="collapsed ? 'text-lg' : 'text-xl'"
             >
               {{ title }}
@@ -105,14 +105,28 @@ function select(tankId: string) {
             </button>
           </div>
 
-          <!-- 收合時副標整行讓位：缸名已經回答了「我在看哪一缸」，尺寸與水量捲回頂端再看 -->
-          <p
-            v-if="!collapsed"
-            data-testid="tank-subtitle"
-            class="mt-0.5 truncate font-mono text-sm text-muted"
+          <!--
+            收合時副標整行讓位：缸名已經回答了「我在看哪一缸」，尺寸與水量捲回頂端再看。
+
+            高度靠外層 grid 的 1fr → 0fr 補間，v-if 是節點的增減、CSS 補不了間（issue #55）。
+            節點留在 DOM 裡，所以讓位時要一併 aria-hidden——
+            不然螢幕報讀會念到畫面上看不見的那一行。
+          -->
+          <div
+            data-testid="tank-subtitle-slot"
+            :data-collapsed="collapsed ? 'true' : 'false'"
+            :aria-hidden="collapsed ? 'true' : undefined"
+            class="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
+            :class="collapsed ? 'grid-rows-[0fr] opacity-0' : 'grid-rows-[1fr] opacity-100'"
           >
-            {{ subtitle }}
-          </p>
+            <!-- 上方間距給成內距，才會跟著高度一起收掉；外距不在軌道的量測範圍內 -->
+            <p
+              data-testid="tank-subtitle"
+              class="min-h-0 truncate pt-0.5 font-mono text-sm text-muted"
+            >
+              {{ subtitle }}
+            </p>
+          </div>
         </div>
       </div>
 
@@ -126,7 +140,7 @@ function select(tankId: string) {
         disabled
         aria-hidden="true"
         tabindex="-1"
-        class="grid shrink-0 place-items-center rounded-full border border-default text-dimmed"
+        class="grid shrink-0 place-items-center rounded-full border border-default text-dimmed transition-[width,height] duration-200 ease-out motion-reduce:transition-none"
         :class="collapsed ? 'size-9' : 'size-11'"
       >
         <UIcon

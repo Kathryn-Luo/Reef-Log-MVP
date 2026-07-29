@@ -147,8 +147,15 @@ test.describe('sticky 頁首', () => {
     await scrollTo(page, 1200)
 
     await expect(header).toHaveAttribute('data-collapsed', 'true')
-    await expect(page.getByTestId('water-reading')).toHaveCount(0)
-    await expect(page.getByTestId('tank-subtitle')).toHaveCount(0)
+
+    // issue #55 之後讓位的節點留在 DOM 裡（CSS 補不了節點增減的間），
+    // 所以看的是「整塊收到 0 高、並對輔助技術隱藏」
+    await expect(page.getByTestId('water-readings-slot')).toHaveAttribute('aria-hidden', 'true')
+    await expect(page.getByTestId('tank-subtitle-slot')).toHaveAttribute('aria-hidden', 'true')
+    await expect
+      .poll(async () => (await page.getByTestId('water-readings-slot').boundingBox())!.height)
+      .toBe(0)
+    expect((await page.getByTestId('tank-subtitle-slot').boundingBox())!.height).toBe(0)
 
     // 留下的是捲動時要隨時看得到的兩件事
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('主缸 · 4 尺')
@@ -198,7 +205,9 @@ test.describe('sticky 頁首', () => {
     await expect(page.getByTestId('creature-chip').first()).toBeInViewport()
     await expect(page.getByTestId('water-reading')).toHaveCount(6)
     expect(await header.innerHTML()).toBe(before)
-    expect((await header.boundingBox())!.height).toBe(expandedHeight)
+
+    // 展開是過場，高度要等它播完才回到原值
+    await expect.poll(async () => (await header.boundingBox())!.height).toBe(expandedHeight)
   })
 
   // Given 固定的頁首與底部 tab 列同時在畫面上 / When 我捲動頁面
@@ -244,6 +253,162 @@ test.describe('sticky 頁首', () => {
       { x: box.x + box.width / 2, y: box.y + box.height / 2 },
     )
     expect(hit).toBe('tank-menu')
+  })
+
+  // ── 收合過場（issue #55）──────────────────────────────────────────────
+  //
+  // 過場驗得到的只有「中途真的出現過中間值」與「不動的東西沒被帶著動」，
+  // 別去斷言具體毫秒數——機器慢一點就會偽陰性。
+
+  /**
+   * 捲到 offset，並從捲動前一格開始用 rAF 逐幀量測：
+   * 固定區高度、底部 tab 列位置、第一張生物卡片位置。
+   */
+  async function sampleDuringCollapse(page: Page, offset: number) {
+    return page.evaluate(async (top) => {
+      const header = document.querySelector('[data-testid="home-sticky-header"]')!
+      const tabBar = document.querySelector('nav[aria-label="主要導覽"]')!
+      const card = document.querySelector('[data-testid="creature-card"]')!
+
+      const headerHeights: number[] = []
+      const tabBarTops: number[] = []
+      const cardTops: number[] = []
+      let done = false
+
+      const sample = () => {
+        headerHeights.push(header.getBoundingClientRect().height)
+        tabBarTops.push(tabBar.getBoundingClientRect().top)
+        cardTops.push(card.getBoundingClientRect().top)
+
+        if (!done) {
+          requestAnimationFrame(sample)
+        }
+      }
+
+      // 先量一格「還沒捲」的，再翻轉，之後每一幀都量
+      sample()
+      window.scrollTo({ top, behavior: 'instant' })
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, 600)
+      })
+      done = true
+
+      return { headerHeights, tabBarTops, cardTops }
+    }, offset)
+  }
+
+  /** 嚴格落在展開與收合之間的取樣格數（留 1px 容差，避開量測誤差） */
+  function midwayFrames(heights: number[]): number[] {
+    const expanded = Math.max(...heights)
+    const collapsed = Math.min(...heights)
+
+    return heights.filter(height => height > collapsed + 1 && height < expanded - 1)
+  }
+
+  // Given 我在首頁，頁面尚未捲動 / When 我向下捲動超過收合門檻
+  // Then 頁首的高度以過場動畫平滑變化，不是瞬間跳掉
+  test('收合時固定區高度平滑變化，中途量得到展開與收合之間的高度', async ({ page }) => {
+    await page.goto('/')
+    await expect(page.getByTestId('home-sticky-header')).toHaveAttribute('data-collapsed', 'false')
+
+    const { headerHeights } = await sampleDuringCollapse(page, 1200)
+
+    expect(Math.min(...headerHeights)).toBeLessThan(Math.max(...headerHeights) / 2)
+    expect(midwayFrames(headerHeights).length).toBeGreaterThan(0)
+  })
+
+  // Given 頁首已收合 / When 我向上捲回頂端、頁首展開 / Then 展開同樣有過場
+  test('展開時同樣有過場，方向與收合對稱', async ({ page }) => {
+    await page.goto('/')
+    await scrollTo(page, 1200)
+    await expect(page.getByTestId('home-sticky-header')).toHaveAttribute('data-collapsed', 'true')
+
+    const { headerHeights } = await sampleDuringCollapse(page, 0)
+
+    // 展開：由矮變高，中途一樣量得到中間值
+    expect(headerHeights.at(-1)!).toBeGreaterThan(headerHeights[0]!)
+    expect(midwayFrames(headerHeights).length).toBeGreaterThan(0)
+  })
+
+  // Given 我的系統設定為「減少動態效果」/ When 頁首收合或展開
+  // Then 直接切換、不播放過場（維持 #48 的行為）
+  test('「減少動態效果」時直接切換，不播過場', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await page.goto('/')
+
+    // 讓位區塊根本沒有可過場的屬性
+    const property = await page
+      .getByTestId('water-readings-slot')
+      .evaluate(element => getComputedStyle(element).transitionProperty)
+    expect(property).toBe('none')
+
+    const { headerHeights } = await sampleDuringCollapse(page, 1200)
+
+    // 高度只會有展開與收合兩種，中間一格都不該出現
+    expect(Math.min(...headerHeights)).toBeLessThan(Math.max(...headerHeights) / 2)
+    expect(midwayFrames(headerHeights)).toEqual([])
+  })
+
+  // Given 頁首正在播放過場 / When 我觀察畫面其他部分
+  // Then 底部 tab 列不移動，生物卡片不因過場而跳動或閃爍
+  test('過場進行中底部 tab 列不移動，生物卡片不回彈', async ({ page }) => {
+    await page.goto('/')
+
+    const { tabBarTops, cardTops } = await sampleDuringCollapse(page, 1200)
+
+    // tab 列是 fixed，固定區變矮不該把它一起帶走
+    expect(new Set(tabBarTops).size).toBe(1)
+
+    // 卡片跟著固定區一路往上，中途不能往回跳（往回一格就是肉眼看得到的抖動）
+    const rebounds = cardTops.filter((top, index) => index > 0 && top > cardTops[index - 1]! + 1)
+    expect(rebounds).toEqual([])
+  })
+
+  // Given 我持續快速捲動、經過門檻多次 / When 前一次過場尚未播完就再次翻轉
+  // Then 頁首不會卡在中間狀態，最終樣態與當下的捲動位置一致
+  test('快速來回翻轉門檻後，頁首不卡在中間狀態', async ({ page }) => {
+    await page.goto('/')
+
+    const header = page.getByTestId('home-sticky-header')
+    const expandedHeight = (await header.boundingBox())!.height
+
+    // 不等過場播完就翻下一次
+    await page.evaluate(async () => {
+      for (const top of [1200, 0, 900, 0, 600]) {
+        window.scrollTo({ top, behavior: 'instant' })
+        await new Promise((resolve) => {
+          setTimeout(resolve, 40)
+        })
+      }
+    })
+
+    await expect(header).toHaveAttribute('data-collapsed', 'true')
+    await expect.poll(async () => (await header.boundingBox())!.height).toBeLessThan(expandedHeight / 2)
+
+    await scrollTo(page, 0)
+
+    await expect(header).toHaveAttribute('data-collapsed', 'false')
+    await expect.poll(async () => (await header.boundingBox())!.height).toBe(expandedHeight)
+  })
+
+  // Given 我重新整理頁面，而瀏覽器還原到一個已經超過門檻的捲動位置
+  // When 畫面首次渲染 / Then 頁首直接以收合樣態出現，不會先展開再播一次收合動畫
+  test('還原到已捲動的位置時，首幀直接是收合樣態、不補播收合動畫', async ({ page }) => {
+    await page.goto('/')
+    await scrollTo(page, 1200)
+
+    const header = page.getByTestId('home-sticky-header')
+    await expect(header).toHaveAttribute('data-collapsed', 'true')
+    const collapsedHeight = (await header.boundingBox())!.height
+
+    // 瀏覽器會還原捲動位置，重新整理後應該直接落在收合樣態
+    await page.reload()
+    await expect(header).toHaveAttribute('data-collapsed', 'true')
+
+    // 逐幀量：整段期間都是收合高度，沒有從展開演過來的那一段
+    const { headerHeights } = await sampleDuringCollapse(page, 1200)
+    expect(Math.max(...headerHeights)).toBeLessThan(collapsedHeight + 2)
   })
 
   // Given 該缸尚無任何水質記錄 / When 我向下捲動

@@ -1,4 +1,9 @@
-import type { WaterParameterKey, WaterReadingDto, WaterTargetDto } from '../types/home'
+import type {
+  WaterParameterKey,
+  WaterReadingDto,
+  WaterSummaryDto,
+  WaterTargetDto,
+} from '../types/home'
 
 /** screen-1 水質摘要列的欄位順序，同時也是 screen-2 / 3 / 4 的排列順序 */
 export const WATER_PARAMETER_ORDER: readonly WaterParameterKey[] = [
@@ -19,6 +24,42 @@ export const WATER_PARAMETER_LABELS: Record<WaterParameterKey, string> = {
   PO4: 'PO₄',
   SALINITY: '鹽',
 }
+
+/**
+ * screen-2 儀表板用的標籤。一列一項、空間夠，鹽度不再縮寫成摘要列的「鹽」。
+ * 其餘五項兩處相同，但仍各自列全——之後任一邊要調整才不會牽動另一邊。
+ */
+export const WATER_PARAMETER_FULL_LABELS: Record<WaterParameterKey, string> = {
+  KH: 'KH',
+  CA: 'Ca',
+  MG: 'Mg',
+  NO3: 'NO₃',
+  PO4: 'PO₄',
+  SALINITY: '鹽度',
+}
+
+/**
+ * 單位。依 schema.prisma 的 WaterParameter 註解，單位是測項本身固有的性質，
+ * 屬應用層常數，不重複存進資料庫。
+ */
+export const WATER_PARAMETER_UNITS: Record<WaterParameterKey, string> = {
+  KH: 'dKH',
+  CA: 'ppm',
+  MG: 'ppm',
+  NO3: 'ppm',
+  PO4: 'ppm',
+  SALINITY: 'SG',
+}
+
+/**
+ * 迷你趨勢線一次取幾筆水質記錄。
+ * 夠看出走勢又不會讓首頁的 payload 變胖——單缸一年約 50–100 筆 log，
+ * 這個窗口走 WaterLog 的 @@index([tankId, measuredAt])，一次查詢就撈得完。
+ */
+export const WATER_TREND_POINTS = 8
+
+/** 該測項這次沒量到時，儀表板那一格顯示的字 */
+export const MISSING_READING_TEXT = '—'
 
 /**
  * 未設定 WaterParameterTarget 的測項套用的預設區間。
@@ -115,4 +156,90 @@ export function summarizeWaterReadings(
     items,
     attentionCount: items.filter(item => item.status !== 'normal').length,
   }
+}
+
+// ─────────────────────────────────────────────
+// screen-2 數據儀表板
+// ─────────────────────────────────────────────
+
+/** 狀態文字與方向箭頭。正常沒有箭頭——只有偏離區間才需要指出方向 */
+const STATUS_LABELS: Record<ReadingStatus, string> = {
+  normal: '正常',
+  low: '偏低',
+  high: '偏高',
+}
+
+const STATUS_ICONS: Record<ReadingStatus, string | null> = {
+  normal: null,
+  low: '▼',
+  high: '▲',
+}
+
+export interface WaterDashboardRow {
+  parameter: WaterParameterKey
+  label: string
+  unit: string
+  /** 這次沒量到時為 null */
+  value: number | null
+  /** 沒量到時是 MISSING_READING_TEXT */
+  display: string
+  /** 沒量到就沒有狀態可言——不是正常，也不計入「N 需注意」 */
+  status: ReadingStatus | null
+  statusLabel: string | null
+  statusIcon: string | null
+  /** 正常區間文字，例：1250–1350。與有沒有量到無關 */
+  rangeText: string
+  /** 最近數筆讀數，由舊到新。少於兩筆就畫不出折線 */
+  trend: number[]
+}
+
+/**
+ * 區間上下限的顯示格式。
+ *
+ * 整數的上下限不補小數位（截圖的 7–9、380–450、2–10），帶小數的才沿用該測項的
+ * 顯示精度（.02–.10、1.024–1.027）。區間通常設成整數，一律補到測項精度會變成
+ * 「7.0–9.0」，跟截圖不符也比較難讀。
+ */
+function formatBound(parameter: WaterParameterKey, value: number): string {
+  return Number.isInteger(value) ? String(value) : formatReadingValue(parameter, value)
+}
+
+/** 連接號用 EN DASH（–），與截圖一致 */
+export function formatTargetRange(
+  parameter: WaterParameterKey,
+  target: { minValue: number, maxValue: number },
+): string {
+  return `${formatBound(parameter, target.minValue)}–${formatBound(parameter, target.maxValue)}`
+}
+
+/**
+ * 儀表板的六列。
+ *
+ * 與摘要列（summarizeWaterReadings）最大的差別是「缺項的處理」：
+ * 摘要列只排出量到的測項，儀表板六列固定到齊，沒量到的那列顯示「—」。
+ * 同一次量測允許只填部分測項（screen-3），而儀表板要讓人看出「哪一項這次沒測」。
+ */
+export function buildWaterDashboardRows(water: WaterSummaryDto | null): WaterDashboardRow[] {
+  const readings = water?.readings ?? []
+  const targets = water?.targets ?? []
+  const trends = water?.trends ?? []
+
+  return WATER_PARAMETER_ORDER.map((parameter) => {
+    const reading = readings.find(candidate => candidate.parameter === parameter)
+    const target = resolveWaterTarget(parameter, targets)
+    const status = reading ? readingStatus(reading.value, target) : null
+
+    return {
+      parameter,
+      label: WATER_PARAMETER_FULL_LABELS[parameter],
+      unit: WATER_PARAMETER_UNITS[parameter],
+      value: reading?.value ?? null,
+      display: reading ? formatReadingValue(parameter, reading.value) : MISSING_READING_TEXT,
+      status,
+      statusLabel: status ? STATUS_LABELS[status] : null,
+      statusIcon: status ? STATUS_ICONS[status] : null,
+      rangeText: formatTargetRange(parameter, target),
+      trend: trends.find(series => series.parameter === parameter)?.values ?? [],
+    }
+  })
 }

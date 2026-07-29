@@ -1,18 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient } from '@prisma/client'
 import { getTankHome, listTankOptions } from '../../../server/utils/homeData'
+import { WATER_TREND_POINTS } from '#shared/utils/waterQuality'
 
 // 這個 job 連不到資料庫，Prisma Client 一律以假物件替身餵入
 // （函式簽章刻意收 client 參數，與 server/utils/currentContext.ts 同一個作法）
 function fakeClient(rows: {
   tanks?: unknown[]
-  waterLog?: unknown
+  waterLogs?: unknown[]
   targets?: unknown[]
   creatures?: unknown[]
 }) {
   const client = {
     tank: { findMany: vi.fn().mockResolvedValue(rows.tanks ?? []) },
-    waterLog: { findFirst: vi.fn().mockResolvedValue(rows.waterLog ?? null) },
+    waterLog: { findMany: vi.fn().mockResolvedValue(rows.waterLogs ?? []) },
     waterParameterTarget: { findMany: vi.fn().mockResolvedValue(rows.targets ?? []) },
     creature: { findMany: vi.fn().mockResolvedValue(rows.creatures ?? []) },
   }
@@ -23,6 +24,15 @@ function fakeClient(rows: {
 // Prisma 的 Decimal 在測試裡以「有 toString 的物件」模擬，確認轉換不是靠剛好是 number
 function decimal(value: string) {
   return { toString: () => value }
+}
+
+/** 依 measuredAt 由新到舊的一批 WaterLog，與 Prisma 的 orderBy desc 回傳順序一致 */
+function log(id: string, measuredAt: string, readings: { parameter: string, value: string }[]) {
+  return {
+    id,
+    measuredAt: new Date(measuredAt),
+    readings: readings.map(reading => ({ parameter: reading.parameter, value: decimal(reading.value) })),
+  }
 }
 
 describe('listTankOptions', () => {
@@ -69,14 +79,20 @@ describe('listTankOptions', () => {
 })
 
 describe('getTankHome', () => {
-  it('取該缸 measuredAt 最新的一筆水質記錄與其讀數', async () => {
+  // issue #10：儀表板的迷你趨勢線需要最近數筆讀數，所以這裡改成一次撈一個小窗口。
+  // 最新一筆就是窗口的第一列，不必再多打一次 findFirst——兩者本來就是同一份資料。
+  //
+  // 查詢刻意只走 WaterLog 的 @@index([tankId, measuredAt])：schema.prisma 說明了
+  // WaterReading 上不建 parameter 索引，趨勢是撈出區間後再於應用層依 parameter 分組。
+  it('一次取最近數筆水質記錄（含讀數），最新的排在最前面', async () => {
     const client = fakeClient({})
 
     await getTankHome(client, 'tank-1')
 
-    expect(client.waterLog.findFirst).toHaveBeenCalledWith({
+    expect(client.waterLog.findMany).toHaveBeenCalledWith({
       where: { tankId: 'tank-1' },
       orderBy: { measuredAt: 'desc' },
+      take: WATER_TREND_POINTS,
       include: { readings: true },
     })
     expect(client.waterParameterTarget.findMany).toHaveBeenCalledWith({ where: { tankId: 'tank-1' } })
@@ -90,14 +106,12 @@ describe('getTankHome', () => {
   // 日期則要固定成 UTC 的 YYYY-MM-DD，月數推算才不會因時區位移一天
   it('把 Decimal 轉成 number、DateTime 轉成 ISO 字串', async () => {
     const client = fakeClient({
-      waterLog: {
-        id: 'log-1',
-        measuredAt: new Date('2026-07-28T05:41:00.000Z'),
-        readings: [
-          { parameter: 'KH', value: decimal('7.8000') },
-          { parameter: 'PO4', value: decimal('0.0400') },
-        ],
-      },
+      waterLogs: [
+        log('log-1', '2026-07-28T05:41:00.000Z', [
+          { parameter: 'KH', value: '7.8000' },
+          { parameter: 'PO4', value: '0.0400' },
+        ]),
+      ],
       targets: [{ parameter: 'KH', minValue: decimal('7.0000'), maxValue: decimal('9.0000') }],
     })
 
@@ -110,7 +124,51 @@ describe('getTankHome', () => {
         { parameter: 'PO4', value: 0.04 },
       ],
       targets: [{ parameter: 'KH', minValue: 7, maxValue: 9 }],
+      // 只有一筆記錄時每個測項也只有一個點，趨勢線畫不出來但資料仍照實送出
+      trends: [
+        { parameter: 'KH', values: [7.8] },
+        { parameter: 'PO4', values: [0.04] },
+      ],
     })
+  })
+
+  // Then 每列顯示：……迷你趨勢線
+  // 迷你趨勢線：取該缸該 parameter 最近數筆 WaterReading，依所屬 WaterLog.measuredAt 排序
+  it('趨勢數列依 measuredAt 由舊到新排列，與查詢回傳的順序相反', async () => {
+    const client = fakeClient({
+      waterLogs: [
+        log('log-new', '2026-07-28T05:00:00.000Z', [{ parameter: 'MG', value: '1180' }]),
+        log('log-mid', '2026-07-21T05:00:00.000Z', [{ parameter: 'MG', value: '1260' }]),
+        log('log-old', '2026-07-14T05:00:00.000Z', [{ parameter: 'MG', value: '1300' }]),
+      ],
+    })
+
+    const home = await getTankHome(client, 'tank-1')
+
+    // 折線由左（舊）往右（新）：Mg 一路下滑，正好解釋最新一筆的「偏低」
+    expect(home.water?.trends).toEqual([{ parameter: 'MG', values: [1300, 1260, 1180] }])
+
+    // 最新一筆仍是窗口的第一列
+    expect(home.water?.measuredAt).toBe('2026-07-28T05:00:00.000Z')
+    expect(home.water?.readings).toEqual([{ parameter: 'MG', value: 1180 }])
+  })
+
+  // screen-3 允許只填部分測項，未填的測項不會有 WaterReading 列
+  it('某幾次沒量到的測項只把有量到的點串起來，完全沒量過的測項不出現', () => {
+    const client = fakeClient({
+      waterLogs: [
+        log('log-new', '2026-07-28T05:00:00.000Z', [{ parameter: 'KH', value: '7.8' }]),
+        log('log-old', '2026-07-21T05:00:00.000Z', [
+          { parameter: 'KH', value: '7.6' },
+          { parameter: 'NO3', value: '9' },
+        ]),
+      ],
+    })
+
+    return expect(getTankHome(client, 'tank-1').then(home => home.water?.trends)).resolves.toEqual([
+      { parameter: 'KH', values: [7.6, 7.8] },
+      { parameter: 'NO3', values: [9] },
+    ])
   })
 
   // Given 該缸尚無任何水質記錄

@@ -34,12 +34,24 @@ export interface WaterTargetDto {
   maxValue: number
 }
 
+/**
+ * 單一測項的迷你趨勢線資料（screen-2 每一列中間那條折線）。
+ * values 依所屬 WaterLog.measuredAt 由舊到新排列，畫出來才是左舊右新。
+ * 沒量到的那幾次不補位（schema.prisma：未量測＝不建立 WaterReading 列）。
+ */
+export interface WaterTrendDto {
+  parameter: WaterParameterKey
+  values: number[]
+}
+
 /** 該缸 measuredAt 最新的那一筆 WaterLog，連同其讀數與該缸設定的正常區間 */
 export interface WaterSummaryDto {
   /** ISO 8601 字串 */
   measuredAt: string
   readings: WaterReadingDto[]
   targets: WaterTargetDto[]
+  /** 最近數筆記錄整理成的走勢，只有 screen-2 的儀表板會用到 */
+  trends: WaterTrendDto[]
 }
 
 export interface CreatureDto {

@@ -432,3 +432,189 @@ test.describe('sticky 頁首', () => {
     await expect(page.getByTestId('water-attention')).toHaveCount(0)
   })
 })
+
+// ── 數據儀表板 bottom sheet（issue #10）──────────────────────────────────
+//
+// screen-2：點一下水質摘要列，由下方升起完整的儀表板。
+// 前提同上——seed 的「主缸」有一筆數小時前的水質記錄與四筆歷史記錄（趨勢線的來源）。
+
+test.describe('數據儀表板', () => {
+  test.use({ viewport: { width: 390, height: 844 } })
+
+  /** 點水質摘要列展開儀表板，等它真的升起來 */
+  async function openDashboard(page: Page) {
+    await page.goto('/')
+    await page.getByTestId('water-summary-card').click()
+    await expect(page.getByTestId('water-dashboard-sheet')).toBeVisible()
+  }
+
+  // Given 我在首頁，水質摘要列為收合狀態 / When 我點擊水質摘要列（或「詳細 ∨」）
+  // Then 由下方升起 bottom sheet，標題為「數據儀表板」，副標為「<缸名> · 更新於 N 小時前」
+  // And 背景首頁內容變暗但仍可見
+  test('點擊水質摘要列升起儀表板，背景首頁仍看得見', async ({ page }) => {
+    await page.goto('/')
+
+    await expect(page.getByTestId('water-detail-hint')).toContainText('詳細')
+    await expect(page.getByTestId('water-dashboard')).toHaveCount(0)
+
+    await page.getByTestId('water-summary-card').click()
+
+    await expect(page.getByTestId('water-dashboard-title')).toHaveText('數據儀表板')
+    await expect(page.getByTestId('water-dashboard-subtitle')).toHaveText(/^主缸 · (更新於 .+前|剛剛更新)$/)
+
+    // 面板貼齊畫面底部，是「由下方升起」而不是浮在中間
+    const sheet = (await page.getByTestId('water-dashboard-sheet').boundingBox())!
+    expect(Math.abs(sheet.y + sheet.height - page.viewportSize()!.height)).toBeLessThan(2)
+
+    // 背景變暗但仍可見：遮罩是半透明的，首頁的缸名還在畫面上
+    const alpha = await page
+      .getByTestId('water-dashboard-backdrop')
+      .evaluate(element => getComputedStyle(element).backgroundColor)
+    expect(alpha).toMatch(/rgba\(.+,\s*0?\.\d+\)$/)
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('主缸 · 4 尺')
+  })
+
+  // Given 該缸最新一筆水質記錄包含六個測項 / When 儀表板展開
+  // Then 依序列出 KH / Ca / Mg / NO₃ / PO₄ / 鹽度六列
+  // And 每列顯示：測項名、數值、單位、迷你趨勢線、狀態文字與區間
+  test('六列測項各自帶著數值、單位、趨勢線與區間', async ({ page }) => {
+    await openDashboard(page)
+
+    await expect(page.getByTestId('water-dashboard-label')).toHaveText([
+      'KH',
+      'Ca',
+      'Mg',
+      'NO₃',
+      'PO₄',
+      '鹽度',
+    ])
+    await expect(page.getByTestId('water-dashboard-unit')).toHaveText([
+      'dKH',
+      'ppm',
+      'ppm',
+      'ppm',
+      'ppm',
+      'SG',
+    ])
+
+    // seed 的四筆歷史記錄涵蓋全部六個測項，每一列都畫得出折線
+    await expect(page.getByTestId('water-dashboard-trend')).toHaveCount(6)
+  })
+
+  // Given Mg 的最新值為 1180，該缸 Mg 的正常區間為 1250–1350
+  // Then 右側顯示藍色「偏低 ▼」與區間文字「1250–1350」，數值同樣以藍色呈現
+  test('Mg 偏低：數值與狀態文字同為藍色，右側標出區間', async ({ page }) => {
+    await openDashboard(page)
+
+    const row = page.locator('[data-testid="water-dashboard-row"][data-parameter="MG"]')
+    const value = row.getByTestId('water-dashboard-value')
+
+    await expect(value).toHaveText('1180')
+    await expect(value).toHaveAttribute('data-status', 'low')
+    await expect(row.getByTestId('water-dashboard-status')).toHaveText('偏低 ▼')
+    await expect(row.getByTestId('water-dashboard-range')).toHaveText('1250–1350')
+
+    // 數值與狀態文字是同一個顏色，而且不是「正常」的主色
+    const colours = await row
+      .locator('[data-testid="water-dashboard-value"], [data-testid="water-dashboard-status"]')
+      .evaluateAll(elements => elements.map(element => getComputedStyle(element).color))
+    expect(new Set(colours).size).toBe(1)
+  })
+
+  // Given NO₃ 的最新值為 12，該缸 NO₃ 的正常區間為 2–10
+  // Then 右側顯示橘色「偏高 ▲」與區間文字「2–10」，數值同樣以橘色呈現
+  test('NO₃ 偏高：數值與狀態文字同為橘色，右側標出區間', async ({ page }) => {
+    await openDashboard(page)
+
+    const row = page.locator('[data-testid="water-dashboard-row"][data-parameter="NO3"]')
+
+    await expect(row.getByTestId('water-dashboard-value')).toHaveAttribute('data-status', 'high')
+    await expect(row.getByTestId('water-dashboard-status')).toHaveText('偏高 ▲')
+    await expect(row.getByTestId('water-dashboard-range')).toHaveText('2–10')
+  })
+
+  // Given KH 的最新值為 7.8，落在正常區間 7–9 內
+  // Then 右側顯示「正常」與區間文字「7–9」
+  test('KH 正常：狀態文字為「正常」，右側標出 7–9', async ({ page }) => {
+    await openDashboard(page)
+
+    const row = page.locator('[data-testid="water-dashboard-row"][data-parameter="KH"]')
+
+    await expect(row.getByTestId('water-dashboard-value')).toHaveText('7.8')
+    await expect(row.getByTestId('water-dashboard-status')).toHaveText('正常')
+    await expect(row.getByTestId('water-dashboard-range')).toHaveText('7–9')
+  })
+
+  // Given 儀表板已展開 / When 我點擊右上角 ✕ / Then bottom sheet 收合，回到首頁預設狀態
+  test('點擊 ✕ 收合，回到首頁預設狀態', async ({ page }) => {
+    await openDashboard(page)
+
+    await page.getByTestId('water-dashboard-close').click()
+
+    await expect(page.getByTestId('water-dashboard')).toHaveCount(0)
+    await expect(page.getByTestId('water-reading')).toHaveCount(6)
+  })
+
+  // When 我點擊背景遮罩 / Then bottom sheet 收合
+  test('點擊背景遮罩收合', async ({ page }) => {
+    await openDashboard(page)
+
+    // 面板上方那一段才是露出來的遮罩，點畫面正上方即可
+    await page.mouse.click(page.viewportSize()!.width / 2, 40)
+
+    await expect(page.getByTestId('water-dashboard')).toHaveCount(0)
+  })
+
+  // When 我向下拖曳把手 / Then bottom sheet 收合
+  test('向下拖曳把手收合', async ({ page }) => {
+    await openDashboard(page)
+
+    const handle = (await page.getByTestId('water-dashboard-handle').boundingBox())!
+    const startX = handle.x + handle.width / 2
+    const startY = handle.y + handle.height / 2
+
+    await page.mouse.move(startX, startY)
+    await page.mouse.down()
+    // 分幾步移動，讓 pointermove 真的送得出來
+    await page.mouse.move(startX, startY + 80, { steps: 8 })
+    await page.mouse.move(startX, startY + 160, { steps: 8 })
+    await page.mouse.up()
+
+    await expect(page.getByTestId('water-dashboard')).toHaveCount(0)
+  })
+
+  // Given 儀表板已展開 / When 我點擊底部的「＋ 記錄水質」主要按鈕
+  // Then bottom sheet 關閉並導向「記錄水質」頁面
+  test('「＋ 記錄水質」關閉儀表板並導向記錄水質頁', async ({ page }) => {
+    await openDashboard(page)
+
+    await page.getByTestId('water-dashboard-log').click()
+
+    await expect(page).toHaveURL(/\/log$/)
+    await expect(page.getByTestId('water-dashboard')).toHaveCount(0)
+  })
+
+  // 頁面捲下去、摘要列收合成單行 pill 之後，它仍然是同一個入口
+  test('頁首收合狀態下點摘要列一樣展開儀表板', async ({ page }) => {
+    await page.goto('/')
+    await scrollTo(page, 1200)
+    await expect(page.getByTestId('home-sticky-header')).toHaveAttribute('data-collapsed', 'true')
+
+    await page.getByTestId('water-summary-card').click()
+
+    await expect(page.getByTestId('water-dashboard-title')).toHaveText('數據儀表板')
+  })
+
+  // Given 該缸尚無任何水質記錄：沒有東西可攤開，摘要列維持它自己的空狀態入口
+  test('沒有水質記錄的缸點摘要列不會展開儀表板', async ({ page }) => {
+    await page.goto('/')
+
+    await page.getByTestId('tank-switch').click()
+    await page.getByTestId('tank-menu').getByRole('option').nth(1).click()
+    await expect(page.getByTestId('water-empty')).toBeVisible()
+
+    await page.getByTestId('water-summary-card').click()
+
+    await expect(page.getByTestId('water-dashboard')).toHaveCount(0)
+  })
+})

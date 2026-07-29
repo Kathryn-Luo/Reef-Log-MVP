@@ -73,7 +73,16 @@ const MAIN_TANK_HOME: TankHomeData = {
       { parameter: 'PO4', value: 0.04 },
       { parameter: 'SALINITY', value: 1.026 },
     ],
-    targets: [],
+    targets: [
+      { parameter: 'MG', minValue: 1250, maxValue: 1350 },
+      { parameter: 'NO3', minValue: 2, maxValue: 10 },
+    ],
+    // 儀表板的迷你趨勢線：Mg 一路下滑、NO₃ 一路上升，正好解釋最新一筆的兩個異常
+    trends: [
+      { parameter: 'KH', values: [7.6, 7.9, 7.8] },
+      { parameter: 'MG', values: [1300, 1260, 1180] },
+      { parameter: 'NO3', values: [9, 10.5, 12] },
+    ],
   },
   creatures: MAIN_TANK_CREATURES,
 }
@@ -241,6 +250,132 @@ describe('首頁 — 水質摘要列', () => {
 
     expect(page.find('[data-testid="water-attention"]').exists()).toBe(false)
     expect(page.find('[data-testid="water-measured-at"]').exists()).toBe(false)
+    expect(page.get('[data-testid="water-empty-action"]').attributes('href')).toBe('/log')
+  })
+})
+
+// issue #10：點一下水質摘要列，由下方升起完整的數據儀表板。
+describe('首頁 — 數據儀表板（bottom sheet）', () => {
+  /** 點水質摘要列展開儀表板 */
+  async function openDashboard(page: Awaited<ReturnType<typeof mountSuspended>>) {
+    await page.get('[data-testid="water-summary-row"]').trigger('click')
+    await flushPromises()
+  }
+
+  // Given 我在首頁，水質摘要列為收合狀態 / When 我點擊水質摘要列（或「詳細 ∨」）
+  // Then 由下方升起 bottom sheet，標題為「數據儀表板」，副標為「<缸名> · 更新於 N 小時前」
+  it('點擊水質摘要列後升起儀表板，標題與副標帶著缸名與相對時間', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    // 一開始是收合的，畫面上沒有儀表板
+    expect(page.find('[data-testid="water-dashboard"]').exists()).toBe(false)
+
+    await openDashboard(page)
+
+    expect(page.get('[data-testid="water-dashboard-title"]').text()).toBe('數據儀表板')
+    expect(page.get('[data-testid="water-dashboard-subtitle"]').text()).toBe('主缸 · 更新於 4 小時前')
+  })
+
+  // Then 依序列出 KH / Ca / Mg / NO₃ / PO₄ / 鹽度六列
+  it('六列測項連同數值、單位、狀態與區間一起出現', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+    await openDashboard(page)
+
+    expect(page.findAll('[data-testid="water-dashboard-row"]')).toHaveLength(6)
+    expect(
+      page.findAll('[data-testid="water-dashboard-label"]').map(label => label.text()),
+    ).toEqual(['KH', 'Ca', 'Mg', 'NO₃', 'PO₄', '鹽度'])
+    expect(
+      page.findAll('[data-testid="water-dashboard-status"]').map(status => status.text()),
+    ).toEqual(['正常', '正常', '偏低 ▼', '偏高 ▲', '正常', '正常'])
+  })
+
+  // And 背景首頁內容變暗但仍可見
+  it('展開時首頁內容仍在，只是被遮罩壓暗', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+    await openDashboard(page)
+
+    expect(page.get('[data-testid="water-dashboard-backdrop"]').exists()).toBe(true)
+
+    // 首頁沒有被換掉：頁首、摘要列與生物卡片都還在
+    expect(page.get('h1').text()).toBe('主缸 · 4 尺')
+    expect(page.get('[data-testid="water-attention"]').text()).toBe('2 需注意')
+    expect(page.findAll('[data-testid="creature-card"]')).toHaveLength(11)
+  })
+
+  // Given 儀表板已展開 / When 我點擊右上角 ✕ / Then bottom sheet 收合，回到首頁預設狀態
+  it('點擊 ✕ 後收合，回到首頁預設狀態', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+    await openDashboard(page)
+
+    await page.get('[data-testid="water-dashboard-close"]').trigger('click')
+    await flushPromises()
+
+    expect(page.find('[data-testid="water-dashboard"]').exists()).toBe(false)
+    expect(page.get('[data-testid="water-summary-row"]').exists()).toBe(true)
+    expect(page.findAll('[data-testid="water-reading"]')).toHaveLength(6)
+  })
+
+  // When 我點擊背景遮罩 / Then bottom sheet 收合
+  it('點擊背景遮罩後收合', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+    await openDashboard(page)
+
+    await page.get('[data-testid="water-dashboard-backdrop"]').trigger('click')
+    await flushPromises()
+
+    expect(page.find('[data-testid="water-dashboard"]').exists()).toBe(false)
+  })
+
+  // When 我向下拖曳把手 / Then bottom sheet 收合
+  it('向下拖曳把手後收合', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+    await openDashboard(page)
+
+    await page.get('[data-testid="water-dashboard-handle"]').trigger('pointerdown', { clientY: 100 })
+    await page.get('[data-testid="water-dashboard"]').trigger('pointermove', { clientY: 220 })
+    await page.get('[data-testid="water-dashboard"]').trigger('pointerup', { clientY: 220 })
+    await flushPromises()
+
+    expect(page.find('[data-testid="water-dashboard"]').exists()).toBe(false)
+  })
+
+  // When 我點擊底部的「＋ 記錄水質」主要按鈕 / Then bottom sheet 關閉並導向「記錄水質」頁面
+  it('「＋ 記錄水質」連向 /log，點下去同時收合儀表板', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+    await openDashboard(page)
+
+    const action = page.get('[data-testid="water-dashboard-log"]')
+    expect(action.attributes('href')).toBe('/log')
+
+    await action.trigger('click')
+    await flushPromises()
+
+    expect(page.find('[data-testid="water-dashboard"]').exists()).toBe(false)
+  })
+
+  // 頁面捲下去、摘要列收合成單行 pill 之後，它仍然是同一個入口
+  it('頁首收合狀態下點摘要列一樣展開儀表板', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    scrollTo(1200)
+    await flushPromises()
+    expect(isCollapsed(page)).toBe('true')
+
+    await openDashboard(page)
+
+    expect(page.get('[data-testid="water-dashboard-title"]').text()).toBe('數據儀表板')
+  })
+
+  // Given 該缸尚無任何水質記錄：沒有東西可攤開，摘要列維持它自己的空狀態入口
+  it('沒有水質記錄的缸點摘要列不會展開儀表板', async () => {
+    state.home = { 'tank-1': { water: null, creatures: MAIN_TANK_CREATURES } }
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    await openDashboard(page)
+
+    expect(page.find('[data-testid="water-dashboard"]').exists()).toBe(false)
     expect(page.get('[data-testid="water-empty-action"]').attributes('href')).toBe('/log')
   })
 })

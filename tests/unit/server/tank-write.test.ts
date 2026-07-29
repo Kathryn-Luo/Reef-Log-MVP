@@ -31,6 +31,7 @@ const MAIN_TANK_INPUT: CreateTankInput = {
   volumeLiters: 420,
   setupType: 'SPS MIXED',
   colorHex: '#2dd4bf',
+  startedOn: '2025-11-12',
 }
 
 describe('createTank', () => {
@@ -48,6 +49,9 @@ describe('createTank', () => {
         volumeLiters: 420,
         setupType: 'SPS MIXED',
         colorHex: '#2dd4bf',
+        // schema 的 Tank.startedOn 是 @db.Date，存 UTC 當天的零時，
+        // 免得使用者在 UTC+8 選 11/12 卻被記成 11/11
+        startedOn: new Date('2025-11-12T00:00:00.000Z'),
         displayOrder: 0,
       },
     })
@@ -87,6 +91,7 @@ describe('createTank', () => {
       volumeLiters: null,
       setupType: null,
       colorHex: null,
+      startedOn: null,
     })
 
     expect(client.tank.create).toHaveBeenCalledWith({
@@ -97,6 +102,7 @@ describe('createTank', () => {
         volumeLiters: null,
         setupType: null,
         colorHex: null,
+        startedOn: null,
         displayOrder: 0,
       },
     })

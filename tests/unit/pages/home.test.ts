@@ -253,7 +253,25 @@ describe('首頁 — 尚未建立任何缸', () => {
     const empty = page.get('[data-testid="tank-empty"]')
 
     expect(empty.text()).toContain('還沒有任何缸')
-    expect(page.get('[data-testid="tank-empty-action"]').text()).toContain('建立第一個缸')
+    // 設計稿的說明文字說的是「建立之後能做什麼」，不是「建立之後會怎樣」
+    expect(empty.text()).toContain('記錄水質')
+    expect(page.get('[data-testid="tank-empty-action"]').text()).toContain('建立我的第一個缸')
+  })
+
+  // 設計稿的空狀態下方有三格預覽：水質趨勢 / 生物庫存 / 保養提醒。
+  // 還沒有缸時它們沒有東西可看，所以只呈現不可點的預告。
+  it('空狀態下方預告三項功能，且都不可點', async () => {
+    state.tanks = []
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+    const tiles = page.findAll('[data-testid="tank-empty-preview"]')
+
+    expect(tiles.map(tile => tile.text())).toEqual(['水質趨勢', '生物庫存', '保養提醒'])
+    expect(tiles.every(tile => tile.attributes('disabled') !== undefined)).toBe(true)
+    expect(tiles.every(tile => tile.element.tagName === 'BUTTON')).toBe(true)
+
+    // 唯一的出口是「建立我的第一個缸」
+    expect(page.get('[data-testid="tank-empty"]').findAll('a')).toHaveLength(1)
   })
 
   // Given 我在首頁的空狀態 / When 我點擊「建立第一個缸」/ Then 導向建立缸的表單

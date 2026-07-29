@@ -16,6 +16,14 @@ export interface CreateTankInput {
   volumeLiters: number | null
   setupType: string | null
   colorHex: string | null
+
+  /**
+   * 開缸日期，`YYYY-MM-DD`。這一層刻意用字串而不是 Date：
+   * 它會經過 JSON 來回，Date 在那裡本來就會被攤成字串；
+   * 而且日期選擇器交出來的就是這個格式，沒有時區可言——
+   * 換算成時間點是寫入端的事（server/utils/tankWrite.ts）。
+   */
+  startedOn: string | null
 }
 
 /** 建立成功後回傳的缸，形狀與缸切換選單共用 */

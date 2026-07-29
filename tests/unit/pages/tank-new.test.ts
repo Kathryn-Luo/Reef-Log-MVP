@@ -80,16 +80,52 @@ async function submit(page: Awaited<ReturnType<typeof mountForm>>) {
 }
 
 describe('建立缸的表單 — 欄位', () => {
-  it('缸名為必填，尺寸 / 水量 / 飼養型態 / 代表色為選填', async () => {
+  it('缸名為必填，其餘欄位皆為選填', async () => {
     const page = await mountForm()
 
     expect(page.get('input[name="name"]').attributes('required')).toBeDefined()
-    for (const optional of ['sizeSpec', 'volumeLiters', 'setupType']) {
+    for (const optional of ['sizeSpec', 'volumeLiters', 'setupType', 'colorHex', 'startedOn']) {
       expect(page.get(`input[name="${optional}"]`).attributes('required')).toBeUndefined()
     }
 
-    // 代表色從色票中選，不讓使用者自己打 hex（schema 的 colorHex 存 #RRGGBB）
     expect(page.findAll('[data-testid="tank-color-option"]').length).toBeGreaterThan(0)
+  })
+
+  // 設計稿的欄位由上到下：缸名 → 代表色 → 尺寸標示 → 水量 → 飼養型態 → 開缸日期
+  it('欄位順序與設計稿一致', async () => {
+    const page = await mountForm()
+
+    expect(
+      page.findAll('[data-testid="tank-field"]').map(field => field.attributes('data-field')),
+    ).toEqual(['name', 'colorHex', 'sizeSpec', 'volumeLiters', 'setupType', 'startedOn'])
+  })
+
+  // 設計稿：缸名旁有「必填」徽章，其餘欄位不得看起來像必填
+  it('只有缸名標示「必填」', async () => {
+    const page = await mountForm()
+
+    const required = page.findAll('[data-testid="tank-field-required"]')
+
+    expect(required).toHaveLength(1)
+    expect(required[0]!.text()).toBe('必填')
+    expect(page.get('[data-testid="tank-field"][data-field="name"]').text()).toContain('必填')
+  })
+
+  // 設計稿：開缸日期是日期選擇器，說明文字為「作為缸齡計算依據」
+  it('開缸日期是日期選擇器，並說明它的用途', async () => {
+    const page = await mountForm()
+    const field = page.get('[data-testid="tank-field"][data-field="startedOn"]')
+
+    expect(field.get('input[name="startedOn"]').attributes('type')).toBe('date')
+    expect(field.text()).toContain('作為缸齡計算依據')
+  })
+
+  // 設計稿：水量欄位右側標出單位「公升 / L」，飼養型態下方給例子
+  it('水量標出單位，飼養型態給出例子', async () => {
+    const page = await mountForm()
+
+    expect(page.get('[data-testid="tank-field"][data-field="volumeLiters"]').text()).toContain('公升')
+    expect(page.get('[data-testid="tank-field"][data-field="setupType"]').text()).toContain('SPS MIXED')
   })
 
   it('點擊色票即選中該色，同一時間只有一個被選中', async () => {
@@ -105,6 +141,88 @@ describe('建立缸的表單 — 欄位', () => {
     expect(pressed).toHaveLength(1)
     expect(pressed[0]!.attributes('data-color')).toBe(swatches[2]!.attributes('data-color'))
   })
+
+  // 設計稿：色票之外還有「自訂色碼」輸入框，兩邊是同一個值
+  it('點色票會把色碼填進自訂色碼欄位', async () => {
+    const page = await mountForm()
+    const swatches = page.findAll('[data-testid="tank-color-option"]')
+
+    await swatches[1]!.trigger('click')
+
+    expect(page.get('input[name="colorHex"]').element.value)
+      .toBe(swatches[1]!.attributes('data-color'))
+  })
+
+  it('自訂色碼填的若正好是某個色票，該色票呈選中態', async () => {
+    const page = await mountForm()
+    const target = page.findAll('[data-testid="tank-color-option"]')[3]!.attributes('data-color')!
+
+    await page.get('input[name="colorHex"]').setValue(target.toUpperCase())
+
+    const pressed = page
+      .findAll('[data-testid="tank-color-option"]')
+      .filter(swatch => swatch.attributes('aria-pressed') === 'true')
+
+    expect(pressed).toHaveLength(1)
+    expect(pressed[0]!.attributes('data-color')).toBe(target)
+  })
+
+  // 設計稿：選色結果即時反映在標題列左側的色塊上
+  it('標題列的色塊即時反映選到的代表色', async () => {
+    const page = await mountForm()
+
+    expect(page.get('[data-testid="tank-color-preview"]').attributes('data-color')).toBeUndefined()
+
+    const swatches = page.findAll('[data-testid="tank-color-option"]')
+    await swatches[1]!.trigger('click')
+
+    expect(page.get('[data-testid="tank-color-preview"]').attributes('data-color'))
+      .toBe(swatches[1]!.attributes('data-color'))
+  })
+})
+
+describe('建立缸的表單 — 儲存按鈕', () => {
+  // 設計稿：標題列右上角與表單底部各有一個「儲存」，缸名為空時 disabled
+  it('缸名為空時兩個儲存按鈕都 disabled，並提示先填缸名', async () => {
+    const page = await mountForm()
+
+    for (const testId of ['tank-form-submit', 'tank-header-submit']) {
+      expect(page.get(`[data-testid="${testId}"]`).attributes('disabled')).toBeDefined()
+    }
+
+    expect(page.get('[data-testid="tank-form-hint"]').text()).toContain('請先填寫缸名')
+  })
+
+  it('填了缸名之後兩個儲存按鈕都可按，提示消失', async () => {
+    const page = await mountForm()
+
+    await fill(page, { name: '主缸' })
+
+    for (const testId of ['tank-form-submit', 'tank-header-submit']) {
+      expect(page.get(`[data-testid="${testId}"]`).attributes('disabled')).toBeUndefined()
+    }
+
+    expect(page.find('[data-testid="tank-form-hint"]').exists()).toBe(false)
+  })
+
+  // 只填空白不算填了缸名
+  it('缸名只填空白時仍然 disabled', async () => {
+    const page = await mountForm()
+
+    await fill(page, { name: '   ' })
+
+    expect(page.get('[data-testid="tank-form-submit"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('標題列的「儲存」也會送出表單', async () => {
+    const page = await mountForm()
+
+    await fill(page, { name: '主缸' })
+    await page.get('[data-testid="tank-header-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(state.calls).toBe(1)
+  })
 })
 
 describe('建立缸的表單 — 送出', () => {
@@ -117,6 +235,7 @@ describe('建立缸的表單 — 送出', () => {
       sizeSpec: '4 尺',
       volumeLiters: '420',
       setupType: 'SPS MIXED',
+      startedOn: '2025-11-12',
     })
     await page.findAll('[data-testid="tank-color-option"]')[1]!.trigger('click')
 
@@ -133,6 +252,7 @@ describe('建立缸的表單 — 送出', () => {
       volumeLiters: 420,
       setupType: 'SPS MIXED',
       colorHex: chosenColor,
+      startedOn: '2025-11-12',
     })
   })
 
@@ -142,11 +262,14 @@ describe('建立缸的表單 — 送出', () => {
     await fill(page, { name: '檢疫缸' })
     await submit(page)
 
-    expect(state.body).toMatchObject({
+    expect(state.body).toEqual({
       name: '檢疫缸',
       sizeSpec: null,
       volumeLiters: null,
       setupType: null,
+      // 設計稿的新增缸畫面預設沒有選色（左上角色塊是空的虛線框）
+      colorHex: null,
+      startedOn: null,
     })
   })
 

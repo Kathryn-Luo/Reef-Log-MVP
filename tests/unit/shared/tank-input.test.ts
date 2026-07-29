@@ -18,6 +18,7 @@ describe('parseTankInput — 缸名（必填）', () => {
         volumeLiters: null,
         setupType: null,
         colorHex: null,
+        startedOn: null,
       },
     })
   })
@@ -50,6 +51,7 @@ describe('parseTankInput — 選填欄位', () => {
       volumeLiters: '420',
       setupType: ' SPS MIXED ',
       colorHex: '#2DD4BF',
+      startedOn: '2025-11-12',
     })
 
     expect(result).toEqual({
@@ -60,6 +62,7 @@ describe('parseTankInput — 選填欄位', () => {
         volumeLiters: 420,
         setupType: 'SPS MIXED',
         colorHex: '#2dd4bf',
+        startedOn: '2025-11-12',
       },
     })
   })
@@ -72,6 +75,7 @@ describe('parseTankInput — 選填欄位', () => {
       volumeLiters: '',
       setupType: '',
       colorHex: '',
+      startedOn: '',
     })
 
     expect(result).toEqual({
@@ -82,6 +86,7 @@ describe('parseTankInput — 選填欄位', () => {
         volumeLiters: null,
         setupType: null,
         colorHex: null,
+        startedOn: null,
       },
     })
   })
@@ -103,6 +108,41 @@ describe('parseTankInput — 選填欄位', () => {
     expect(parseTankInput({ name: '主缸', colorHex: 'teal' }).ok).toBe(false)
     expect(parseTankInput({ name: '主缸', colorHex: '#2dd' }).ok).toBe(false)
     expect(parseTankInput({ name: '主缸', colorHex: '#2dd4bf' }).ok).toBe(true)
+  })
+
+  // 設計稿的代表色欄位除了色票，還有一個「自訂色碼」輸入框，
+  // 所以合法的 #RRGGBB 一律收下，不限定必須是色票裡的那幾個
+  it('代表色接受色票以外的自訂色碼', () => {
+    const result = parseTankInput({ name: '主缸', colorHex: '#123ABC' })
+
+    expect(result.ok === true && result.value.colorHex).toBe('#123abc')
+  })
+})
+
+describe('parseTankInput — 開缸日期', () => {
+  it('接受 YYYY-MM-DD 並原樣帶出', () => {
+    const result = parseTankInput({ name: '主缸', startedOn: '2025-11-12' })
+
+    expect(result.ok === true && result.value.startedOn).toBe('2025-11-12')
+  })
+
+  // 設計稿寫明「作為缸齡計算依據 · 可留空」
+  it('留白時為 null', () => {
+    expect(parseTankInput({ name: '主缸', startedOn: '' }).ok === true).toBe(true)
+    expect(parseTankInput({ name: '主缸' }).ok === true).toBe(true)
+  })
+
+  it('不是合法日期時不通過', () => {
+    expect(parseTankInput({ name: '主缸', startedOn: '2025/11/12' }).ok).toBe(false)
+    expect(parseTankInput({ name: '主缸', startedOn: '2025-13-01' }).ok).toBe(false)
+    expect(parseTankInput({ name: '主缸', startedOn: '2025-02-30' }).ok).toBe(false)
+    expect(parseTankInput({ name: '主缸', startedOn: '昨天' }).ok).toBe(false)
+  })
+
+  it('日期不合法時說明的是開缸日期這一項', () => {
+    const result = parseTankInput({ name: '主缸', startedOn: '2025-13-01' })
+
+    expect(result.ok === false && result.message).toContain('開缸日期')
   })
 })
 

@@ -11,6 +11,13 @@ useSeoMeta({
   title: 'ReefLog',
 })
 
+// 空狀態下方的三格預告，對應底部 tab 的三個檢視畫面（#40）
+const EMPTY_PREVIEWS = [
+  { label: '水質趨勢', icon: 'i-lucide-trending-up' },
+  { label: '生物庫存', icon: 'i-lucide-circle' },
+  { label: '保養提醒', icon: 'i-lucide-diamond' },
+] as const
+
 // 「· 4h」與「存活 · N 月」都是相對現在的推算值。整頁共用同一個時間點，
 // 摘要列與卡片才不會各自抓到差一秒的基準。
 const now = new Date()
@@ -71,14 +78,30 @@ const cards = computed(() =>
     <div
       v-if="!currentTank"
       data-testid="tank-empty"
-      class="px-4 py-16 text-center"
+      class="px-4 py-12 text-center"
     >
-      <UIcon
-        name="i-lucide-waves"
-        class="mx-auto mb-4 size-10 text-primary"
-      />
-      <p class="text-muted">
-        還沒有任何缸。建立第一個缸之後，這裡會顯示水質與生物的狀態。
+      <!-- 設計稿的空缸插圖：虛線缸壁 + 水線 + 中央的加號 -->
+      <div
+        class="mx-auto grid h-56 w-full max-w-sm place-items-center rounded-3xl border border-dashed border-muted bg-gradient-to-b from-transparent to-primary/5"
+        aria-hidden="true"
+      >
+        <div class="relative flex w-full items-center justify-center">
+          <span class="absolute inset-x-0 h-px bg-primary/40" />
+          <span class="relative grid size-20 place-items-center rounded-full border border-primary/60 bg-default">
+            <UIcon
+              name="i-lucide-plus"
+              class="size-8 text-primary"
+            />
+          </span>
+        </div>
+      </div>
+
+      <h1 class="mt-8 text-3xl font-bold">
+        還沒有任何缸
+      </h1>
+
+      <p class="mx-auto mt-3 max-w-xs text-balance text-muted">
+        建立你的第一個缸，開始記錄水質、追蹤生物與接收保養提醒。
       </p>
 
       <!-- 空狀態不能只說明「建立之後會怎樣」：這是新使用者唯一的入口（issue #46） -->
@@ -87,11 +110,33 @@ const cards = computed(() =>
         to="/tanks/new"
         icon="i-lucide-plus"
         color="primary"
-        size="lg"
-        class="mt-6 rounded-full px-5"
+        size="xl"
+        block
+        class="mt-8 rounded-2xl py-4 text-base font-semibold"
       >
-        建立第一個缸
+        建立我的第一個缸
       </UButton>
+
+      <!--
+        設計稿在按鈕下方預告三項功能。還沒有缸時它們沒有資料可看，
+        點進去只會看到另一個空狀態，所以這裡只呈現、不連出去。
+      -->
+      <div class="mt-4 grid grid-cols-3 gap-3">
+        <button
+          v-for="preview in EMPTY_PREVIEWS"
+          :key="preview.label"
+          data-testid="tank-empty-preview"
+          type="button"
+          disabled
+          class="grid place-items-center gap-2 rounded-2xl border border-default px-2 py-5 text-xs text-dimmed"
+        >
+          <UIcon
+            :name="preview.icon"
+            class="size-5"
+          />
+          {{ preview.label }}
+        </button>
+      </div>
     </div>
 
     <template v-else>

@@ -5,18 +5,20 @@ import type { CreateTankInput } from '../types/tank'
 // 前端擋掉的與後端擋掉的必然一致，也不必為了驗證多裝一個套件。
 
 /**
- * 代表色的色票。schema.prisma 的 Tank.colorHex 存 #RRGGBB，
- * 這裡給一組固定色票而不是自由選色——缸的代表色是用來「一眼分辨哪個缸」的識別，
- * 色票之間彼此夠遠才有識別度，也不會選出在深色底上看不見的顏色。
+ * 代表色的色票，取自設計稿新增缸畫面的那一排圓點（由左至右）。
+ * schema.prisma 的 Tank.colorHex 存 #RRGGBB。
+ *
+ * 色票是「常用捷徑」而不是限制：設計稿在圓點右邊另給了一個自訂色碼輸入框，
+ * 所以 parseTankInput 收下任何合法的 #RRGGBB，不檢查它在不在這個清單裡。
  * 第一個沿用 app.config.ts 的主色（screen-1 的 teal-400）。
  */
 export const TANK_COLOR_OPTIONS: readonly { hex: string, label: string }[] = [
   { hex: '#2dd4bf', label: '礁綠' },
-  { hex: '#38bdf8', label: '海藍' },
+  { hex: '#3b82f6', label: '海藍' },
   { hex: '#a78bfa', label: '珊瑚紫' },
-  { hex: '#fb923c', label: '珊瑚橘' },
-  { hex: '#f472b6', label: '海葵粉' },
-  { hex: '#facc15', label: '燈光黃' },
+  { hex: '#f2664e', label: '珊瑚橘' },
+  { hex: '#f5b841', label: '燈光黃' },
+  { hex: '#34d399', label: '藻綠' },
 ]
 
 /** 缸名與尺寸 / 飼養型態都是頁首那一行字，超過這個長度在手機上一定被截斷 */
@@ -26,6 +28,8 @@ const TEXT_MAX_LENGTH = 40
 const VOLUME_MAX_LITERS = 100_000
 
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
+
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/
 
 export type ParseTankInputResult
   = | { ok: true, value: CreateTankInput }
@@ -52,6 +56,38 @@ function parseVolume(raw: unknown): { ok: true, value: number | null } | { ok: f
   }
 
   return { ok: true, value }
+}
+
+/**
+ * 開缸日期。日期選擇器交出來的是 `YYYY-MM-DD`，留白視為沒填。
+ *
+ * 正規表達式過了還要再比對一次年月日，因為 `new Date('2025-02-30')` 會自己
+ * 滾成 3/2 而不是報錯——格式對、日子不存在的輸入得在這裡擋下來。
+ */
+function parseStartedOn(raw: unknown): { ok: true, value: string | null } | { ok: false, message: string } {
+  const text = toTrimmedText(raw)
+
+  if (!text) {
+    return { ok: true, value: null }
+  }
+
+  const matched = ISO_DATE.exec(text)
+
+  if (matched) {
+    const [, year, month, day] = matched as unknown as [string, string, string, string]
+    const date = new Date(`${text}T00:00:00.000Z`)
+
+    if (
+      !Number.isNaN(date.getTime())
+      && date.getUTCFullYear() === Number(year)
+      && date.getUTCMonth() + 1 === Number(month)
+      && date.getUTCDate() === Number(day)
+    ) {
+      return { ok: true, value: text }
+    }
+  }
+
+  return { ok: false, message: '開缸日期請選擇一個實際存在的日期。' }
 }
 
 /**
@@ -92,7 +128,13 @@ export function parseTankInput(raw: unknown): ParseTankInputResult {
   const colorHex = toTrimmedText(source.colorHex).toLowerCase()
 
   if (colorHex && !HEX_COLOR.test(colorHex)) {
-    return { ok: false, message: '代表色請從色票中選擇。' }
+    return { ok: false, message: '代表色請選一個色票，或填入 #RRGGBB 格式的色碼。' }
+  }
+
+  const startedOn = parseStartedOn(source.startedOn)
+
+  if (!startedOn.ok) {
+    return startedOn
   }
 
   return {
@@ -103,6 +145,7 @@ export function parseTankInput(raw: unknown): ParseTankInputResult {
       volumeLiters: volume.value,
       setupType: setupType || null,
       colorHex: colorHex || null,
+      startedOn: startedOn.value,
     },
   }
 }

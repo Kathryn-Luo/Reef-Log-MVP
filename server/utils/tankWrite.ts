@@ -32,6 +32,9 @@ export async function createTank(
       volumeLiters: input.volumeLiters,
       setupType: input.setupType,
       colorHex: input.colorHex,
+      // Tank.startedOn 是 @db.Date，只存日期。釘在 UTC 零時而不是本地零時，
+      // 免得 UTC+8 的使用者選 11/12 卻被記成 11/11。
+      startedOn: input.startedOn === null ? null : new Date(`${input.startedOn}T00:00:00.000Z`),
       displayOrder,
     },
   })

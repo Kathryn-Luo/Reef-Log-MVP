@@ -28,11 +28,24 @@ test('填入缸名送出後導回首頁，新缸成為當前缸', async ({ page 
   await page.goto('/tanks/new')
   await page.locator('input[name="name"]').fill(name)
   await page.locator('input[name="sizeSpec"]').fill('2 尺')
+  await page.locator('input[name="startedOn"]').fill('2025-11-12')
   await page.getByTestId('tank-color-option').nth(1).click()
   await page.getByTestId('tank-form-submit').click()
 
   await expect(page).toHaveURL(/\/\?tank=/)
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(`${name} · 2 尺`)
+})
+
+// 標題列右上角的「儲存」與表單底部的是同一個動作
+test('標題列的「儲存」同樣能建立缸', async ({ page }) => {
+  const name = `E2E 頂欄缸 ${Date.now()}`
+
+  await page.goto('/tanks/new')
+  await page.locator('input[name="name"]').fill(name)
+  await page.getByTestId('tank-header-submit').click()
+
+  await expect(page).toHaveURL(/\/\?tank=/)
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(name)
 })
 
 // And 水質摘要列與生物列表都顯示各自的空狀態
@@ -45,10 +58,14 @@ test('剛建立的缸水質與生物都是空狀態', async ({ page }) => {
   await expect(page.getByTestId('creature-empty')).toBeVisible()
 })
 
-// 缸名是必填：沒填時不會送出，也不會離開表單
-test('缸名沒填時留在表單並顯示錯誤', async ({ page }) => {
+// 缸名是必填：沒填時「儲存」按不動，並說明原因
+test('缸名沒填時儲存按鈕 disabled 並提示先填缸名', async ({ page }) => {
   await page.goto('/tanks/new')
-  await page.getByTestId('tank-form-submit').click()
 
-  await expect(page).toHaveURL(/\/tanks\/new$/)
+  await expect(page.getByTestId('tank-form-submit')).toBeDisabled()
+  await expect(page.getByTestId('tank-header-submit')).toBeDisabled()
+  await expect(page.getByTestId('tank-form-hint')).toHaveText('請先填寫缸名')
+
+  await page.locator('input[name="name"]').fill('主缸')
+  await expect(page.getByTestId('tank-form-submit')).toBeEnabled()
 })

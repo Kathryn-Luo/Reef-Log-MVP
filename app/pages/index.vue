@@ -21,8 +21,13 @@ const { data: tankList } = await useAsyncData('home:tanks', () =>
 
 const tanks = computed(() => tankList.value?.tanks ?? [])
 
-// 未選擇時看的是清單第一個，也就是 schema 定義的「預設缸」
-const selectedTankId = ref<string | null>(null)
+// 未選擇時看的是清單第一個，也就是 schema 定義的「預設缸」。
+// 建立缸的表單會帶著 ?tank=<id> 導回來，讓剛建立的那個缸成為當前缸——
+// 新缸的 displayOrder 最大，不指名的話看到的會是排序第一個的舊缸。
+const route = useRoute()
+const selectedTankId = ref<string | null>(
+  typeof route.query.tank === 'string' ? route.query.tank : null,
+)
 const currentTankId = computed(() =>
   tanks.value.find(tank => tank.id === selectedTankId.value)?.id ?? tanks.value[0]?.id ?? null,
 )
@@ -75,6 +80,18 @@ const cards = computed(() =>
       <p class="text-muted">
         還沒有任何缸。建立第一個缸之後，這裡會顯示水質與生物的狀態。
       </p>
+
+      <!-- 空狀態不能只說明「建立之後會怎樣」：這是新使用者唯一的入口（issue #46） -->
+      <UButton
+        data-testid="tank-empty-action"
+        to="/tanks/new"
+        icon="i-lucide-plus"
+        color="primary"
+        size="lg"
+        class="mt-6 rounded-full px-5"
+      >
+        建立第一個缸
+      </UButton>
     </div>
 
     <template v-else>

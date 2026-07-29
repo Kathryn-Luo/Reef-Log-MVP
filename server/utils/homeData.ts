@@ -1,4 +1,4 @@
-import type { PrismaClient } from '@prisma/client'
+import type { PrismaClient, Tank } from '@prisma/client'
 import type { CreatureDto, TankHomeData, TankOption, WaterSummaryDto } from '#shared/types/home'
 
 // 首頁（screen-1）的資料查詢。
@@ -17,6 +17,22 @@ function toDateOnly(value: Date): string {
 }
 
 /**
+ * Tank → 頁首與缸切換選單需要的欄位。
+ * 缸清單與「剛建立的缸」（server/utils/tankWrite.ts）共用同一份形狀，
+ * 兩邊才不會各自挑欄位而漏掉其中一個。
+ */
+export function toTankOption(tank: Tank): TankOption {
+  return {
+    id: tank.id,
+    name: tank.name,
+    sizeSpec: tank.sizeSpec,
+    volumeLiters: tank.volumeLiters,
+    setupType: tank.setupType,
+    colorHex: tank.colorHex,
+  }
+}
+
+/**
  * 缸切換選單的來源。排序與過濾條件依 schema.prisma 的 Tank.displayOrder 註解：
  * ORDER BY displayOrder ASC, createdAt ASC，且已封存（archivedAt 非 null）的缸不出現。
  * 清單中的第一個同時就是「預設缸」——schema 刻意沒有 isDefault 旗標。
@@ -27,14 +43,7 @@ export async function listTankOptions(client: PrismaClient, userId: string): Pro
     orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
   })
 
-  return tanks.map(tank => ({
-    id: tank.id,
-    name: tank.name,
-    sizeSpec: tank.sizeSpec,
-    volumeLiters: tank.volumeLiters,
-    setupType: tank.setupType,
-    colorHex: tank.colorHex,
-  }))
+  return tanks.map(toTankOption)
 }
 
 /**

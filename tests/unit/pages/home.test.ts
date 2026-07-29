@@ -243,4 +243,61 @@ describe('首頁 — 尚未建立任何缸', () => {
     expect(page.get('[data-testid="tank-empty"]').exists()).toBe(true)
     expect(page.find('[data-testid="tank-switch"]').exists()).toBe(false)
   })
+
+  // Given 我是一個還沒有任何缸的使用者 / When 我開啟首頁
+  // Then 空狀態除了說明文字之外，顯示一個「建立第一個缸」的主要行動按鈕
+  it('空狀態除了說明文字，還有「建立第一個缸」的行動按鈕', async () => {
+    state.tanks = []
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+    const empty = page.get('[data-testid="tank-empty"]')
+
+    expect(empty.text()).toContain('還沒有任何缸')
+    expect(page.get('[data-testid="tank-empty-action"]').text()).toContain('建立第一個缸')
+  })
+
+  // Given 我在首頁的空狀態 / When 我點擊「建立第一個缸」/ Then 導向建立缸的表單
+  it('「建立第一個缸」連向建立缸的表單', async () => {
+    state.tanks = []
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    expect(page.get('[data-testid="tank-empty-action"]').attributes('href')).toBe('/tanks/new')
+  })
+})
+
+describe('首頁 — 從建立缸的表單導回', () => {
+  // And 導回首頁，該缸成為當前缸，水質摘要列與生物列表都顯示各自的空狀態
+  it('網址帶著 ?tank=<id> 時，該缸就是當前缸', async () => {
+    state.tanks = [MAIN_TANK, SECOND_TANK]
+    state.home = { 'tank-1': MAIN_TANK_HOME, 'tank-2': { water: null, creatures: [] } }
+
+    const page = await mountSuspended(HomePage, { route: '/?tank=tank-2' })
+
+    expect(page.get('h1').text()).toBe('軟體缸 · 2 尺')
+    expect(page.get('[data-testid="water-empty"]').exists()).toBe(true)
+    expect(page.get('[data-testid="creature-empty"]').exists()).toBe(true)
+    expect(page.get('[data-testid="creature-total"]').text()).toBe('0 隻')
+  })
+
+  // 剛建立的第一個缸：displayOrder 為 0，清單裡就它一個
+  it('剛建立的缸還沒有任何資料時，水質與生物都顯示空狀態', async () => {
+    state.tanks = [MAIN_TANK]
+    state.home = { 'tank-1': { water: null, creatures: [] } }
+
+    const page = await mountSuspended(HomePage, { route: '/?tank=tank-1' })
+
+    expect(page.get('h1').text()).toBe('主缸 · 4 尺')
+    expect(page.get('[data-testid="water-empty"]').exists()).toBe(true)
+    expect(page.get('[data-testid="creature-empty"]').exists()).toBe(true)
+  })
+
+  // 網址上的 tank 不在清單裡（缸被封存 / 換了裝置）時不能整頁壞掉，退回預設缸
+  it('?tank=<id> 指到不存在的缸時退回預設缸', async () => {
+    state.tanks = [MAIN_TANK, SECOND_TANK]
+
+    const page = await mountSuspended(HomePage, { route: '/?tank=tank-404' })
+
+    expect(page.get('h1').text()).toBe('主缸 · 4 尺')
+  })
 })

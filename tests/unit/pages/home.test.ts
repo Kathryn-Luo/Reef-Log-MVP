@@ -145,14 +145,39 @@ function zIndexOf(classes: string[]): number {
   return Number(layer!.slice(2))
 }
 
+/** 只搬動捲動位置，不送事件——用來模擬「掛載時瀏覽器已經還原到某個位置」 */
+function setScrollY(offset: number) {
+  Object.defineProperty(window, 'scrollY', { value: offset, configurable: true })
+}
+
 /** 捲動到指定位置：改 scrollY 再送出 scroll 事件，頁面靠監聽器決定要不要收合 */
 function scrollTo(offset: number) {
-  Object.defineProperty(window, 'scrollY', { value: offset, configurable: true })
+  setScrollY(offset)
   window.dispatchEvent(new Event('scroll'))
 }
 
 function isCollapsed(page: Awaited<ReturnType<typeof mountSuspended>>) {
   return page.get('[data-testid="home-sticky-header"]').attributes('data-collapsed')
+}
+
+function readingsSlot(page: Awaited<ReturnType<typeof mountSuspended>>) {
+  return page.get('[data-testid="water-readings-slot"]')
+}
+
+function subtitleSlot(page: Awaited<ReturnType<typeof mountSuspended>>) {
+  return page.get('[data-testid="tank-subtitle-slot"]')
+}
+
+/**
+ * 等首幀的「這一幀不要動」旗標解除。
+ *
+ * 過場只在這之後才開放，所以凡是要看「翻轉時發生什麼」的測試都得先等它，
+ * 不然驗到的是首次掛載那一幀的樣態。
+ */
+async function afterFirstFrame(page: Awaited<ReturnType<typeof mountSuspended>>) {
+  await vi.waitFor(() => {
+    expect(page.get('[data-testid="home-sticky-header"]').attributes('data-animated')).toBe('true')
+  })
 }
 
 describe('首頁 — 頁首', () => {
@@ -330,7 +355,9 @@ describe('首頁 — sticky 頁首（捲動時收合）', () => {
   })
 
   // And 頁首收合為兩層：缸名列 + 水質單行 pill（review：固定住但沒收合，看起來只像 fixed）
-  it('向下捲動後頁首收合：六格數字與缸副標收起，缸名與水質狀態留著', async () => {
+  //
+  // issue #55 之後讓位的節點留在 DOM 裡（才補得了間），判準改看讓位區塊的收合標記
+  it('向下捲動後頁首收合：六格數字與缸副標讓位，缸名與水質狀態留著', async () => {
     const page = await mountSuspended(HomePage, { route: '/' })
 
     scrollTo(1200)
@@ -339,8 +366,10 @@ describe('首頁 — sticky 頁首（捲動時收合）', () => {
     const sticky = page.get('[data-testid="home-sticky-header"]')
 
     expect(isCollapsed(page)).toBe('true')
-    expect(sticky.findAll('[data-testid="water-reading"]')).toHaveLength(0)
-    expect(sticky.find('[data-testid="tank-subtitle"]').exists()).toBe(false)
+    expect(readingsSlot(page).attributes('data-collapsed')).toBe('true')
+    expect(readingsSlot(page).attributes('aria-hidden')).toBe('true')
+    expect(subtitleSlot(page).attributes('data-collapsed')).toBe('true')
+    expect(subtitleSlot(page).attributes('aria-hidden')).toBe('true')
 
     // 留下的正是捲動時要隨時看得到的兩件事：我在看哪一缸、水質有沒有異常
     expect(sticky.get('h1').text()).toBe('主缸 · 4 尺')
@@ -426,6 +455,11 @@ describe('首頁 — sticky 頁首（捲動時收合）', () => {
   // Then 版面回到初始樣態，與「尚未捲動」時一致
   it('捲下去再捲回來，DOM 回到初始樣態', async () => {
     const page = await mountSuspended(HomePage, { route: '/' })
+
+    // 首幀的「不要動」旗標本身就是 DOM 的一部分，等它解除再取快照，
+    // 不然比到的差異是旗標而不是版面
+    await afterFirstFrame(page)
+
     const atTop = page.html()
 
     scrollTo(1200)
@@ -514,6 +548,108 @@ describe('首頁 — sticky 頁首（捲動時收合）', () => {
     expect(classes.some(name => name.startsWith('pb-'))).toBe(true)
     // 瀏海機型：頁首貼到頂端後需要安全區域的上內距
     expect(classes).toContain('pt-[env(safe-area-inset-top)]')
+  })
+})
+
+// issue #55：收合／展開要看得出「同一塊東西變小了」，而不是「換了一塊畫面」。
+// 過場本身（時間、緩動曲線）驗不到，這裡驗的是讓它成立的三個前提：
+// 節點留在 DOM、狀態只靠 class 翻轉、首幀不補播。
+describe('首頁 — 收合過場', () => {
+  // Given 我重新整理頁面，而瀏覽器還原到一個已經超過門檻的捲動位置
+  // When 畫面首次渲染 / Then 頁首直接以收合樣態出現，不會先展開再播一次收合動畫
+  it('還原到已捲動的位置時，首幀直接是收合樣態且不播過場', async () => {
+    setScrollY(1200)
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+    const sticky = page.get('[data-testid="home-sticky-header"]')
+
+    expect(isCollapsed(page)).toBe('true')
+    expect(readingsSlot(page).attributes('data-collapsed')).toBe('true')
+
+    // 首幀掛著停用過場的旗標，「展開 → 收合」那一段就不會演給人看
+    expect(sticky.attributes('data-animated')).toBe('false')
+    expect(sticky.classes()).toContain('reef-motion-off')
+  })
+
+  it('首幀過後才開放過場', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    expect(page.get('[data-testid="home-sticky-header"]').attributes('data-animated')).toBe('false')
+
+    await afterFirstFrame(page)
+
+    expect(page.get('[data-testid="home-sticky-header"]').classes()).not.toContain('reef-motion-off')
+  })
+
+  // Given 頁首已收合 / When 我向上捲回頂端、頁首展開
+  // Then 展開同樣有過場，方向與收合對稱 / And 展開完成後的樣態與「尚未捲動」時一致
+  it('展開與收合對稱：兩個讓位區塊一起翻轉，翻回來與尚未捲動時一致', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+    await afterFirstFrame(page)
+
+    const expanded = [readingsSlot(page).classes(), subtitleSlot(page).classes()]
+
+    scrollTo(1200)
+    await flushPromises()
+
+    expect(readingsSlot(page).classes()).toContain('grid-rows-[0fr]')
+    expect(subtitleSlot(page).classes()).toContain('grid-rows-[0fr]')
+
+    scrollTo(0)
+    await flushPromises()
+
+    expect(readingsSlot(page).classes()).toEqual(expanded[0])
+    expect(subtitleSlot(page).classes()).toEqual(expanded[1])
+    expect(readingsSlot(page).attributes('aria-hidden')).toBeUndefined()
+    expect(subtitleSlot(page).attributes('aria-hidden')).toBeUndefined()
+  })
+
+  // Given 我持續快速捲動、經過門檻多次 / When 前一次過場尚未播完就再次翻轉
+  // Then 頁首不會卡在中間狀態，最終樣態與當下的捲動位置一致
+  it('連續快速翻轉門檻後，最終樣態跟著當下的捲動位置', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+    await afterFirstFrame(page)
+
+    for (const offset of [1200, 0, 900, 0, 600]) {
+      scrollTo(offset)
+    }
+    await flushPromises()
+
+    expect(isCollapsed(page)).toBe('true')
+    expect(readingsSlot(page).attributes('data-collapsed')).toBe('true')
+    expect(subtitleSlot(page).attributes('data-collapsed')).toBe('true')
+
+    scrollTo(0)
+    await flushPromises()
+
+    expect(isCollapsed(page)).toBe('false')
+    expect(readingsSlot(page).attributes('data-collapsed')).toBe('false')
+    expect(subtitleSlot(page).attributes('data-collapsed')).toBe('false')
+  })
+
+  // 過場只在狀態翻轉時發生（class 切換）。動畫一旦綁進 scroll handler，
+  // 每一次捲動都得重算，中階手機上會直接掉幀——也是「卡在中間狀態」的來源
+  it('捲動時不寫 inline style，樣態全靠 class 翻轉', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+    await afterFirstFrame(page)
+
+    for (const offset of [1200, 0, 900, 30]) {
+      scrollTo(offset)
+    }
+    await flushPromises()
+
+    expect(readingsSlot(page).attributes('style')).toBeUndefined()
+    expect(subtitleSlot(page).attributes('style')).toBeUndefined()
+    expect(page.get('[data-testid="home-sticky-header"]').attributes('style')).toBeUndefined()
+  })
+
+  // Given 頁首正在播放過場 / When 我觀察畫面其他部分 / Then 底部 tab 列不移動
+  it('底部 tab 列是 fixed，頁首變矮不會把它一起拉上來', async () => {
+    const bar = await mountSuspended(BottomTabBar, { route: '/' })
+    const classes = bar.get('nav').classes()
+
+    expect(classes).toContain('fixed')
+    expect(classes).toContain('bottom-0')
   })
 })
 

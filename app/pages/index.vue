@@ -53,8 +53,9 @@ const { data: home } = await useAsyncData<TankHomeData | null>(
 const creatures = computed(() => home.value?.creatures ?? [])
 const counts = computed(() => countCreaturesByCategory(creatures.value))
 
-// 向下捲動時固定的頁首收合成兩層（缸名列 + 水質單行 pill）
-const collapsed = useHeaderCollapse()
+// 向下捲動時固定的頁首收合成兩層（缸名列 + 水質單行 pill）。
+// animated 是「過場已開放」——首幀（瀏覽器還原捲動位置那次）要直接落在最終樣態，不補播動畫。
+const { collapsed, animated } = useHeaderCollapse()
 
 const activeCategory = ref<CreatureCategoryKey | 'ALL'>('ALL')
 
@@ -151,12 +152,17 @@ const cards = computed(() =>
         間距一律給在容器內部：容器若留外距，捲動的卡片會從縫隙穿過去，backdrop blur 就破了。
         z-30 要低於 BottomTabBar 的 z-50（tab 列不能被蓋住），又高於生物卡片（卡片從下方穿過）。
         不能加 overflow-*，否則 TankHeader 的切換缸選單會被裁掉。
+
+        收合是漸變不是瞬變（issue #55）：兩層各自把讓位的那一塊補間到 0 高，
+        這裡只補上固定區自己的內距。reef-motion-off 是首幀的「這一幀不要動」，
+        瀏覽器還原捲動位置時才不會先展開再演一次收合。
       -->
       <div
         data-testid="home-sticky-header"
         :data-collapsed="collapsed ? 'true' : 'false'"
-        class="sticky top-0 z-30 border-b border-default bg-default/80 backdrop-blur pt-[env(safe-area-inset-top)]"
-        :class="collapsed ? 'pb-2' : 'pb-4'"
+        :data-animated="animated ? 'true' : 'false'"
+        class="sticky top-0 z-30 border-b border-default bg-default/80 backdrop-blur pt-[env(safe-area-inset-top)] transition-[padding] duration-200 ease-out motion-reduce:transition-none"
+        :class="[collapsed ? 'pb-2' : 'pb-4', animated ? '' : 'reef-motion-off']"
       >
         <TankHeader
           :tanks="tanks"
@@ -166,7 +172,7 @@ const cards = computed(() =>
         />
 
         <div
-          class="px-4"
+          class="px-4 transition-[margin] duration-200 ease-out motion-reduce:transition-none"
           :class="collapsed ? 'mt-2' : 'mt-4'"
         >
           <WaterSummaryCard

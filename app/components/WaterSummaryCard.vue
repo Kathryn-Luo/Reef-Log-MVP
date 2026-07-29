@@ -35,16 +35,19 @@ const measuredAgo = computed(() =>
 
 <template>
   <section
-    class="rounded-2xl border border-default bg-elevated/40 px-4"
+    class="rounded-2xl border border-default bg-elevated/40 px-4 transition-[padding] duration-200 ease-out motion-reduce:transition-none"
     :class="collapsed ? 'py-2.5' : 'py-4'"
   >
     <!--
-      收合時整張卡片排成一列：標題列與空狀態並排，六格數字整塊移除。
-      展開時這一層不生效，維持原本「標題列在上、內容在下」的兩行版面。
+      收合時空狀態與標題列並排成一列——它本來就只有一行，不必再往下擺。
+
+      有水質記錄時不切成 flex：六格數字讓位之後標題列本來就自成一列，
+      這時若改用併排版面，正在讓位（0 高但仍在版面裡）的那一塊會佔掉一份 gap，
+      收合後右側就多出一段莫名的空白。
     -->
     <div
       data-testid="water-summary-row"
-      :class="collapsed ? 'flex items-center gap-3' : ''"
+      :class="collapsed && !summary ? 'flex items-center gap-3' : ''"
     >
       <div class="flex items-center gap-2">
         <h2
@@ -71,31 +74,46 @@ const measuredAgo = computed(() =>
         </span>
       </div>
 
-      <!-- 收合時六格數字整塊移除，頁首才真的變矮——只是隱藏的話高度還在 -->
+      <!--
+        收合時六格數字整塊讓位：外層 grid 由 1fr 補間到 0fr，內層 min-h-0 + overflow-hidden 負責裁切。
+        整塊移除（v-if）雖然也會變矮，但那是節點的增減，CSS 補不了間（issue #55）。
+
+        節點留在 DOM 裡，所以讓位時要一併 aria-hidden——
+        不然螢幕報讀會念到畫面上看不見的六格數字。
+        overflow-hidden 只能加在讓位的這一小塊，不可以往上加到 sticky 容器（會裁掉切換缸的選單）。
+      -->
       <div
-        v-if="summary && !collapsed"
-        class="mt-3 grid grid-cols-6 gap-1"
+        v-if="summary"
+        data-testid="water-readings-slot"
+        :data-collapsed="collapsed ? 'true' : 'false'"
+        :aria-hidden="collapsed ? 'true' : undefined"
+        class="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
+        :class="collapsed ? 'grid-rows-[0fr] opacity-0' : 'grid-rows-[1fr] opacity-100'"
       >
-        <div
-          v-for="item in summary.items"
-          :key="item.parameter"
-          data-testid="water-reading"
-          class="text-center"
-        >
-          <p
-            data-testid="water-reading-label"
-            class="font-mono text-[11px] text-dimmed"
-          >
-            {{ item.label }}
-          </p>
-          <p
-            data-testid="water-reading-value"
-            :data-status="item.status"
-            class="mt-0.5 font-mono text-lg font-semibold"
-            :class="STATUS_CLASSES[item.status]"
-          >
-            {{ item.display }}
-          </p>
+        <div class="min-h-0 overflow-hidden">
+          <div class="mt-3 grid grid-cols-6 gap-1">
+            <div
+              v-for="item in summary.items"
+              :key="item.parameter"
+              data-testid="water-reading"
+              class="text-center"
+            >
+              <p
+                data-testid="water-reading-label"
+                class="font-mono text-[11px] text-dimmed"
+              >
+                {{ item.label }}
+              </p>
+              <p
+                data-testid="water-reading-value"
+                :data-status="item.status"
+                class="mt-0.5 font-mono text-lg font-semibold"
+                :class="STATUS_CLASSES[item.status]"
+              >
+                {{ item.display }}
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -104,7 +122,7 @@ const measuredAgo = computed(() =>
         空狀態本來就只有一行，收合時不再往下擺，直接接在標題列右側。
       -->
       <div
-        v-else-if="!summary"
+        v-else
         data-testid="water-empty"
         class="flex items-center gap-3"
         :class="collapsed ? 'ml-auto' : 'mt-3 w-full justify-between'"

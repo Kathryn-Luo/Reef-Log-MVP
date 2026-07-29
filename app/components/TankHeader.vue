@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import type { TankOption } from '#shared/types/home'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   tanks: TankOption[]
   currentTankId: string
-}>()
+  /** 頁面捲動時頁首收成兩層：副標讓位，只留「我在看哪一缸」需要的缸名與切換入口 */
+  collapsed?: boolean
+}>(), { collapsed: false })
 
 const emit = defineEmits<{ select: [tankId: string] }>()
 
@@ -58,24 +60,32 @@ function select(tankId: string) {
 </script>
 
 <template>
-  <header class="px-4 pt-4">
+  <header
+    class="px-4"
+    :class="collapsed ? 'pt-2' : 'pt-4'"
+  >
     <div class="flex items-start justify-between gap-3">
       <div class="flex min-w-0 items-center gap-3">
         <span
           data-testid="tank-color"
           :data-color="color"
           :style="{ backgroundColor: tintedColor }"
-          class="grid size-12 shrink-0 place-items-center rounded-2xl"
+          class="grid shrink-0 place-items-center rounded-2xl"
+          :class="collapsed ? 'size-9' : 'size-12'"
         >
           <span
-            class="size-4 rounded-[5px]"
+            class="rounded-[5px]"
+            :class="collapsed ? 'size-3' : 'size-4'"
             :style="{ backgroundColor: color }"
           />
         </span>
 
         <div class="min-w-0">
           <div class="flex items-center gap-1">
-            <h1 class="truncate text-xl font-semibold">
+            <h1
+              class="truncate font-semibold"
+              :class="collapsed ? 'text-lg' : 'text-xl'"
+            >
               {{ title }}
             </h1>
 
@@ -95,7 +105,9 @@ function select(tankId: string) {
             </button>
           </div>
 
+          <!-- 收合時副標整行讓位：缸名已經回答了「我在看哪一缸」，尺寸與水量捲回頂端再看 -->
           <p
+            v-if="!collapsed"
             data-testid="tank-subtitle"
             class="mt-0.5 truncate font-mono text-sm text-muted"
           >
@@ -114,7 +126,8 @@ function select(tankId: string) {
         disabled
         aria-hidden="true"
         tabindex="-1"
-        class="grid size-11 shrink-0 place-items-center rounded-full border border-default text-dimmed"
+        class="grid shrink-0 place-items-center rounded-full border border-default text-dimmed"
+        :class="collapsed ? 'size-9' : 'size-11'"
       >
         <UIcon
           name="i-lucide-sun"

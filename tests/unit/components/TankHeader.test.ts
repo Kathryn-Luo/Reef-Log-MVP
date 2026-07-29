@@ -124,3 +124,35 @@ describe('TankHeader', () => {
     expect(ornament.attributes('tabindex')).toBe('-1')
   })
 })
+
+// When 我向下捲動 / Then 頁首收合——副標讓位，只留「我在看哪一缸」需要的缸名與切換入口
+describe('TankHeader — 收合', () => {
+  it('收合時副標收起，缸名、色塊與切換 ∨ 都還在', async () => {
+    const header = await mountSuspended(TankHeader, {
+      route: '/',
+      props: { tanks: [MAIN_TANK], currentTankId: MAIN_TANK.id, collapsed: true },
+    })
+
+    expect(header.find('[data-testid="tank-subtitle"]').exists()).toBe(false)
+    expect(header.get('h1').text()).toBe('主缸 · 4 尺')
+    expect(header.get('[data-testid="tank-color"]').attributes('data-color')).toBe('#2dd4bf')
+    expect(header.get('[data-testid="tank-switch"]').exists()).toBe(true)
+  })
+
+  it('收合時仍然打得開切換選單', async () => {
+    const header = await mountSuspended(TankHeader, {
+      route: '/',
+      props: { tanks: [MAIN_TANK, SECOND_TANK], currentTankId: MAIN_TANK.id, collapsed: true },
+    })
+
+    await header.get('[data-testid="tank-switch"]').trigger('click')
+
+    expect(header.get('[data-testid="tank-menu"]').findAll('[role="option"]')).toHaveLength(2)
+  })
+
+  it('預設不收合', async () => {
+    const header = await mountHeader([MAIN_TANK])
+
+    expect(header.get('[data-testid="tank-subtitle"]').text()).toBe('SPS MIXED · 420L')
+  })
+})

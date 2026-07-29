@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, registerEndpoint } from '@nuxt/test-utils/runtime'
 import { enableAutoUnmount, flushPromises } from '@vue/test-utils'
 import HomePage from '../../../app/pages/index.vue'
+import BottomTabBar from '../../../app/components/BottomTabBar.vue'
 import type { CreatureDto, TankHomeData, TankOption } from '#shared/types/home'
+import { HEADER_COLLAPSE_AT, HEADER_EXPAND_BELOW } from '#shared/utils/stickyHeader'
 
 const MAIN_TANK: TankOption = {
   id: 'tank-1',
@@ -98,12 +100,59 @@ beforeEach(() => {
   // useAsyncData 的結果會留在 payload 上，測試之間必須清掉才不會拿到上一題的缸
   clearNuxtData()
 
+  // scrollY 是掛在共用的 window 上的，上一題捲到哪裡會被下一題的頁面在掛載時讀到
+  Object.defineProperty(window, 'scrollY', { value: 0, configurable: true })
+
   state.tanks = [MAIN_TANK]
   state.home = { 'tank-1': MAIN_TANK_HOME, 'tank-2': SECOND_TANK_HOME }
 })
 
 function chipTexts(page: Awaited<ReturnType<typeof mountSuspended>>) {
   return page.findAll('[data-testid="creature-chip"]').map(chip => chip.text())
+}
+
+// 由上而下的五個區塊，各取一個代表元素。querySelectorAll 依文件順序回傳，
+// 所以這個陣列就是版面的實際排列。
+const LAYOUT_LANDMARKS = [
+  'tank-color',
+  'water-title',
+  'creature-total',
+  'creature-chip',
+  'creature-card',
+] as const
+
+function layoutOrder(page: Awaited<ReturnType<typeof mountSuspended>>) {
+  const selector = LAYOUT_LANDMARKS.map(id => `[data-testid="${id}"]`).join(', ')
+  const seen: string[] = []
+
+  for (const element of page.element.querySelectorAll(selector)) {
+    const id = element.getAttribute('data-testid')!
+
+    if (!seen.includes(id)) {
+      seen.push(id)
+    }
+  }
+
+  return seen
+}
+
+/** 從 class 陣列取出 z-<n> 的數值，用來比較兩層誰在上面 */
+function zIndexOf(classes: string[]): number {
+  const layer = classes.find(name => /^z-\d+$/.test(name))
+
+  expect(layer, `預期 class 中有 z-<n>，實際為 ${classes.join(' ')}`).toBeDefined()
+
+  return Number(layer!.slice(2))
+}
+
+/** 捲動到指定位置：改 scrollY 再送出 scroll 事件，頁面靠監聽器決定要不要收合 */
+function scrollTo(offset: number) {
+  Object.defineProperty(window, 'scrollY', { value: offset, configurable: true })
+  window.dispatchEvent(new Event('scroll'))
+}
+
+function isCollapsed(page: Awaited<ReturnType<typeof mountSuspended>>) {
+  return page.get('[data-testid="home-sticky-header"]').attributes('data-collapsed')
 }
 
 describe('首頁 — 頁首', () => {
@@ -231,6 +280,240 @@ describe('首頁 — 生物區', () => {
     expect(page.get('[data-testid="creature-total"]').text()).toBe('0 隻')
     expect(page.findAll('[data-testid="creature-card"]')).toHaveLength(0)
     expect(page.get('[data-testid="creature-empty"]').exists()).toBe(true)
+  })
+})
+
+describe('首頁 — sticky 頁首（捲動時收合）', () => {
+  // Given 我在首頁，頁面尚未捲動 / When 畫面渲染
+  // Then 缸別頁首、水質摘要列（含六項元素）、生物標題列、分類 chip 列、卡片網格
+  //      由上而下完整顯示，與現況一致
+  it('尚未捲動時，五個區塊由上而下完整顯示', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    expect(layoutOrder(page)).toEqual([
+      'tank-color',
+      'water-title',
+      'creature-total',
+      'creature-chip',
+      'creature-card',
+    ])
+    expect(isCollapsed(page)).toBe('false')
+    expect(page.get('[data-testid="tank-subtitle"]').text()).toBe('SPS MIXED · 420L')
+    expect(page.findAll('[data-testid="water-reading"]')).toHaveLength(6)
+    expect(chipTexts(page)).toEqual(['全部', '魚 5', '珊瑚 6', '其他 1'])
+    expect(page.findAll('[data-testid="creature-card"]')).toHaveLength(11)
+  })
+
+  // Given 我在首頁且生物卡片多到可以捲動 / When 我向下捲動
+  // Then 缸別頁首與水質摘要列固定在畫面頂端，持續可見
+  it('缸別頁首與水質摘要列同在一個 sticky 容器內，固定於頂端', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+    const sticky = page.get('[data-testid="home-sticky-header"]')
+
+    expect(sticky.classes()).toContain('sticky')
+    expect(sticky.classes()).toContain('top-0')
+
+    expect(sticky.find('[data-testid="tank-color"]').exists()).toBe(true)
+    expect(sticky.find('[data-testid="tank-switch"]').exists()).toBe(true)
+    expect(sticky.find('[data-testid="water-title"]').exists()).toBe(true)
+  })
+
+  // 未捲動時六項元素完整在固定區內
+  it('尚未捲動時六項元素都在固定區內', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+    const sticky = page.get('[data-testid="home-sticky-header"]')
+
+    expect(sticky.findAll('[data-testid="water-reading"]')).toHaveLength(6)
+    expect(
+      sticky.findAll('[data-testid="water-reading-label"]').map(label => label.text()),
+    ).toEqual(['KH', 'Ca', 'Mg', 'NO₃', 'PO₄', '鹽'])
+  })
+
+  // And 頁首收合為兩層：缸名列 + 水質單行 pill（review：固定住但沒收合，看起來只像 fixed）
+  it('向下捲動後頁首收合：六格數字與缸副標收起，缸名與水質狀態留著', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    scrollTo(1200)
+    await flushPromises()
+
+    const sticky = page.get('[data-testid="home-sticky-header"]')
+
+    expect(isCollapsed(page)).toBe('true')
+    expect(sticky.findAll('[data-testid="water-reading"]')).toHaveLength(0)
+    expect(sticky.find('[data-testid="tank-subtitle"]').exists()).toBe(false)
+
+    // 留下的正是捲動時要隨時看得到的兩件事：我在看哪一缸、水質有沒有異常
+    expect(sticky.get('h1').text()).toBe('主缸 · 4 尺')
+    expect(sticky.get('[data-testid="water-attention"]').text()).toBe('2 需注意')
+    expect(sticky.get('[data-testid="water-measured-at"]').text()).toBe('· 4h')
+    expect(sticky.get('[data-testid="tank-switch"]').exists()).toBe(true)
+  })
+
+  // 收合會讓頁首變矮、文件跟著變短，捲動位置卡在門檻上時不能一直抖動
+  it('收合之後小幅回捲不會立刻彈回展開', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    scrollTo(HEADER_COLLAPSE_AT)
+    await flushPromises()
+    expect(isCollapsed(page)).toBe('true')
+
+    scrollTo(HEADER_COLLAPSE_AT - 1)
+    await flushPromises()
+    expect(isCollapsed(page)).toBe('true')
+
+    scrollTo(HEADER_EXPAND_BELOW)
+    await flushPromises()
+    expect(isCollapsed(page)).toBe('false')
+  })
+
+  // 監聽器掛在共用的 window 上，頁面離開後還留著就會對著已卸載的元件寫值
+  it('離開頁面時把 scroll 監聽拆掉', async () => {
+    const addEventListener = vi.spyOn(window, 'addEventListener')
+    const removeEventListener = vi.spyOn(window, 'removeEventListener')
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    const added = addEventListener.mock.calls.filter(([type]) => type === 'scroll')
+    expect(added).toHaveLength(1)
+
+    page.unmount()
+
+    const removed = removeEventListener.mock.calls.filter(([type]) => type === 'scroll')
+    expect(removed).toHaveLength(1)
+    expect(removed[0]![1]).toBe(added[0]![1])
+
+    addEventListener.mockRestore()
+    removeEventListener.mockRestore()
+  })
+
+  // Given 我在首頁且生物卡片多到可以捲動 / When 我向下捲動
+  // Then 「生物 N 隻」標題列與分類 chip 列隨卡片網格一起捲離畫面，不固定在頂端
+  it('生物標題列與分類 chip 列留在 sticky 容器之外，跟著卡片一起捲走', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+    const sticky = page.get('[data-testid="home-sticky-header"]')
+
+    expect(sticky.find('[data-testid="creature-total"]').exists()).toBe(false)
+    expect(sticky.find('[data-testid="creature-chip"]').exists()).toBe(false)
+    expect(sticky.find('[data-testid="creature-card"]').exists()).toBe(false)
+
+    // 留在容器外，但仍在頁面上——不是被拿掉了
+    expect(page.get('[data-testid="creature-total"]').text()).toBe('12 隻')
+    expect(page.findAll('[data-testid="creature-chip"]')).toHaveLength(4)
+
+    // 收合之後也一樣：它們是跟著卡片捲走的，不會被收進固定區
+    scrollTo(1200)
+    await flushPromises()
+
+    expect(page.get('[data-testid="home-sticky-header"]').find('[data-testid="creature-chip"]').exists()).toBe(false)
+    expect(page.findAll('[data-testid="creature-chip"]')).toHaveLength(4)
+  })
+
+  // Given 我向下捲動，生物卡片正從固定的頁首下方通過 / When 我觀察兩者交界
+  // Then 卡片被頁首遮住而不是蓋在頁首上（頁首在上層）
+  // And 頁首底部有分隔線與 backdrop blur，可看出它浮在內容之上
+  it('頁首在卡片上層，且有底部分隔線、不透光背景與 backdrop blur', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+    const classes = page.get('[data-testid="home-sticky-header"]').classes()
+
+    // 卡片沒有自己的堆疊層級，頁首只要有正的 z 就會蓋在它上面
+    expect(zIndexOf(classes)).toBeGreaterThan(0)
+    expect(classes).toContain('border-b')
+    expect(classes).toContain('backdrop-blur')
+    expect(classes.some(name => name.startsWith('bg-'))).toBe(true)
+  })
+
+  // Given 我向下捲動後再向上捲回頂端 / When 捲動位置回到 0
+  // Then 版面回到初始樣態，與「尚未捲動」時一致
+  it('捲下去再捲回來，DOM 回到初始樣態', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+    const atTop = page.html()
+
+    scrollTo(1200)
+    await flushPromises()
+
+    // 收合是實際的樣態變化，捲動中的 DOM 本來就該與頂端時不同
+    expect(page.html()).not.toBe(atTop)
+
+    scrollTo(0)
+    await flushPromises()
+
+    expect(page.html()).toBe(atTop)
+    expect(page.findAll('[data-testid="water-reading"]')).toHaveLength(6)
+    expect(page.get('[data-testid="tank-subtitle"]').text()).toBe('SPS MIXED · 420L')
+  })
+
+  // Given 該缸尚無任何水質記錄 / When 我向下捲動
+  // Then 頁首與水質摘要列照常固定在頂端，水質摘要列維持空狀態內容，不顯示需注意徽章
+  it('沒有水質記錄時，收合後固定區內仍有頁首與水質摘要列的空狀態', async () => {
+    state.home = { 'tank-1': { water: null, creatures: MAIN_TANK_CREATURES } }
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    scrollTo(1200)
+    await flushPromises()
+
+    const sticky = page.get('[data-testid="home-sticky-header"]')
+
+    expect(sticky.classes()).toContain('sticky')
+    expect(isCollapsed(page)).toBe('true')
+    expect(sticky.find('[data-testid="tank-color"]').exists()).toBe(true)
+    expect(sticky.get('[data-testid="water-empty"]').text()).toContain('還沒有水質記錄')
+    expect(sticky.get('[data-testid="water-empty-action"]').text()).toBe('記錄水質')
+    expect(sticky.find('[data-testid="water-attention"]').exists()).toBe(false)
+  })
+
+  // Given 固定的頁首與底部 tab 列同時在畫面上 / When 我捲動頁面
+  // Then 底部 tab 列位置與外觀不變，且不被固定的頁首覆蓋
+  it('sticky 頁首的層級低於底部 tab 列', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+    const bar = await mountSuspended(BottomTabBar, { route: '/' })
+
+    const header = zIndexOf(page.get('[data-testid="home-sticky-header"]').classes())
+    const tabBar = zIndexOf(bar.get('nav').classes())
+
+    expect(header).toBeLessThan(tabBar)
+  })
+
+  // Given 頁首已固定在頂端 / When 我點開切換缸的下拉選單
+  // Then 選單完整顯示在生物卡片之上，不被卡片蓋住、不被 sticky 區裁切
+  it('收合狀態下切換缸的選單仍在 sticky 容器內展開，且容器不裁切溢出內容', async () => {
+    state.tanks = [MAIN_TANK, SECOND_TANK]
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    scrollTo(1200)
+    await flushPromises()
+
+    const sticky = page.get('[data-testid="home-sticky-header"]')
+
+    await page.get('[data-testid="tank-switch"]').trigger('click')
+
+    // 選單比固定區高，容器一旦裁切溢出內容就會被切掉半截
+    expect(sticky.find('[data-testid="tank-menu"]').exists()).toBe(true)
+    expect(sticky.classes()).not.toContain('overflow-hidden')
+    expect(sticky.classes().some(name => name.startsWith('overflow-'))).toBe(false)
+    expect(sticky.get('[data-testid="tank-menu"]').findAll('[role="option"]')).toHaveLength(2)
+  })
+
+  // 空狀態沒有頁首與水質列，套上 sticky 容器只會固定住一片空白
+  it('尚未建立任何缸時不套用 sticky 容器', async () => {
+    state.tanks = []
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    expect(page.get('[data-testid="tank-empty"]').exists()).toBe(true)
+    expect(page.find('[data-testid="home-sticky-header"]').exists()).toBe(false)
+  })
+
+  // 容器留外距的話，捲動的卡片會從縫隙穿過去，blur 就破了——間距必須給在容器內部
+  it('固定區本身不留外距，間距給在容器內部', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+    const classes = page.get('[data-testid="home-sticky-header"]').classes()
+
+    expect(classes.some(name => /^-?m[trblxy]?-/.test(name))).toBe(false)
+    expect(classes.some(name => name.startsWith('pb-'))).toBe(true)
+    // 瀏海機型：頁首貼到頂端後需要安全區域的上內距
+    expect(classes).toContain('pt-[env(safe-area-inset-top)]')
   })
 })
 

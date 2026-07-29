@@ -1,11 +1,11 @@
 import { expect, test } from '@playwright/test'
+import type { Page } from '@playwright/test'
 
 // 首頁 · 生物優先（Epic #1 screen-1）。
 //
-// 前提：preview 環境需有 seed 資料——一位使用者、一個名為「主缸」的缸
-// （4 尺 / SPS MIXED / 420L）、一筆數小時前的水質記錄與 12 隻生物。
-// 目前 repo 內還沒有 migration 與 seed script（見 PR 說明的「已知缺口」），
-// 這幾支 spec 要等資料備妥才會轉綠；unit 測試已完整覆蓋同樣的驗收條件。
+// 前提：preview 環境需有 seed 資料（`prisma/seed.ts`，PR #49）——一位使用者、
+// 一個名為「主缸」的缸（4 尺 / SPS MIXED / 420L）、一筆數小時前的水質記錄與 12 隻生物，
+// 外加兩個尚無水質記錄的缸。sticky 的 spec 需要生物多到捲得動，資料量變少時要一併回頭調整。
 
 // Given 我有一個名為「主缸」的缸，設定為 4 尺 / SPS MIXED / 420L / When 我開啟首頁
 // Then 頁首顯示缸的代表色塊、缸名「主缸 · 4 尺」與副標「SPS MIXED · 420L」，缸名右側有可切換的 ∨
@@ -88,4 +88,182 @@ test('點擊生物卡片導向生物詳情頁', async ({ page }) => {
   await page.getByTestId('creature-card').first().getByRole('link').click()
 
   await expect(page).toHaveURL(/\/creatures\/[^/]+$/)
+})
+
+// ── sticky 頁首（issue #48）────────────────────────────────────────────────
+//
+// 手機尺寸才是這個 Story 的情境：12 隻生物在 390×844 下必定超過一個螢幕。
+
+/** 捲到指定位置（超過頁面高度就捲到底），再等捲動位置定下來才回傳 */
+async function scrollTo(page: Page, offset: number) {
+  const target = await page.evaluate((top) => {
+    const max = document.documentElement.scrollHeight - window.innerHeight
+    const clamped = Math.max(0, Math.min(top, max))
+
+    window.scrollTo({ top: clamped, behavior: 'instant' })
+
+    return clamped
+  }, offset)
+
+  await page.waitForFunction(top => Math.abs(window.scrollY - top) < 2, target)
+}
+
+test.describe('sticky 頁首', () => {
+  test.use({ viewport: { width: 390, height: 844 } })
+
+  // Given 我在首頁且生物卡片多到可以捲動 / When 我向下捲動
+  // Then 缸別頁首與水質摘要列固定在畫面頂端，持續可見
+  // Then「生物 N 隻」標題列與分類 chip 列隨卡片網格一起捲離畫面，不固定在頂端
+  test('向下捲動後頁首與水質列留在畫面上，標題列與 chip 列捲離畫面', async ({ page }) => {
+    await page.goto('/')
+
+    const heading = page.getByRole('heading', { level: 1 })
+    const waterTitle = page.getByTestId('water-title')
+    const total = page.getByTestId('creature-total')
+    const firstChip = page.getByTestId('creature-chip').first()
+
+    // 未捲動時五個區塊都在
+    await expect(heading).toBeInViewport()
+    await expect(total).toBeInViewport()
+    await expect(firstChip).toBeInViewport()
+    await expect(page.getByTestId('water-reading')).toHaveCount(6)
+
+    await scrollTo(page, 1200)
+
+    await expect(heading).toBeInViewport()
+    await expect(waterTitle).toBeInViewport()
+    await expect(total).not.toBeInViewport()
+    await expect(firstChip).not.toBeInViewport()
+  })
+
+  // And 頁首收合為兩層：缸副標與六格數字讓位，固定區明顯變矮
+  test('向下捲動後頁首收合，固定區高度明顯縮小', async ({ page }) => {
+    await page.goto('/')
+
+    const header = page.getByTestId('home-sticky-header')
+    await expect(header).toHaveAttribute('data-collapsed', 'false')
+    const expandedHeight = (await header.boundingBox())!.height
+
+    await scrollTo(page, 1200)
+
+    await expect(header).toHaveAttribute('data-collapsed', 'true')
+    await expect(page.getByTestId('water-reading')).toHaveCount(0)
+    await expect(page.getByTestId('tank-subtitle')).toHaveCount(0)
+
+    // 留下的是捲動時要隨時看得到的兩件事
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('主缸 · 4 尺')
+    await expect(page.getByTestId('water-attention')).toBeVisible()
+
+    // 設計稿是 ~236px → ~92px；抓一半當門檻，量測誤差不會讓它偽陽性
+    const collapsedHeight = (await header.boundingBox())!.height
+    expect(collapsedHeight).toBeLessThan(expandedHeight / 2)
+  })
+
+  // Given 我向下捲動，生物卡片正從固定的頁首下方通過 / When 我觀察兩者交界
+  // Then 卡片被頁首遮住而不是蓋在頁首上（頁首在上層）
+  test('生物卡片從固定的頁首下方穿過，頁首在上層', async ({ page }) => {
+    await page.goto('/')
+    await scrollTo(page, 1200)
+
+    const header = page.getByTestId('home-sticky-header')
+    const box = (await header.boundingBox())!
+
+    // 頁首底邊上方一點的位置，此時正有生物卡片經過——命中的必須是頁首而不是卡片
+    const hit = await page.evaluate(
+      point => document.elementFromPoint(point.x, point.y)?.closest('[data-testid]')?.getAttribute('data-testid') ?? null,
+      { x: box.x + box.width / 2, y: box.y + box.height - 4 },
+    )
+
+    expect(hit).not.toBe('creature-card')
+    await expect(header).toBeInViewport()
+  })
+
+  // Given 我向下捲動後再向上捲回頂端 / When 捲動位置回到 0
+  // Then 版面回到初始樣態，與「尚未捲動」時一致
+  test('捲回頂端後版面回到初始樣態', async ({ page }) => {
+    await page.goto('/')
+
+    const total = page.getByTestId('creature-total')
+    const header = page.getByTestId('home-sticky-header')
+    const before = await header.innerHTML()
+    const expandedHeight = (await header.boundingBox())!.height
+
+    await scrollTo(page, 1200)
+    await expect(header).toHaveAttribute('data-collapsed', 'true')
+
+    await scrollTo(page, 0)
+
+    await expect(header).toHaveAttribute('data-collapsed', 'false')
+    await expect(total).toBeInViewport()
+    await expect(page.getByTestId('creature-chip').first()).toBeInViewport()
+    await expect(page.getByTestId('water-reading')).toHaveCount(6)
+    expect(await header.innerHTML()).toBe(before)
+    expect((await header.boundingBox())!.height).toBe(expandedHeight)
+  })
+
+  // Given 固定的頁首與底部 tab 列同時在畫面上 / When 我捲動頁面
+  // Then 底部 tab 列位置與外觀不變，且不被固定的頁首覆蓋
+  test('底部 tab 列不受固定頁首影響', async ({ page }) => {
+    await page.goto('/')
+
+    const tabBar = page.getByRole('navigation', { name: '主要導覽' })
+    const before = await tabBar.boundingBox()
+
+    await scrollTo(page, 1200)
+
+    await expect(tabBar).toBeInViewport()
+    expect(await tabBar.boundingBox()).toEqual(before)
+
+    // 五個 tab 都還點得到——被頁首蓋住的話這裡會逾時
+    await expect(tabBar.getByRole('link')).toHaveCount(5)
+    await tabBar.getByRole('link').nth(2).click()
+    await expect(page).toHaveURL(/\/trends$/)
+  })
+
+  // Given 頁首已固定在頂端 / When 我點開切換缸的下拉選單
+  // Then 選單完整顯示在生物卡片之上，不被卡片蓋住、不被 sticky 區裁切
+  test('收合狀態下切換缸的選單完整顯示在卡片之上', async ({ page }) => {
+    await page.goto('/')
+    await scrollTo(page, 1200)
+    await expect(page.getByTestId('home-sticky-header')).toHaveAttribute('data-collapsed', 'true')
+
+    await page.getByTestId('tank-switch').click()
+
+    const menu = page.getByTestId('tank-menu')
+    await expect(menu).toBeVisible()
+    await expect(menu).toBeInViewport()
+
+    // 每一個選項都點得到——被卡片蓋住或被容器裁掉的話這裡會失敗
+    const options = menu.getByRole('option')
+    await expect(options.first()).toBeVisible()
+    await expect(options.last()).toBeVisible()
+
+    const box = (await options.last().boundingBox())!
+    const hit = await page.evaluate(
+      point => document.elementFromPoint(point.x, point.y)?.closest('[data-testid]')?.getAttribute('data-testid') ?? null,
+      { x: box.x + box.width / 2, y: box.y + box.height / 2 },
+    )
+    expect(hit).toBe('tank-menu')
+  })
+
+  // Given 該缸尚無任何水質記錄 / When 我向下捲動
+  // Then 頁首與水質摘要列照常固定在頂端，水質摘要列維持空狀態內容，不顯示需注意徽章
+  //
+  // seed 的「小缸」沒有水質記錄，改看它即可（tank-menu 的第二個選項）。
+  // 它同時也沒有生物、捲不動，所以這裡只驗「空狀態照常留在頂端」；
+  // 「收合後空狀態仍完整」由 unit 測試（tests/unit/pages/home.test.ts）涵蓋。
+  test('沒有水質記錄的缸，固定的水質摘要列維持空狀態', async ({ page }) => {
+    await page.goto('/')
+
+    await page.getByTestId('tank-switch').click()
+    await page.getByTestId('tank-menu').getByRole('option').nth(1).click()
+    await expect(page.getByTestId('water-empty')).toBeVisible()
+
+    await scrollTo(page, 600)
+
+    await expect(page.getByTestId('water-title')).toBeInViewport()
+    await expect(page.getByTestId('water-empty')).toBeInViewport()
+    await expect(page.getByTestId('water-empty-action')).toHaveText('記錄水質')
+    await expect(page.getByTestId('water-attention')).toHaveCount(0)
+  })
 })

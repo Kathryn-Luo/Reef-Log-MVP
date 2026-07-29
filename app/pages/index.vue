@@ -53,6 +53,9 @@ const { data: home } = await useAsyncData<TankHomeData | null>(
 const creatures = computed(() => home.value?.creatures ?? [])
 const counts = computed(() => countCreaturesByCategory(creatures.value))
 
+// 向下捲動時固定的頁首收合成兩層（缸名列 + 水質單行 pill）
+const collapsed = useHeaderCollapse()
+
 const activeCategory = ref<CreatureCategoryKey | 'ALL'>('ALL')
 
 const chips = computed(() => [
@@ -140,17 +143,38 @@ const cards = computed(() =>
     </div>
 
     <template v-else>
-      <TankHeader
-        :tanks="tanks"
-        :current-tank-id="currentTank.id"
-        @select="selectedTankId = $event"
-      />
+      <!--
+        向下捲看生物時要一直看得到的兩層：缸名列（我在看哪一缸）與水質 pill（有沒有異常）。
+        捲過門檻後兩層一起收合（缸副標與六格數字讓位），固定區從約 236px 縮到約 92px，
+        生物卡片的可捲動區域才真的變大——只釘住不收合的話，看起來就只是把整段頁首改成 fixed。
 
-      <div class="mt-4 px-4">
-        <WaterSummaryCard
-          :water="home?.water ?? null"
-          :now="now"
+        間距一律給在容器內部：容器若留外距，捲動的卡片會從縫隙穿過去，backdrop blur 就破了。
+        z-30 要低於 BottomTabBar 的 z-50（tab 列不能被蓋住），又高於生物卡片（卡片從下方穿過）。
+        不能加 overflow-*，否則 TankHeader 的切換缸選單會被裁掉。
+      -->
+      <div
+        data-testid="home-sticky-header"
+        :data-collapsed="collapsed ? 'true' : 'false'"
+        class="sticky top-0 z-30 border-b border-default bg-default/80 backdrop-blur pt-[env(safe-area-inset-top)]"
+        :class="collapsed ? 'pb-2' : 'pb-4'"
+      >
+        <TankHeader
+          :tanks="tanks"
+          :current-tank-id="currentTank.id"
+          :collapsed="collapsed"
+          @select="selectedTankId = $event"
         />
+
+        <div
+          class="px-4"
+          :class="collapsed ? 'mt-2' : 'mt-4'"
+        >
+          <WaterSummaryCard
+            :water="home?.water ?? null"
+            :now="now"
+            :collapsed="collapsed"
+          />
+        </div>
       </div>
 
       <section class="mt-6 px-4">

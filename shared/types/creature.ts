@@ -3,7 +3,7 @@
 // 與 shared/types/home.ts 同一個原則：Prisma 的 Decimal 與 Date 一律在
 // server/utils/creatureList.ts 轉成 number / 字串之後才送出。
 
-import type { CreatureDto } from './home'
+import type { CreatureDto, CreatureStatusKey } from './home'
 
 /** 對應 schema.prisma 的 enum DeathCause */
 export type DeathCauseKey = 'DISEASE' | 'WATER_QUALITY' | 'PREDATION' | 'JUMPED' | 'STARVATION' | 'UNKNOWN'
@@ -24,4 +24,43 @@ export interface CreatureListItemDto extends CreatureDto {
 
 export interface TankCreaturesData {
   creatures: CreatureListItemDto[]
+}
+
+/**
+ * 生物詳情（screen-6）的一隻。庫存列表（CreatureListItemDto）之外多帶兩個欄位：
+ * 細分類（「魚 · 神仙」的後半段）與死亡記錄區塊裡的備註。
+ *
+ * 同樣用 extends：三張畫面指的是同一個 Creature，形狀分家的話
+ * daysInTank / buildInventoryRows 這類共用函式會開始要求各自的型別。
+ *
+ * 沒有 price——schema 有這個欄位，但 Epic #1 的 7 張截圖都沒有顯示或輸入價格的位置
+ * （見 issue #14 的「已知缺口」），詳情頁不呈現它，也就不送到前端。
+ */
+export interface CreatureDetailDto extends CreatureListItemDto {
+  subCategory: string | null
+  /** 死亡記錄區塊專用的備註，不是通用飼養備註（見 schema.prisma 的註解） */
+  deathNote: string | null
+}
+
+/**
+ * PATCH /api/creatures/:id 的內容——詳情頁「狀態 + 死亡 / 生病記錄」那一段。
+ *
+ * 其餘欄位（俗名、學名、照片、入缸日…）不在這裡：那是「編輯生物」表單的事，
+ * 由另一支 needs-design 的 issue 負責。
+ *
+ * 日期一律是 `YYYY-MM-DD` 字串：它會經過 JSON 來回，而且日期選擇器交出來的
+ * 就是這個格式，換算成時間點是寫入端的事（server/utils/creatureDetail.ts）。
+ */
+export interface UpdateCreatureStatusInput {
+  status: CreatureStatusKey
+  observedSickOn: string | null
+  ailment: string | null
+  diedOn: string | null
+  causeOfDeath: DeathCauseKey | null
+  deathNote: string | null
+}
+
+/** GET / PATCH /api/creatures/:id 的回應 */
+export interface CreatureDetailResponse {
+  creature: CreatureDetailDto
 }

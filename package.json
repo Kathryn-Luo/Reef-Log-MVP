@@ -24,9 +24,6 @@
     "prisma:studio": "prisma studio",
     "db:seed": "node prisma/seed.ts"
   },
-  "prisma": {
-    "seed": "node prisma/seed.ts"
-  },
   "dependencies": {
     "@nuxt/ui": "^4.10.0",
     "@prisma/client": "6.19.3",

@@ -66,6 +66,9 @@ const runsScript = (step: string, script: string) =>
 /** 找出「執行某個 pnpm script」的步驟。 */
 const stepRunning = (script: string) => steps().find(step => runsScript(step, script))
 
+/** 這支 workflow 必須無條件跑完的檢查。build 見 issue #44。 */
+const CHECKS = ['lint', 'typecheck', 'test', 'build'] as const
+
 describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
   it('workflow 檔案存在', () => {
     expect(existsSync(workflowPath), '找不到 .github/workflows/ci.yml').toBe(true)
@@ -85,25 +88,43 @@ describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
     expect(on).toMatch(/main/)
   })
 
-  // Then 三項檢查各自有一個「獨立的」步驟。
+  // Then 四項檢查各自有一個「獨立的」步驟。
   //
   // 只驗「找得到跑 pnpm lint 的步驟」是不夠的：`run: pnpm lint && pnpm typecheck`
   // 會讓同一個步驟同時滿足兩個 script，那正是這條要防的事——合併之後 lint 一紅，
-  // typecheck 就永遠不會執行，三個訊號少掉兩個。所以驗的是「落在三個相異的步驟」。
-  it('三項檢查各自是一個獨立步驟', () => {
+  // typecheck 就永遠不會執行，四個訊號少掉幾個。所以驗的是「落在相異的步驟」。
+  it('四項檢查各自是一個獨立步驟', () => {
     const all = steps()
-    const indexes = ['lint', 'typecheck', 'test'].map((script) => {
+    const indexes = CHECKS.map((script) => {
       const index = all.findIndex(step => runsScript(step, script))
       expect(index, `找不到執行 pnpm ${script} 的步驟`).toBeGreaterThanOrEqual(0)
       return index
     })
-    expect(new Set(indexes).size, '三項檢查被合併進同一個步驟').toBe(3)
+    expect(new Set(indexes).size, '檢查被合併進同一個步驟').toBe(CHECKS.length)
   })
 
-  // 前一項失敗不該讓後兩項被跳過：三個訊號要一次看齊，否則修一輪只知道一件事。
+  // 前一項失敗不該讓後面的被跳過：所有訊號要一次看齊，否則修一輪只知道一件事。
   // 用 !cancelled() 而不是 always()：run 被取消時就不必再跑。
-  it.each(['lint', 'typecheck', 'test'])('pnpm %s 不因前一步失敗而被跳過', (script) => {
+  it.each(CHECKS)('pnpm %s 不因前一步失敗而被跳過', (script) => {
     expect(stepRunning(script)).toMatch(/if:\s*\$\{\{\s*!\s*cancelled\(\)\s*\}\}/)
+  })
+
+  // issue #44：只有打包才會炸的錯誤（例如跨 srcDir 的相對路徑 import，見 #43）
+  // 在 lint / typecheck / test 上全綠，要等 Vercel 的 preview deployment 才會紅。
+  // CI 的定位是「PR 上唯一獨立於 agent 的綠燈訊號」，那個綠燈必須涵蓋打包。
+  it('跑 production build（pnpm build，即 prisma generate && nuxt build）', () => {
+    expect(stepRunning('build'), '找不到執行 pnpm build 的步驟').toBeDefined()
+  })
+
+  // build 放在最後：前面三項是秒級的快訊號，先讓它們回報完，
+  // 再花 30–60 秒打包。順序顛倒的話，一個 lint 錯字也要等完整 build 才看得到。
+  it('build 排在 lint / typecheck / test 之後', () => {
+    const all = steps()
+    const indexOf = (script: string) => all.findIndex(step => runsScript(step, script))
+    const buildIndex = indexOf('build')
+    for (const script of ['lint', 'typecheck', 'test']) {
+      expect(buildIndex, `build 應排在 pnpm ${script} 之後`).toBeGreaterThan(indexOf(script))
+    }
   })
 
   // ── 以下是「CI 會不會變成永遠綠燈」的防線 ──
@@ -118,7 +139,7 @@ describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
   // - `--passWithNoTests`：vitest 預設在「一個測試都沒收到」時失敗，
   //   加上它會讓「測試檔被整批刪掉」這種最粗暴的作弊變成綠燈
   // - `pnpm test tests/unit/foo.test.ts`：把範圍縮限到剛好會過的那幾個檔
-  it.each(['lint', 'typecheck', 'test'])('pnpm %s 步驟只跑那一個指令', (script) => {
+  it.each(CHECKS)('pnpm %s 步驟只跑那一個指令', (script) => {
     expect(runOf(stepRunning(script)!).trim()).toBe(`pnpm ${script}`)
   })
 

@@ -59,6 +59,31 @@ function rowOf(sheet: Sheet, parameter: string) {
   return sheet.get(`[data-testid="water-dashboard-row"][data-parameter="${parameter}"]`)
 }
 
+/**
+ * 送出一個帶著 changedTouches 的觸控事件。
+ *
+ * happy-dom 的 TouchEvent 建構不出 changedTouches（唯讀），VTU 的 `trigger` 也塞不進去，
+ * 所以這裡自己組事件。回傳事件本身，好讓測試檢查 `defaultPrevented`——
+ * 「有沒有攔下原生捲動」正是 iPhone 上拖不動的關鍵之一。
+ */
+function dispatchTouch(
+  target: { element: Element },
+  type: 'touchstart' | 'touchmove' | 'touchend' | 'touchcancel',
+  clientY: number,
+  identifier = 0,
+): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  const touch = { identifier, clientY }
+  const ended = type === 'touchend' || type === 'touchcancel'
+
+  Object.defineProperty(event, 'changedTouches', { value: [touch] })
+  Object.defineProperty(event, 'touches', { value: ended ? [] : [touch] })
+
+  target.element.dispatchEvent(event)
+
+  return event
+}
+
 /** 把 bg-black/60 這種半透明 class 的透明度取出來 */
 function backdropOpacity(classes: string[]): number {
   const token = classes.find(name => /^bg-[a-z-]+\/\d+$/.test(name))
@@ -347,6 +372,166 @@ describe('WaterDashboardSheet — 三種關閉手勢', () => {
     await sheet.get('[data-testid="water-dashboard"]').trigger('keydown', { key: 'Escape' })
 
     expect(sheet.emitted('close')).toHaveLength(1)
+  })
+})
+
+// When 我向下拖曳把手 / Then bottom sheet 收合——這一組是「用手指」的版本。
+//
+// 上一輪只綁 pointer events，滑鼠（桌機 Safari / Chrome / Firefox）都正常，
+// 但 iPhone Safari 拖不動：WebKit 的手勢辨識器一旦認定這段垂直位移屬於捲動，
+// 就會把觸控指標收走並補一個 pointercancel，拖曳於是無聲地死在半路。
+describe('WaterDashboardSheet — 觸控拖曳把手（iPhone Safari）', () => {
+  it('手指向下拖曳超過門檻送出 close', async () => {
+    const sheet = await mountSheet()
+    const handle = sheet.get('[data-testid="water-dashboard-handle"]')
+    const root = sheet.get('[data-testid="water-dashboard"]')
+
+    dispatchTouch(handle, 'touchstart', 100)
+    dispatchTouch(root, 'touchmove', 160)
+    dispatchTouch(root, 'touchmove', 200)
+    dispatchTouch(root, 'touchend', 220)
+    await nextTick()
+
+    expect(sheet.emitted('close')).toHaveLength(1)
+  })
+
+  it('拖曳中面板跟著手指走，短拖放開後彈回原位', async () => {
+    const sheet = await mountSheet()
+    const handle = sheet.get('[data-testid="water-dashboard-handle"]')
+    const root = sheet.get('[data-testid="water-dashboard"]')
+    const panel = sheet.get('[data-testid="water-dashboard-sheet"]')
+
+    dispatchTouch(handle, 'touchstart', 100)
+    dispatchTouch(root, 'touchmove', 112)
+    await nextTick()
+
+    expect(panel.attributes('style')).toContain('translateY(12px)')
+
+    dispatchTouch(root, 'touchend', 112)
+    await nextTick()
+
+    expect(sheet.emitted('close')).toBeUndefined()
+    expect(panel.attributes('style') ?? '').not.toContain('translateY(12px)')
+  })
+
+  // 這就是 review 回報的症狀本體
+  it('拖曳途中收到觸控的 pointercancel 仍然完成手勢', async () => {
+    const sheet = await mountSheet()
+    const handle = sheet.get('[data-testid="water-dashboard-handle"]')
+    const root = sheet.get('[data-testid="water-dashboard"]')
+
+    dispatchTouch(handle, 'touchstart', 100)
+    dispatchTouch(root, 'touchmove', 150)
+
+    // WebKit 把觸控指標收走
+    await root.trigger('pointercancel', { pointerType: 'touch' })
+
+    // 手指還在螢幕上，繼續往下拖到門檻外
+    dispatchTouch(root, 'touchmove', 200)
+    dispatchTouch(root, 'touchend', 220)
+    await nextTick()
+
+    expect(sheet.emitted('close')).toHaveLength(1)
+  })
+
+  // iPhone 會同時送出 pointer 與 touch 兩組事件；兩條路徑都算一次就會關兩次
+  it('pointer 與 touch 事件同時送出時只送出一次 close', async () => {
+    const sheet = await mountSheet()
+    const handle = sheet.get('[data-testid="water-dashboard-handle"]')
+    const root = sheet.get('[data-testid="water-dashboard"]')
+
+    await handle.trigger('pointerdown', { pointerType: 'touch', clientY: 100 })
+    dispatchTouch(handle, 'touchstart', 100)
+    await root.trigger('pointermove', { pointerType: 'touch', clientY: 200 })
+    dispatchTouch(root, 'touchmove', 200)
+    await root.trigger('pointerup', { pointerType: 'touch', clientY: 220 })
+    dispatchTouch(root, 'touchend', 220)
+    await nextTick()
+
+    expect(sheet.emitted('close')).toHaveLength(1)
+  })
+
+  // 不攔下原生行為，Safari 會把這段垂直位移拿去捲頁面 / 做邊緣回彈
+  it('拖曳中的 touchmove 攔下原生捲動', async () => {
+    const sheet = await mountSheet()
+    const handle = sheet.get('[data-testid="water-dashboard-handle"]')
+    const root = sheet.get('[data-testid="water-dashboard"]')
+
+    dispatchTouch(handle, 'touchstart', 100)
+    const moved = dispatchTouch(root, 'touchmove', 160)
+    await nextTick()
+
+    expect(moved.defaultPrevented).toBe(true)
+  })
+
+  // 反面：沒按住把手時不該攔，不然六列內容就捲不動了
+  it('沒有按住把手的 touchmove 不攔原生捲動', async () => {
+    const sheet = await mountSheet()
+    const root = sheet.get('[data-testid="water-dashboard"]')
+
+    const moved = dispatchTouch(root, 'touchmove', 160)
+    await nextTick()
+
+    expect(moved.defaultPrevented).toBe(false)
+    expect(sheet.get('[data-testid="water-dashboard-sheet"]').attributes('style') ?? '')
+      .not.toContain('translateY')
+  })
+
+  it('手指向上拖曳不關閉，面板也不跟著往上跑', async () => {
+    const sheet = await mountSheet()
+    const handle = sheet.get('[data-testid="water-dashboard-handle"]')
+    const root = sheet.get('[data-testid="water-dashboard"]')
+
+    dispatchTouch(handle, 'touchstart', 200)
+    dispatchTouch(root, 'touchmove', 40)
+    await nextTick()
+
+    expect(sheet.get('[data-testid="water-dashboard-sheet"]').attributes('style') ?? '')
+      .not.toContain('translateY(-')
+
+    dispatchTouch(root, 'touchend', 40)
+    await nextTick()
+
+    expect(sheet.emitted('close')).toBeUndefined()
+  })
+
+  // 來電、系統手勢接管：當作沒拖過，不要留在半路
+  it('touchcancel 放棄拖曳，不關閉也不留下位移', async () => {
+    const sheet = await mountSheet()
+    const handle = sheet.get('[data-testid="water-dashboard-handle"]')
+    const root = sheet.get('[data-testid="water-dashboard"]')
+    const panel = sheet.get('[data-testid="water-dashboard-sheet"]')
+
+    dispatchTouch(handle, 'touchstart', 100)
+    dispatchTouch(root, 'touchmove', 200)
+    dispatchTouch(root, 'touchcancel', 200)
+    await nextTick()
+
+    expect(sheet.emitted('close')).toBeUndefined()
+    expect(panel.attributes('style') ?? '').not.toContain('translateY')
+  })
+
+  // 拖曳中另一根手指落在畫面上，不該把追蹤的座標換過去
+  it('第二根手指的移動不影響正在追蹤的那一根', async () => {
+    const sheet = await mountSheet()
+    const handle = sheet.get('[data-testid="water-dashboard-handle"]')
+    const root = sheet.get('[data-testid="water-dashboard"]')
+    const panel = sheet.get('[data-testid="water-dashboard-sheet"]')
+
+    dispatchTouch(handle, 'touchstart', 100)
+    dispatchTouch(root, 'touchmove', 120)
+    await nextTick()
+
+    // identifier 1 是另一根手指，位置再遠也不算這次拖曳
+    dispatchTouch(root, 'touchmove', 400, 1)
+    await nextTick()
+
+    expect(panel.attributes('style')).toContain('translateY(20px)')
+
+    dispatchTouch(root, 'touchend', 400, 1)
+    await nextTick()
+
+    expect(sheet.emitted('close')).toBeUndefined()
   })
 })
 

@@ -583,6 +583,44 @@ test.describe('數據儀表板', () => {
     await expect(page.getByTestId('water-dashboard')).toHaveCount(0)
   })
 
+  // 同一個手勢改用「手指」再走一次。
+  //
+  // iPhone Safari 上原本拖不動：WebKit 的手勢辨識器拖到一半會收走觸控指標並補一個
+  // pointercancel，只綁 pointer events 的話拖曳就死在半路（滑鼠不走那條路，所以桌機都正常）。
+  // 這裡只跑 Chromium（見 playwright.config.ts），重現不了 WebKit 的收走時機，
+  // 守住的是「觸控走的是 touch events，而且拖過門檻真的會關」。
+  test.describe('觸控', () => {
+    test.use({ hasTouch: true })
+
+    test('用手指向下拖曳把手收合', async ({ page, browserName }) => {
+      test.skip(browserName !== 'chromium', 'Input.dispatchTouchEvent 只有 Chromium 的 CDP 有')
+
+      await openDashboard(page)
+
+      const handle = (await page.getByTestId('water-dashboard-handle').boundingBox())!
+      const x = handle.x + handle.width / 2
+      const y = handle.y + handle.height / 2
+
+      const cdp = await page.context().newCDPSession(page)
+
+      // touchEnd 的 touchPoints 必須是空的，CDP 才收
+      const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', offsetY: number) =>
+        cdp.send('Input.dispatchTouchEvent', {
+          type,
+          touchPoints: type === 'touchEnd' ? [] : [{ x, y: y + offsetY }],
+        })
+
+      await touch('touchStart', 0)
+      // 分幾步移動，讓 touchmove 真的送得出來
+      await touch('touchMove', 40)
+      await touch('touchMove', 120)
+      await touch('touchMove', 180)
+      await touch('touchEnd', 180)
+
+      await expect(page.getByTestId('water-dashboard')).toHaveCount(0)
+    })
+  })
+
   // Given 儀表板已展開 / When 我點擊底部的「＋ 記錄水質」主要按鈕
   // Then bottom sheet 關閉並導向「記錄水質」頁面
   test('「＋ 記錄水質」關閉儀表板並導向記錄水質頁', async ({ page }) => {

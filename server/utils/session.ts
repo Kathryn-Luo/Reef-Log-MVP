@@ -10,8 +10,14 @@
 // 刻意「不」自行實作密封：手寫簽章 / 加密是新增一份沒人 review 過的密碼學程式碼，
 // 比等一個已核准的套件差得多。
 
-/** 密封 cookie 的內容。刻意就這兩個欄位，不放個人資料。 */
-export interface SessionPayload {
+/**
+ * 密封 cookie 的內容。刻意就這兩個欄位，不放個人資料。
+ *
+ * 寫成 type 而不是 interface 是有原因的：`replaceUserSession()` 收的型別帶有索引簽章
+ * （`UserSession` 上的 `[key: string]: unknown`），而 interface 不會被視為滿足索引簽章，
+ * type alias 才會。用 interface 的話這個 payload 傳不進去。
+ */
+export type SessionPayload = {
   /** User.id。要 email / displayName 時以它查資料庫，不放進 cookie。 */
   userId: string
   /** 到期時間（Unix 秒）。 */

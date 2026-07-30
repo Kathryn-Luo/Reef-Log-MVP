@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient } from '@prisma/client'
-import { resolveGoogleLogin } from '../../../server/utils/googleLogin'
+import { resolveGoogleLogin, toGoogleProfile } from '../../../server/utils/googleLogin'
 
 // Google 登入的「查／建帳號」分支（issue #64 的 Story ① 與 ②）。
 //
@@ -27,6 +27,61 @@ const PROFILE = {
   email: 'diver@example.com',
   name: '潛水的人',
 }
+
+// `defineOAuthGoogleEventHandler` 的 onSuccess 拿到的 `user` 是 Google userinfo 端點的
+// 原始回應，型別上就是 `any`——TypeScript 在這個邊界上幫不了任何忙。把它交給 Prisma 之前
+// 先過一次這個函式，是為了「Google 給的東西長得不對」不會變成寫進資料庫的壞資料。
+describe('toGoogleProfile', () => {
+  it('取出 sub、email、name 三個欄位', () => {
+    expect(toGoogleProfile(PROFILE)).toEqual({
+      sub: 'google-sub-1',
+      email: 'diver@example.com',
+      name: '潛水的人',
+    })
+  })
+
+  // userinfo 還會回 picture、email_verified、locale 等等。它們沒有一個會被寫進資料庫，
+  // 所以在這一層就丟掉，而不是一路帶到 resolveGoogleLogin 才靠它自己記得不要用。
+  it('丟掉 picture 等用不到的欄位', () => {
+    const profile = toGoogleProfile({
+      ...PROFILE,
+      picture: 'https://example.com/avatar.png',
+      email_verified: true,
+      locale: 'zh-TW',
+    })
+
+    expect(Object.keys(profile ?? {}).sort()).toEqual(['email', 'name', 'sub'])
+  })
+
+  // sub 是唯一約束的一半，缺了它就無從決定「這是誰」——寧可整個登入失敗，
+  // 也不要拿空字串當 providerAccountId 建一列所有人都會撞在一起的 Account。
+  it('沒有可用的 sub 時回傳 null', () => {
+    expect(toGoogleProfile({ ...PROFILE, sub: undefined })).toBeNull()
+    expect(toGoogleProfile({ ...PROFILE, sub: '' })).toBeNull()
+    expect(toGoogleProfile({ ...PROFILE, sub: 12345 })).toBeNull()
+    expect(toGoogleProfile({})).toBeNull()
+  })
+
+  it('不是物件時回傳 null', () => {
+    expect(toGoogleProfile(undefined)).toBeNull()
+    expect(toGoogleProfile(null)).toBeNull()
+    expect(toGoogleProfile('google-sub-1')).toBeNull()
+  })
+
+  // User.email / User.displayName 都是 String?，缺了照樣登得進來（Story ① 已測過 null 的寫入）
+  it('email 或 name 缺漏、型別不對時一律收斂成 null', () => {
+    expect(toGoogleProfile({ sub: 'google-sub-1' })).toEqual({
+      sub: 'google-sub-1',
+      email: null,
+      name: null,
+    })
+    expect(toGoogleProfile({ sub: 'google-sub-1', email: 42, name: {} })).toEqual({
+      sub: 'google-sub-1',
+      email: null,
+      name: null,
+    })
+  })
+})
 
 describe('resolveGoogleLogin — 尚未註冊過的 Google 使用者', () => {
   // Story ①「Then 系統建立一位 User（email 取 Google 回傳的 email、displayName 取 name）」

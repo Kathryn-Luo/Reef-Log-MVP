@@ -11,7 +11,7 @@ export default defineEventHandler(async (event): Promise<TankHomeData> => {
     throw createError({ statusCode: 400, statusMessage: 'Missing tank id' })
   }
 
-  const user = await getCurrentUser(prisma)
+  const user = await getCurrentUser(event)
   const tanks = user ? await listTankOptions(prisma, user.id) : []
 
   if (!tanks.some(tank => tank.id === tankId)) {

@@ -12,7 +12,7 @@ export default defineEventHandler(async (event): Promise<CreatureDetailResponse>
     throw createError({ statusCode: 400, statusMessage: 'Missing creature id' })
   }
 
-  const user = await getCurrentUser(prisma)
+  const user = await getCurrentUser(event)
   const creature = user ? await getCreatureDetail(prisma, creatureId, user.id) : null
 
   if (!creature) {

@@ -8,29 +8,12 @@ import { readSessionPayload } from './session'
 // 不在此處 import 那個實例：函式因此可以在不連資料庫的情況下測試。
 
 /**
- * 當前使用者——**暫時**的實作：一律取最早建立的那一位（seed 的第一位使用者）。
- *
- * 取代它的是下面的 `getUserFromSession()`，但那一步要等 `nuxt-auth-utils` 裝上、
- * server 端解得開密封 cookie 才做得到（issue #64，見 PR 說明）。在那之前保留這個
- * 函式與它的六個呼叫端不動：現在就改掉的話，全站會變成「沒有人登入得了」，
- * 而登入本身還接不上——那不是把功能做完，是把 App 弄壞。
- *
- * @deprecated 密封 cookie 接上後改用 `getUserFromSession()`。
- */
-export function getCurrentUser(client: PrismaClient): Promise<User | null> {
-  return client.user.findFirst({
-    orderBy: { createdAt: 'asc' },
-  })
-}
-
-/**
  * 當前使用者——依密封 cookie 的內容取得，也就是「cookie 裡那個 userId 對應的那一位」，
- * 而不是 createdAt 最早的那一位。
+ * 而不是 createdAt 最早的那一位（認證導入前的暫時實作，已於 issue #64 移除）。
  *
- * `session` 收的是「解封之後的 payload」而不是 `H3Event`：解封需要 `nuxt-auth-utils`，
- * 由 server 路由那一層負責，這裡只管「拿到內容之後是誰」。等接線完成，各 handler 會是
- *
- *   const user = await getUserFromSession(prisma, await readSession(event), new Date())
+ * `session` 收的是「解封之後的 payload」而不是 `H3Event`：解封由 `nuxt-auth-utils`
+ * 在 server/utils/authContext.ts 那一層做掉，這裡只管「拿到內容之後是誰」。
+ * 各 handler 實際呼叫的是那一層的 `getCurrentUser(event)`。
  *
  * 沒有 session、簽章驗不過（解不開 → undefined）或已過期時回 null，
  * 而且**一次資料庫查詢都不會發出**——這正是第 2 節選密封 cookie 而不是 Session 表的

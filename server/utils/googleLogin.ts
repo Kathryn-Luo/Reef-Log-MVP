@@ -19,6 +19,36 @@ export interface GoogleProfile {
   name?: string | null
 }
 
+/**
+ * 把 Google userinfo 端點的原始回應收斂成 `GoogleProfile`，收不出來時回 null。
+ *
+ * `defineOAuthGoogleEventHandler` 的 `onSuccess` 拿到的 `user` 型別是 `any`——它就是
+ * `$fetch` 回來的東西，TypeScript 在這個邊界上幫不了任何忙。這一層的用處有兩個：
+ *
+ *   ① `sub` 是 `@@unique([provider, providerAccountId])` 的一半。少了它就無從決定
+ *      「這是誰」，此時寧可整段登入失敗，也不要拿空字串去建一列所有人都會撞在一起的 Account。
+ *   ② userinfo 還會回 `picture`、`email_verified`、`locale` 等等。它們一個都不會寫進
+ *      資料庫，在這裡就丟掉，而不是一路帶進 `resolveGoogleLogin` 再靠它記得不要用。
+ */
+export function toGoogleProfile(raw: unknown): GoogleProfile | null {
+  if (typeof raw !== 'object' || raw === null) {
+    return null
+  }
+
+  const { sub, email, name } = raw as Record<string, unknown>
+
+  if (typeof sub !== 'string' || sub === '') {
+    return null
+  }
+
+  // email / name 對應的 User 欄位都是 String?，缺漏或型別不對一律當成「Google 沒給」
+  return {
+    sub,
+    email: typeof email === 'string' ? email : null,
+    name: typeof name === 'string' ? name : null,
+  }
+}
+
 export interface GoogleLoginResult {
   userId: string
   /** 首次登入（順帶建了帳號）。首次登入引導是另一支子 issue，這裡只把事實回報出去。 */

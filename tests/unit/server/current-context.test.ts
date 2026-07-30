@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient } from '@prisma/client'
-import { getCurrentTank, getCurrentUser, getUserFromSession } from '../../../server/utils/currentContext'
+import { getCurrentTank, getUserFromSession } from '../../../server/utils/currentContext'
 import { buildSessionPayload } from '../../../server/utils/session'
 
 // 這個 job 連不到資料庫，Prisma Client 一律以假物件替身餵入（函式簽章刻意收 client 參數）
@@ -19,21 +19,18 @@ function fakeClient(overrides: {
   return client as unknown as PrismaClient & typeof client
 }
 
-describe('getCurrentUser', () => {
-  // 認證尚未實作，當前使用者一律取最早建立的那一位（seed 的第一位）
-  it('取最早建立的使用者', async () => {
-    const client = fakeClient({ user: { id: 'user-1' } })
-
-    await expect(getCurrentUser(client)).resolves.toEqual({ id: 'user-1' })
-    expect(client.user.findFirst).toHaveBeenCalledWith({
-      orderBy: { createdAt: 'asc' },
-    })
-  })
-
-  it('沒有任何使用者時回傳 null', async () => {
-    await expect(getCurrentUser(fakeClient({}))).resolves.toBeNull()
-  })
-})
+// 這裡原本還有一個 `getCurrentUser` 的 describe，驗的是認證導入前的暫時實作
+// 「一律取 createdAt 最早的那一位使用者」。那正是 Story ③ 要求換掉的行為
+// （「而不是 createdAt 最早的那一位」），函式本身也已從 currentContext.ts 移除，
+// 所以那兩個案例跟著移除，不是被跳過。
+//
+// 它們原本守的東西改由兩處接手：
+//   - 身分改從 session 來 → 下面的 getUserFromSession（案例更完整）
+//   - 舊查詢確實不再存在 → auth-wiring.test.ts「server 端不再有『取最早建立的那一位』的查詢」
+//
+// 取代它的 `getCurrentUser(event)` 在 server/utils/authContext.ts，只有一行、
+// 整行都是 Nitro 自動匯入（getUserSession / prisma），在這個環境裡 import 不進來——
+// 它有沒有被接上由 auth-wiring.test.ts 看原始碼守著。
 
 describe('getUserFromSession', () => {
   const now = new Date('2026-07-30T00:00:00.000Z')

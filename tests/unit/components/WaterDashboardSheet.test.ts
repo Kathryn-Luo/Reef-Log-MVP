@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import WaterDashboardSheet from '../../../app/components/WaterDashboardSheet.vue'
 import type { WaterSummaryDto } from '#shared/types/home'
@@ -32,12 +32,22 @@ const WATER: WaterSummaryDto = {
   ],
 }
 
-function mountSheet(props: {
+// 展開時會鎖住整份文件的捲動（見「背景頁面的捲動」那一組）。
+// 那把鎖掛在 document 上，是跨測試共用的狀態——留著沒收掉的儀表板會污染下一個測試。
+const mounted: { unmount: () => void }[] = []
+
+afterEach(() => {
+  while (mounted.length) {
+    mounted.pop()!.unmount()
+  }
+})
+
+async function mountSheet(props: {
   open?: boolean
   water?: WaterSummaryDto | null
   tankName?: string
 } = {}) {
-  return mountSuspended(WaterDashboardSheet, {
+  const sheet = await mountSuspended(WaterDashboardSheet, {
     route: '/',
     props: {
       open: true,
@@ -47,6 +57,10 @@ function mountSheet(props: {
       ...props,
     },
   })
+
+  mounted.push(sheet)
+
+  return sheet
 }
 
 type Sheet = Awaited<ReturnType<typeof mountSheet>>
@@ -464,12 +478,11 @@ describe('WaterDashboardSheet — 觸控拖曳把手（iPhone Safari）', () => 
     expect(moved.defaultPrevented).toBe(true)
   })
 
-  // 反面：沒按住把手時不該攔，不然六列內容就捲不動了
-  it('沒有按住把手的 touchmove 不攔原生捲動', async () => {
+  // 反面：手指落在數據區裡就不該攔，不然六列內容捲不動
+  // （這一輪 review 之後，數據區以外的 touchmove 改為一律攔下，見下面「背景頁面的捲動」）
+  it('數據區內、沒按住拖曳區的 touchmove 不攔原生捲動', async () => {
     const sheet = await mountSheet()
-    const root = sheet.get('[data-testid="water-dashboard"]')
-
-    const moved = dispatchTouch(root, 'touchmove', 160)
+    const moved = dispatchTouch(rowOf(sheet, 'KH'), 'touchmove', 160)
     await nextTick()
 
     expect(moved.defaultPrevented).toBe(false)
@@ -532,6 +545,162 @@ describe('WaterDashboardSheet — 觸控拖曳把手（iPhone Safari）', () => 
     await nextTick()
 
     expect(sheet.emitted('close')).toBeUndefined()
+  })
+})
+
+// review 第二輪：「請將拖曳範圍擴大到『數據儀表板』那一個標題區塊，以利使用者滑動」。
+// 那條 4px 的小灰線就算撐到 py-3 也只有指尖大小；把標題那一整塊都變成可拖曳的區域，
+// 手指落在哪裡都拖得動。
+describe('WaterDashboardSheet — 標題區塊也能拖曳', () => {
+  it('滑鼠從標題上往下拖超過門檻送出 close', async () => {
+    const sheet = await mountSheet()
+    const root = sheet.get('[data-testid="water-dashboard"]')
+
+    await sheet.get('[data-testid="water-dashboard-title"]').trigger('pointerdown', { clientY: 100 })
+    await root.trigger('pointermove', { clientY: 200 })
+    await root.trigger('pointerup', { clientY: 220 })
+
+    expect(sheet.emitted('close')).toHaveLength(1)
+  })
+
+  it('手指從副標上往下拖超過門檻送出 close', async () => {
+    const sheet = await mountSheet()
+    const root = sheet.get('[data-testid="water-dashboard"]')
+
+    dispatchTouch(sheet.get('[data-testid="water-dashboard-subtitle"]'), 'touchstart', 100)
+    dispatchTouch(root, 'touchmove', 200)
+    dispatchTouch(root, 'touchend', 220)
+    await nextTick()
+
+    expect(sheet.emitted('close')).toHaveLength(1)
+  })
+
+  it('把手與標題落在同一個可拖曳區塊裡', async () => {
+    const sheet = await mountSheet()
+    const zone = sheet.get('[data-testid="water-dashboard-drag-zone"]')
+
+    expect(zone.find('[data-testid="water-dashboard-handle"]').exists()).toBe(true)
+    expect(zone.find('[data-testid="water-dashboard-title"]').exists()).toBe(true)
+    expect(zone.find('[data-testid="water-dashboard-subtitle"]').exists()).toBe(true)
+
+    // touch-none 是把垂直手勢從瀏覽器手上要回來，整塊拖曳區都需要
+    expect(zone.classes()).toContain('touch-none')
+  })
+
+  // ✕ 在標題區塊裡面。按著它微微移動是「手抖」，不是要拖動面板
+  it('按住 ✕ 不會拖動面板', async () => {
+    const sheet = await mountSheet()
+    const root = sheet.get('[data-testid="water-dashboard"]')
+
+    await sheet.get('[data-testid="water-dashboard-close"]').trigger('pointerdown', { clientY: 100 })
+    await root.trigger('pointermove', { clientY: 200 })
+
+    expect(sheet.get('[data-testid="water-dashboard-sheet"]').attributes('style') ?? '')
+      .not.toContain('translateY')
+
+    await root.trigger('pointerup', { clientY: 220 })
+
+    // 沒有 click，就沒有關閉——關閉的是點擊，不是這段位移
+    expect(sheet.emitted('close')).toBeUndefined()
+  })
+
+  it('手指按住 ✕ 也不會拖動面板', async () => {
+    const sheet = await mountSheet()
+    const root = sheet.get('[data-testid="water-dashboard"]')
+
+    dispatchTouch(sheet.get('[data-testid="water-dashboard-close"]'), 'touchstart', 100)
+    dispatchTouch(root, 'touchmove', 200)
+    await nextTick()
+
+    expect(sheet.get('[data-testid="water-dashboard-sheet"]').attributes('style') ?? '')
+      .not.toContain('translateY')
+
+    dispatchTouch(root, 'touchend', 220)
+    await nextTick()
+
+    expect(sheet.emitted('close')).toBeUndefined()
+  })
+})
+
+// review 第二輪：「展開數據儀表板時，原本的頁面應該要將 scroll 行為停止」。
+//
+// 兩條路要一起堵：桌機的滾輪 / 捲軸走 CSS（整份文件 overflow: hidden），
+// iOS Safari 的手指走 touchmove——那裡 overflow: hidden 擋不住從遮罩接力到背景頁面的捲動。
+describe('WaterDashboardSheet — 背景頁面的捲動', () => {
+  it('展開時鎖住整份文件的捲動', async () => {
+    await mountSheet()
+
+    expect(document.documentElement.style.overflow).toBe('hidden')
+  })
+
+  it('收合後把捲動還回去', async () => {
+    const sheet = await mountSheet()
+
+    await sheet.setProps({ open: false })
+
+    expect(document.documentElement.style.overflow).toBe('')
+  })
+
+  it('open 為 false 時不鎖', async () => {
+    await mountSheet({ open: false })
+
+    expect(document.documentElement.style.overflow).toBe('')
+  })
+
+  // 換缸、離開首頁時儀表板連同頁面一起消失，鎖不能跟著留下來
+  it('展開中被卸載也把捲動還回去', async () => {
+    const sheet = await mountSheet()
+
+    sheet.unmount()
+
+    expect(document.documentElement.style.overflow).toBe('')
+  })
+
+  // iOS：遮罩上的手指位移會被接力去捲背景頁面，得攔下來
+  it('遮罩上的 touchmove 攔下原生捲動', async () => {
+    const sheet = await mountSheet()
+    const moved = dispatchTouch(sheet.get('[data-testid="water-dashboard-backdrop"]'), 'touchmove', 160)
+    await nextTick()
+
+    expect(moved.defaultPrevented).toBe(true)
+  })
+
+  // 「數據儀表板」標題區塊與下方的「記錄水質」也不該滑得動
+  it('標題區塊與底部按鈕上的 touchmove 攔下原生捲動', async () => {
+    const sheet = await mountSheet()
+
+    const onTitle = dispatchTouch(sheet.get('[data-testid="water-dashboard-title"]'), 'touchmove', 160)
+    const onAction = dispatchTouch(sheet.get('[data-testid="water-dashboard-log"]'), 'touchmove', 160)
+    await nextTick()
+
+    expect(onTitle.defaultPrevented).toBe(true)
+    expect(onAction.defaultPrevented).toBe(true)
+  })
+})
+
+// review 第二輪：「留意數據儀表板內的資料項目，需保留若欄位新增時的可滑動性。
+// 只讓滑動範圍侷限在數據的區域中」
+describe('WaterDashboardSheet — 可捲動的只有數據區', () => {
+  it('六列在捲動容器裡，標題區塊與「記錄水質」在外面', async () => {
+    const sheet = await mountSheet()
+    const scroller = sheet.get('[data-testid="water-dashboard-scroll"]')
+
+    expect(scroller.findAll('[data-testid="water-dashboard-row"]')).toHaveLength(6)
+    expect(scroller.find('[data-testid="water-dashboard-title"]').exists()).toBe(false)
+    expect(scroller.find('[data-testid="water-dashboard-handle"]').exists()).toBe(false)
+    expect(scroller.find('[data-testid="water-dashboard-log"]').exists()).toBe(false)
+  })
+
+  it('數據區自己捲，捲到底也不把捲動接力給背景頁面', async () => {
+    const scroller = (await mountSheet()).get('[data-testid="water-dashboard-scroll"]')
+
+    expect(scroller.classes()).toContain('overflow-y-auto')
+    expect(scroller.classes()).toContain('overscroll-contain')
+
+    // 面板高度封頂之後，多出來的高度要由這一段吸收（flex-1）；
+    // min-h-0 少了的話 flex 子項撐不下去，捲動容器會把面板頂破
+    expect(scroller.classes()).toContain('flex-1')
+    expect(scroller.classes()).toContain('min-h-0')
   })
 })
 

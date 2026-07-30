@@ -42,7 +42,20 @@ function statusClass(status: ReadingStatus | null): string {
   return status ? STATUS_CLASSES[status] : 'text-dimmed'
 }
 
-// ── 向下拖曳把手關閉 ───────────────────────────────────────────
+// ── 背景頁面的捲動 ───────────────────────────────────────────
+//
+// 展開時把底下那份文件鎖住，不然手指在遮罩上滑動會捲到背景頁面。
+// CSS 的鎖只擋得住滾輪與捲軸，iOS 的手指還要靠下面 touchmove 的 preventDefault。
+useScrollLock(computed(() => props.open))
+
+/** 唯一捲得動的那一段：六列數據。標題區塊與底部的「記錄水質」不在裡面 */
+const SCROLL_AREA = '[data-testid="water-dashboard-scroll"]'
+
+function isInsideScrollArea(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(SCROLL_AREA) !== null
+}
+
+// ── 向下拖曳關閉 ─────────────────────────────────────────────
 //
 // 拖到這個距離放開才算「要關掉」。太短會讓輕輕一碰就關掉，
 // 太長則要拖過半個畫面，兩者都很難用。
@@ -158,14 +171,20 @@ function startTouchDrag(event: TouchEvent) {
 function moveTouchDrag(event: TouchEvent) {
   const touch = trackedTouch(event)
 
+  // cancelable 為 false 代表瀏覽器已經決定要捲，攔也沒用
   if (!touch) {
+    // 沒在拖曳的手指：只有數據區那一段該滑得動（欄位變多時仍要捲得到最後一列）。
+    // 其餘位置的垂直位移在 iOS 上會被接力去捲背景頁面——`overflow: hidden` 攔不住它，
+    // 只有在這裡 preventDefault 才停得下來。
+    if (!isInsideScrollArea(event.target) && event.cancelable) {
+      event.preventDefault()
+    }
+
     return
   }
 
-  // 把手上的 touch-action: none 只擋住手勢的起點；不在這裡攔下原生行為，
+  // 拖曳區上的 touch-action: none 只擋住手勢的起點；不在這裡攔下原生行為，
   // Safari 還是會把這段位移拿去捲頁面或做邊緣回彈。
-  // 攔的前提是這一根手指真的按在把手上（上面的 trackedTouch 就是在問這件事），
-  // 否則六列內容就捲不動了。cancelable 為 false 代表瀏覽器已經決定要捲，攔也沒用。
   if (event.cancelable) {
     event.preventDefault()
   }
@@ -257,54 +276,74 @@ watch(() => props.open, async (open) => {
       class="absolute inset-x-0 bottom-0 mx-auto flex max-h-[92dvh] max-w-2xl flex-col rounded-t-3xl border-t border-default bg-default pb-[env(safe-area-inset-bottom)]"
     >
       <!--
-        把手：touch-none 讓瀏覽器把垂直手勢交給我們，不然拖曳會被解讀成捲動。
-        點擊區域比那條小灰線大得多——只有 4px 高的話根本抓不到。
+        可拖曳的一整塊：把手加上標題區塊。
+        只有那條小灰線的話拖曳起點跟指尖差不多大，抓不太到；標題這一整塊都收下來，
+        手指落在哪裡都拖得動（把手仍然畫著，它是「這裡可以拖」的提示）。
+        touch-none 讓瀏覽器把垂直手勢交給我們，不然拖曳會被解讀成捲動；
+        select-none 則是不讓滑鼠拖曳順手把標題選起來。
       -->
       <div
-        data-testid="water-dashboard-handle"
-        class="grid touch-none place-items-center py-3"
+        data-testid="water-dashboard-drag-zone"
+        class="shrink-0 touch-none select-none"
         @pointerdown="startPointerDrag"
         @touchstart="startTouchDrag"
       >
-        <span
-          class="h-1 w-10 rounded-full bg-accented"
-          aria-hidden="true"
-        />
-      </div>
-
-      <header class="flex items-start justify-between gap-4 px-6 pb-4">
-        <div class="min-w-0">
-          <h2
-            :id="titleId"
-            data-testid="water-dashboard-title"
-            class="text-2xl font-bold"
-          >
-            數據儀表板
-          </h2>
-          <p
-            data-testid="water-dashboard-subtitle"
-            class="mt-1 truncate text-sm text-dimmed"
-          >
-            {{ subtitle }}
-          </p>
+        <div
+          data-testid="water-dashboard-handle"
+          class="grid place-items-center py-3"
+        >
+          <span
+            class="h-1 w-10 rounded-full bg-accented"
+            aria-hidden="true"
+          />
         </div>
 
-        <button
-          data-testid="water-dashboard-close"
-          type="button"
-          aria-label="關閉"
-          class="grid size-10 shrink-0 place-items-center rounded-full bg-elevated text-muted transition-colors hover:text-default"
-          @click="emit('close')"
-        >
-          <UIcon
-            name="i-lucide-x"
-            class="size-5"
-          />
-        </button>
-      </header>
+        <header class="flex items-start justify-between gap-4 px-6 pb-4">
+          <div class="min-w-0">
+            <h2
+              :id="titleId"
+              data-testid="water-dashboard-title"
+              class="text-2xl font-bold"
+            >
+              數據儀表板
+            </h2>
+            <p
+              data-testid="water-dashboard-subtitle"
+              class="mt-1 truncate text-sm text-dimmed"
+            >
+              {{ subtitle }}
+            </p>
+          </div>
 
-      <!-- 六列固定到齊，列數多到超過畫面時只捲這一段，標題與底部按鈕留著 -->
-      <ul class="min-h-0 flex-1 overflow-y-auto px-6">
+          <!--
+            ✕ 也在拖曳區裡，但按住它不該是「要拖動面板」——
+            stop 讓這裡按下的手指 / 滑鼠不會啟動拖曳，點擊照常關閉。
+          -->
+          <button
+            data-testid="water-dashboard-close"
+            type="button"
+            aria-label="關閉"
+            class="grid size-10 shrink-0 place-items-center rounded-full bg-elevated text-muted transition-colors hover:text-default"
+            @pointerdown.stop
+            @touchstart.stop
+            @click="emit('close')"
+          >
+            <UIcon
+              name="i-lucide-x"
+              class="size-5"
+            />
+          </button>
+        </header>
+      </div>
+
+      <!--
+        六列固定到齊，列數多到超過畫面時只捲這一段——標題區塊與底部按鈕留在原位。
+        overscroll-contain：捲到頭或到底時不把剩下的位移接力給背景頁面。
+      -->
+      <ul
+        data-testid="water-dashboard-scroll"
+        class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6"
+      >
         <li
           v-for="row in rows"
           :key="row.parameter"
@@ -384,7 +423,7 @@ watch(() => props.open, async (open) => {
         主要行動：關閉儀表板並前往記錄水質。
         用連結而不是按鈕＋navigateTo：右鍵開新分頁、長按預覽這些瀏覽器原生行為才留得住。
       -->
-      <div class="px-6 pb-6 pt-4">
+      <div class="shrink-0 px-6 pb-6 pt-4">
         <NuxtLink
           data-testid="water-dashboard-log"
           to="/log"

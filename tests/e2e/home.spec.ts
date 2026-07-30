@@ -583,6 +583,78 @@ test.describe('數據儀表板', () => {
     await expect(page.getByTestId('water-dashboard')).toHaveCount(0)
   })
 
+  // review 第二輪：把手那條小灰線太細，拖曳範圍擴大到「數據儀表板」標題區塊
+  test('從標題區塊向下拖曳也能收合', async ({ page }) => {
+    await openDashboard(page)
+
+    const title = (await page.getByTestId('water-dashboard-title').boundingBox())!
+    const startX = title.x + title.width / 2
+    const startY = title.y + title.height / 2
+
+    await page.mouse.move(startX, startY)
+    await page.mouse.down()
+    await page.mouse.move(startX, startY + 80, { steps: 8 })
+    await page.mouse.move(startX, startY + 160, { steps: 8 })
+    await page.mouse.up()
+
+    await expect(page.getByTestId('water-dashboard')).toHaveCount(0)
+  })
+
+  // review 第二輪：展開時原本的頁面要停止捲動，不能在遮罩後面跟著動
+  test('展開時背景頁面捲不動，收合後恢復', async ({ page }) => {
+    await page.goto('/')
+    await scrollTo(page, 400)
+
+    const before = await page.evaluate(() => window.scrollY)
+
+    await page.getByTestId('water-summary-card').click()
+    await expect(page.getByTestId('water-dashboard-sheet')).toBeVisible()
+
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).overflowY))
+      .toBe('hidden')
+
+    await page.mouse.wheel(0, 600)
+    expect(await page.evaluate(() => window.scrollY)).toBe(before)
+
+    // 背景仍在原本的捲動位置，所以收合後看到的是同一個畫面
+    await page.getByTestId('water-dashboard-close').click()
+    await expect(page.getByTestId('water-dashboard')).toHaveCount(0)
+    expect(await page.evaluate(() => window.scrollY)).toBe(before)
+
+    // 鎖解開了，滾輪又推得動頁面
+    await page.mouse.wheel(0, 600)
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(before)
+  })
+
+  // review 第二輪：可滑動的只有數據那一段，標題區塊與「記錄水質」不跟著滑
+  test.describe('數據多到超過畫面', () => {
+    // 矮一點的畫面才逼得出捲動——六列在 844 高的 iPhone 上塞得下
+    test.use({ viewport: { width: 390, height: 480 } })
+
+    test('只有數據區捲動，標題與「記錄水質」留在原位', async ({ page }) => {
+      await openDashboard(page)
+
+      const scroller = page.getByTestId('water-dashboard-scroll')
+      expect(await scroller.evaluate(element => element.scrollHeight > element.clientHeight + 1))
+        .toBe(true)
+
+      const titleBefore = (await page.getByTestId('water-dashboard-title').boundingBox())!.y
+      const actionBefore = (await page.getByTestId('water-dashboard-log').boundingBox())!.y
+
+      await scroller.evaluate(element => element.scrollBy(0, 400))
+      await expect.poll(() => scroller.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
+
+      // 捲得到最後一列，標題與底部按鈕卻沒有移動
+      await expect(page.locator('[data-testid="water-dashboard-row"][data-parameter="SALINITY"]'))
+        .toBeInViewport()
+      expect((await page.getByTestId('water-dashboard-title').boundingBox())!.y).toBe(titleBefore)
+      expect((await page.getByTestId('water-dashboard-log').boundingBox())!.y).toBe(actionBefore)
+
+      // 數據區捲動不會連帶捲到背景頁面
+      expect(await page.evaluate(() => window.scrollY)).toBe(0)
+    })
+  })
+
   // 同一個手勢改用「手指」再走一次。
   //
   // iPhone Safari 上原本拖不動：WebKit 的手勢辨識器拖到一半會收走觸控指標並補一個

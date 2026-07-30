@@ -1,4 +1,5 @@
 import type { CreateTankInput } from '../types/tank'
+import { isDateOnly } from './dateInput'
 
 // 建立缸表單的欄位規則。表單（app/pages/tanks/new.vue）與寫入 API
 // （server/api/tanks/index.post.ts）共用這一支：規則只寫一次，
@@ -29,8 +30,6 @@ const VOLUME_MAX_LITERS = 100_000
 
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
 
-const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/
-
 export type ParseTankInputResult
   = | { ok: true, value: CreateTankInput }
     | { ok: false, message: string }
@@ -60,9 +59,8 @@ function parseVolume(raw: unknown): { ok: true, value: number | null } | { ok: f
 
 /**
  * 開缸日期。日期選擇器交出來的是 `YYYY-MM-DD`，留白視為沒填。
- *
- * 正規表達式過了還要再比對一次年月日，因為 `new Date('2025-02-30')` 會自己
- * 滾成 3/2 而不是報錯——格式對、日子不存在的輸入得在這裡擋下來。
+ * 「是不是一個實際存在的日期」交給 shared/utils/dateInput.ts，與生物詳情的
+ * 發病日 / 死亡日問的是同一件事。
  */
 function parseStartedOn(raw: unknown): { ok: true, value: string | null } | { ok: false, message: string } {
   const text = toTrimmedText(raw)
@@ -71,23 +69,9 @@ function parseStartedOn(raw: unknown): { ok: true, value: string | null } | { ok
     return { ok: true, value: null }
   }
 
-  const matched = ISO_DATE.exec(text)
-
-  if (matched) {
-    const [, year, month, day] = matched as unknown as [string, string, string, string]
-    const date = new Date(`${text}T00:00:00.000Z`)
-
-    if (
-      !Number.isNaN(date.getTime())
-      && date.getUTCFullYear() === Number(year)
-      && date.getUTCMonth() + 1 === Number(month)
-      && date.getUTCDate() === Number(day)
-    ) {
-      return { ok: true, value: text }
-    }
-  }
-
-  return { ok: false, message: '開缸日期請選擇一個實際存在的日期。' }
+  return isDateOnly(text)
+    ? { ok: true, value: text }
+    : { ok: false, message: '開缸日期請選擇一個實際存在的日期。' }
 }
 
 /**

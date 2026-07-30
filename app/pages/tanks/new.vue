@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { CreateTankResponse } from '#shared/types/tank'
 import { TANK_COLOR_OPTIONS, parseTankInput } from '#shared/utils/tankForm'
+import { apiErrorMessage } from '#shared/utils/apiError'
 
 useSeoMeta({
   title: '新增缸 · ReefLog',
@@ -32,22 +33,6 @@ const canSubmit = computed(() => form.name.trim().length > 0)
 
 const GENERIC_ERROR = '建立失敗，請稍後再試。'
 
-/**
- * API 的錯誤訊息。說得出原因的失敗（例如「目前沒有可用的使用者」）都把可以直接
- * 顯示的中文放在 `createError` 的 `data.message`——statusMessage 過不了 h3 的
- * ASCII 過濾，讀它只會拿到 'No current user' 這種給不了使用者任何幫助的字串。
- * 連不上或 500 這類說不出原因的，退回通用訊息。
- *
- * 取值要往下鑽兩層：FetchError 的 `data` 是「整包回應內容」
- * （`{ statusCode, statusMessage, data }`），我們要的那則在它的 `data.message`。
- */
-function messageOf(cause: unknown): string {
-  const body = (cause as { data?: { data?: { message?: unknown } } })?.data
-  const message = body?.data?.message
-
-  return typeof message === 'string' && message.trim() ? message : GENERIC_ERROR
-}
-
 // disabled 的按鈕按不動，但表單仍可能被 Enter 送出，所以這裡不看 canSubmit，
 // 一律交給 parseTankInput 判斷並產生訊息
 async function submit() {
@@ -70,7 +55,7 @@ async function submit() {
     })
   }
   catch (cause) {
-    error.value = messageOf(cause)
+    error.value = apiErrorMessage(cause, GENERIC_ERROR)
     return
   }
   finally {

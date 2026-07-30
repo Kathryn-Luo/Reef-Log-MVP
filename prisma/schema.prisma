@@ -6,6 +6,15 @@
 //   screen-3 水質記錄                screen-7 保養提醒
 //   screen-4 趨勢圖
 //
+// Epic #47「登入與資料歸屬」追加 1 張截圖：
+//   screen-1（#47）登入畫面 00a——「使用 Google 繼續」／「以訪客身分瀏覽」，
+//                  副標題「目前 Google + 訪客 · 其他方式預留」
+//   → 新增 Account model 與 AuthProvider enum；User.email 改為 nullable 且不再唯一。
+//   → session 策略是密封 cookie（內容只有 { userId, exp }，驗簽即得身分、不查 DB），
+//     所以刻意「不」建 Session model——這是 #47 已定案的取捨，不是漏掉。
+//
+// 以下註解中未特別標註的 screen-N 一律指 Epic #1 的截圖；#47 的那一張寫成 screen-1（#47）。
+//
 // 慣例依 docs/SCHEMA_GUIDE.md：model 單數 PascalCase、欄位 camelCase、
 // 主鍵 cuid()、每個 model 都有 createdAt / updatedAt、金額與量測值用 Decimal。
 //
@@ -31,20 +40,94 @@ generator client {
 }
 
 // ─────────────────────────────────────────────
-// 使用者與缸
+// 使用者與認證
 // ─────────────────────────────────────────────
 
-/// 一位使用者可有多個缸（screen-1 上方缸名旁的 ∨ 可切換）。
-/// 註：認證機制尚未決定，這裡只放缸歸屬所需的最小欄位。
+/// 一位使用者可有多個缸（Epic #1 screen-1 上方缸名旁的 ∨ 可切換）。
+///
+/// 身分識別「不在」這張表上，而在 Account：一位使用者可以有多種登入方式，
+/// User 只放跨登入方式共用的個人資料。所有資料歸屬都以 User.id 為根——
+/// 缸掛在 User 之下，生物 / 水質 / 保養再掛在缸之下，因此 server 端的授權
+/// 一律是「先確認該缸屬於當前使用者」，不需要把 userId 反正規化到每張表。
 model User {
-  id          String   @id @default(cuid())
-  email       String   @unique
-  displayName String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id String @id @default(cuid())
 
-  tanks Tank[]
+  /// Google 回傳的 email；訪客帳號用固定的示範信箱。
+  ///
+  /// 由 `String @unique` 改成 `String?`（可為 null、不唯一），兩個改動各自的理由：
+  ///   - 可為 null：email 不再是身分來源（身分是 Account 的
+  ///     (provider, providerAccountId)），而「其他方式預留」的登入方式不保證
+  ///     給得出 email（例如 Apple 的隱藏信箱）。
+  ///   - 移除 @unique：同一個 email 從第二種登入方式進來時，唯一約束會讓
+  ///     資料庫直接丟 P2002 而中斷登入。「兩個登入方式要不要併成同一位使用者」
+  ///     （account linking）是產品決策，不該用一個只會 500 的 DB 約束代替。
+  ///     MVP 不做 linking：不同 provider 帳號就是不同使用者。
+  email String?
+
+  /// 顯示名稱。Google 登入取回傳的 name；訪客固定為「訪客」。
+  displayName String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts Account[]
+  tanks    Tank[]
 }
+
+/// 一組「登入方式 ↔ 使用者」的對應——screen-1（#47）的兩顆按鈕各對應一種 provider。
+///
+/// 採 Epic #47「涉及的資料模型」列出的做法 B（人類指定，理由是 MVP 可能新增
+/// 其他登入項目）。做法 A（User.googleId）改動更小，但加第二家 provider 就得再動
+/// 一次 schema；而 screen-1 的副標題「其他方式預留」已經把那件事畫在畫面上了，
+/// 所以這一張不算「無畫面對應的預留」。
+///
+/// 登入流程：以 (provider, providerAccountId) 查這張表——
+///   查到 → 取 userId 發 session；查不到 → 建 User + Account（首次登入自動建帳號）。
+///
+/// 刻意「不」存 access / refresh token：登入完成後不再呼叫 Google 的 API，
+/// 存了只是多一份得保護的機密資料。
+model Account {
+  id     String @id @default(cuid())
+  userId String
+
+  provider AuthProvider
+
+  /// provider 端那個帳號的穩定識別碼：
+  ///   GOOGLE → OIDC 的 sub（不是 email——email 可以變更，sub 不會）
+  ///   GUEST  → 固定字串（訪客只有一個共用的示範帳號，見 prisma/seed.ts）
+  providerAccountId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// 登入時唯一的查詢路徑，同時保證同一個 provider 帳號不會掛到兩位使用者身上。
+  /// 訪客帳號的「只有一個」也由這條約束提供：GUEST 的 providerAccountId 是固定值。
+  @@unique([provider, providerAccountId])
+
+  /// 刻意「不」加 @@unique([userId, provider])：那會禁止同一位使用者掛兩個 Google
+  /// 帳號，而目前沒有畫面需要這個限制。
+  ///
+  /// FK 欄位的索引 Prisma 不會自動建。這裡需要它是為了刪除使用者時的 cascade——
+  /// Postgres 不會替 referencing 欄位建索引，少了它每刪一位使用者就全表掃一次。
+  @@index([userId])
+}
+
+/// 登入方式。screen-1（#47）只有兩顆按鈕：「使用 Google 繼續」「以訪客身分瀏覽」。
+/// 副標題寫「其他方式預留」，但 enum 加值是無痛 migration，所以現在不預列。
+enum AuthProvider {
+  GOOGLE
+
+  /// 共用的示範帳號（seed 資料的擁有者）。
+  /// Vercel preview 無法逐 branch 去 Google Console 登記 redirect URI，
+  /// 所以訪客是 preview 與 E2E 唯一走得通的登入路徑，不只是便利功能。
+  GUEST
+}
+
+// ─────────────────────────────────────────────
+// 缸
+// ─────────────────────────────────────────────
 
 /// screen-1 / 3 / 4 / 7 頁首共用：「主缸 · 4 尺」「SPS MIXED · 420L」與左側色塊。
 model Tank {

@@ -1,5 +1,8 @@
 # Nuxt
 .nuxt
+# 由 @nuxt/test-utils 等模組在本機跑 test / typecheck 時自動寫入，內容是機器產生的
+# setups 記錄，各人不同也不需共用
+.nuxtrc
 .nitro
 .cache
 .output

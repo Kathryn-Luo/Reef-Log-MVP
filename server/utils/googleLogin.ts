@@ -73,7 +73,7 @@ export async function resolveGoogleLogin(
   client: PrismaClient,
   profile: GoogleProfile,
 ): Promise<GoogleLoginResult> {
-  const existing = await client.account.findUnique({
+  const findAccount = () => client.account.findUnique({
     where: {
       provider_providerAccountId: {
         provider: 'GOOGLE',
@@ -82,24 +82,57 @@ export async function resolveGoogleLogin(
     },
   })
 
+  const existing = await findAccount()
+
   if (existing) {
     return { userId: existing.userId, isNewUser: false }
   }
 
-  // 用 nested create 讓 User 與 Account 在同一次寫入裡完成：分兩次寫的話，中間失敗
-  // 會留下一位沒有任何 Account、因此永遠登不進來的孤兒 User，而下次登入又會再建一位。
-  const user = await client.user.create({
-    data: {
-      email: profile.email ?? null,
-      displayName: profile.name ?? null,
-      accounts: {
-        create: {
-          provider: 'GOOGLE',
-          providerAccountId: profile.sub,
+  try {
+    // 用 nested create 讓 User 與 Account 在同一次寫入裡完成：分兩次寫的話，中間失敗
+    // 會留下一位沒有任何 Account、因此永遠登不進來的孤兒 User，而下次登入又會再建一位。
+    const user = await client.user.create({
+      data: {
+        email: profile.email ?? null,
+        displayName: profile.name ?? null,
+        accounts: {
+          create: {
+            provider: 'GOOGLE',
+            providerAccountId: profile.sub,
+          },
         },
       },
-    },
-  })
+    })
 
-  return { userId: user.id, isNewUser: true }
+    return { userId: user.id, isNewUser: true }
+  }
+  catch (cause) {
+    // 「先查再寫」中間有一段空隙。P2002（唯一約束衝突）代表那段空隙裡有事情發生了。
+    if (!isUniqueConstraintError(cause)) {
+      throw cause
+    }
+
+    // 撞的是 @@unique([provider, providerAccountId])：另一個併發的首次登入搶先建好了，
+    // 重查就找得到。這時沿用那一位，而不是把 500 丟回給正在登入的人。
+    const raced = await findAccount()
+
+    if (raced) {
+      return { userId: raced.userId, isNewUser: false }
+    }
+
+    // 重查仍然沒有，代表撞的是別的約束——實務上是 User.email（String? @unique）：
+    // 這個 email 已經屬於另一位用別種方式建立的使用者。
+    //
+    // 「同 email 視為同一個人」正是 account linking，而 Epic #47 第 7 節把它排在 MVP 之後。
+    // 這裡不自作主張接起來，也不偷偷把 email 丟掉再寫一次——那會生出一個沒有 email 的
+    // 神祕帳號，比一個看得見的錯誤難查得多。原樣拋出，讓它現形。
+    throw cause
+  }
+}
+
+/** Prisma 的唯一約束衝突。用 code 而不是 instanceof：不必為了認一個錯誤把 runtime 拉進來。 */
+function isUniqueConstraintError(cause: unknown): boolean {
+  return typeof cause === 'object'
+    && cause !== null
+    && (cause as { code?: unknown }).code === 'P2002'
 }

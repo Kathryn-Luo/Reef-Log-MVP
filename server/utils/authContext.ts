@@ -19,6 +19,26 @@ import type { User } from '@prisma/client'
  * 型別借道全域的 `H3Event` class：h3 只以 transitive 形式存在，`import ... from 'h3'`
  * 在 pnpm 嚴格模式下解不開；Nitro 產生的型別把它放進全域，取 InstanceType 即可。
  */
-export function getCurrentUser(event: InstanceType<typeof H3Event>): Promise<User | null> {
-  return getUserSession(event).then(session => getUserFromSession(prisma, session, new Date()))
+export async function getCurrentUser(event: InstanceType<typeof H3Event>): Promise<User | null> {
+  let session: unknown
+
+  try {
+    session = await getUserSession(event)
+  }
+  catch (cause) {
+    // 讀 session 會拋錯，而且不只是「cookie 壞掉」這種個案：`NUXT_SESSION_PASSWORD`
+    // 沒設或不足 32 字元時，h3 連「開一個新的空 session」都會在 seal 那一步失敗
+    // （沒有 cookie 的請求也會走到 seal）。沒有這道隔離的話，設定壞掉的後果不是
+    // 「大家都沒登入」，而是**每一支 API 都 500**，連首頁都打不開。
+    //
+    // 退回未登入而不是往外拋：認證壞掉時整個站還讀得到登入頁，人才有辦法看見出了什麼事。
+    // 但一定要留 log——靜靜地把所有人登出，是最難查的那種故障。
+    console.error('[auth] 讀取 session 失敗，本次請求視為未登入', cause)
+
+    return null
+  }
+
+  // 這一段刻意留在 try 外面：資料庫查詢失敗是真的失敗，不該被偽裝成「未登入」
+  // 讓畫面變成一個看起來正常的空狀態。
+  return getUserFromSession(prisma, session, new Date())
 }

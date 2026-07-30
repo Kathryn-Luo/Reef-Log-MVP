@@ -187,3 +187,60 @@ describe('resolveGoogleLogin — 已用同一個 Google 帳號登入過', () => 
     expect(client.user.create).not.toHaveBeenCalled()
   })
 })
+
+// 「先查再寫」中間有一段空隙，唯一約束會在那裡把話說完。P2002 是 Prisma 的
+// 「唯一約束衝突」，用 code 而不是 instanceof 判斷：錯誤實例來自 Prisma runtime，
+// 這個 job 連不到資料庫，不該為了測一個分支去把整個 runtime 拉進來。
+describe('resolveGoogleLogin — 唯一約束衝突（P2002）', () => {
+  /** findUnique 依序回傳指定的值，模擬「第一次查沒有、重查有了」 */
+  function racingClient(accounts: unknown[], createError: unknown) {
+    const findUnique = vi.fn()
+    accounts.forEach(account => findUnique.mockResolvedValueOnce(account))
+
+    const client = {
+      account: { findUnique, create: vi.fn() },
+      user: { create: vi.fn().mockRejectedValue(createError), findFirst: vi.fn() },
+    }
+
+    return client as unknown as PrismaClient & typeof client
+  }
+
+  // 兩個同 sub 的首次登入併發：兩邊都 miss，第二個 create 撞上
+  // @@unique([provider, providerAccountId])。重查一次就知道「別人已經建好了」，
+  // 這時該沿用那一位，而不是把 500 丟回給正在登入的人。
+  it('另一個請求搶先建好同一個 sub 的 Account 時，重查並沿用它的 userId', async () => {
+    const client = racingClient(
+      [null, { id: 'account-1', userId: 'user-1' }],
+      { code: 'P2002' },
+    )
+
+    await expect(resolveGoogleLogin(client, PROFILE)).resolves.toEqual({
+      userId: 'user-1',
+      isNewUser: false,
+    })
+
+    expect(client.account.findUnique).toHaveBeenCalledTimes(2)
+  })
+
+  // 撞的不是 sub 而是 User.email（String? @unique）——例如這個 email 已經屬於
+  // 另一位用別種方式建立的使用者。重查一樣找不到 Account，代表這不是 race，
+  // 而是「這兩筆資料到底是不是同一個人」的問題。
+  //
+  // account linking（同 email 視為同一人）是 Epic #47 第 7 節排在 MVP 之後的決定，
+  // 所以這裡不自作主張把兩者接起來，也不偷偷把 email 丟掉改寫一次——原樣拋出，
+  // 讓它以 500 現形，而不是變成一個沒有 email 的神祕帳號。
+  it('重查仍找不到 Account 時原樣拋出，不自行做 account linking', async () => {
+    const client = racingClient([null, null], { code: 'P2002' })
+
+    await expect(resolveGoogleLogin(client, PROFILE)).rejects.toMatchObject({ code: 'P2002' })
+    expect(client.account.findUnique).toHaveBeenCalledTimes(2)
+  })
+
+  // 連線中斷、逾時之類的錯誤不該被這條路徑吃掉，也不該多送一次查詢
+  it('不是 P2002 的錯誤原樣拋出，且不重查', async () => {
+    const client = racingClient([null], { code: 'P1001', message: 'Can\'t reach database server' })
+
+    await expect(resolveGoogleLogin(client, PROFILE)).rejects.toMatchObject({ code: 'P1001' })
+    expect(client.account.findUnique).toHaveBeenCalledTimes(1)
+  })
+})

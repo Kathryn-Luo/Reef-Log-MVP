@@ -10,6 +10,7 @@
 export default defineEventHandler(async (event) => {
   await clearUserSession(event)
 
-  // 瀏覽器跟隨 302 時會改用 GET，所以送出登出表單之後會停在登入頁
-  return sendRedirect(event, '/login')
+  // 303 See Other 而不是預設的 302：「用另一個方法去取另一個資源」正是 303 的定義。
+  // 302 實務上也能動（瀏覽器歷史上就把它當 303 處理），但那是慣例不是規範。
+  return sendRedirect(event, '/login', 303)
 })

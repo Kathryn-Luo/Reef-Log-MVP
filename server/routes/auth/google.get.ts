@@ -29,22 +29,36 @@ export default defineOAuthGoogleEventHandler({
       return sendRedirect(event, '/login')
     }
 
-    const { userId } = await resolveGoogleLogin(prisma, profile)
+    try {
+      const { userId } = await resolveGoogleLogin(prisma, profile)
 
-    // 一定要 replace 不能 set：setUserSession 是 defu 合併，前一位使用者留在 cookie 裡的
-    // 欄位會原封不動被保留，內容就不再「只有 { userId, exp }」（Story ①）。
-    //
-    // 密封 cookie 本身的內容只有 buildSessionPayload 那兩個欄位；外層那圈 id / createdAt
-    // 是 h3 session 的信封，不是我們放進去的個人資料。
-    await replaceUserSession(event, buildSessionPayload(userId, new Date()))
+      // 一定要 replace 不能 set：setUserSession 是 defu 合併，前一位使用者留在 cookie 裡的
+      // 欄位會原封不動被保留，內容就不再「只有 { userId, exp }」（Story ①）。
+      //
+      // 密封 cookie 本身的內容只有 buildSessionPayload 那兩個欄位；外層那圈 id / createdAt
+      // 是 h3 session 的信封，不是我們放進去的個人資料。
+      await replaceUserSession(event, buildSessionPayload(userId, new Date()))
+    }
+    catch (cause) {
+      // 下面的 onError 接不到這一段——它只管到 OAuth 握手為止，onSuccess 內部拋的錯
+      // 會直接變成 500。會落在這裡的是資料庫問題（連不上、P2002 重查後仍衝突）
+      // 與寫 session 失敗（NUXT_SESSION_PASSWORD 沒設或太短）。
+      console.error('[auth] Google 登入成功但建立 session 失敗', cause)
+
+      return sendRedirect(event, '/login')
+    }
 
     // 首次登入引導是另一支子 issue，這裡一律回首頁。isNewUser 因此暫時沒有用到。
     return sendRedirect(event, '/')
   },
 
   onError(event, error) {
-    // 使用者按了「取消」、client secret 設錯、Google 端暫時性錯誤都會走到這裡。
-    // 把細節留在 server log，回到登入頁讓人可以再試一次，而不是丟一頁 500 出去。
+    // 走到這裡的是套件自己回報的失敗：clientId / clientSecret 沒設（handleMissingConfiguration）、
+    // 以及 token endpoint 回了 error（handleAccessTokenErrorResponse）——使用者在 Google
+    // 那一頁按「取消」也是這一條。
+    //
+    // ⚠ 不是所有失敗都會經過這裡：requestAccessToken 與 userinfo 的 $fetch 若在網路層拋錯，
+    // 套件不會轉呼叫 onError，那會直接是 500。這是套件的行為，不是這裡漏接。
     console.error('[auth] Google 登入失敗', error)
 
     return sendRedirect(event, '/login')

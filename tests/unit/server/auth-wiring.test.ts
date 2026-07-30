@@ -1,8 +1,8 @@
 // @vitest-environment node
 // 純文字比對，不需要 Nuxt 環境；理由見 test-environment.test.ts（issue #38）
 
-import { existsSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 // 「接線」的守備範圍（issue #64）。
@@ -21,6 +21,14 @@ const read = (file: string) => readFileSync(resolve(process.cwd(), file), 'utf8'
 
 const GOOGLE_ROUTE = 'server/routes/auth/google.get.ts'
 const LOGOUT_ROUTE = 'server/routes/auth/logout.post.ts'
+
+/** server/ 底下所有的 .ts，用來做「整個 server 端都沒有某段程式碼」這種掃描 */
+function serverSources(dir = 'server'): string[] {
+  return readdirSync(resolve(process.cwd(), dir), { withFileTypes: true })
+    .flatMap(entry => entry.isDirectory()
+      ? serverSources(join(dir, entry.name))
+      : entry.name.endsWith('.ts') ? [join(dir, entry.name)] : [])
+}
 
 /** issue #64「呼叫端共六支（main 上核對）」 */
 const HANDLERS = [
@@ -73,6 +81,33 @@ describe('登出路由', () => {
     expect(existsSync(resolve(process.cwd(), LOGOUT_ROUTE))).toBe(true)
     expect(read(LOGOUT_ROUTE)).toContain('clearUserSession')
   })
+
+  // POST 之後導向要用 303 See Other。302 能動是因為瀏覽器歷史上把它當 303 處理，
+  // 規範上「換一個方法去取另一個資源」是 303 的定義。
+  it('以 303 導回登入頁', () => {
+    expect(read(LOGOUT_ROUTE)).toContain('303')
+  })
+})
+
+// 設定壞掉（NUXT_SESSION_PASSWORD 沒設或不足 32 字元）時，h3 的 seal 會直接拋錯。
+// 沒有隔離的話，那不是「大家都沒登入」，而是**每一支 API 都 500**——包含首頁。
+// 這兩條守的是「認證的失敗不會擴散成全站故障」。
+describe('認證失敗的隔離', () => {
+  it('讀 session 失敗時退回未登入，而不是讓整個請求炸掉', () => {
+    const source = read('server/utils/authContext.ts')
+
+    expect(source).toContain('catch')
+    expect(source).toContain('return null')
+  })
+
+  // 資料庫在登入這一刻出問題、或 P2002 重查後仍拋出時，使用者該回到登入頁重試，
+  // 而不是看到一頁 500。套件的 onError 接不到這一段——它只管到 OAuth 握手為止。
+  it('onSuccess 內的查／建帳號失敗時導回登入頁', () => {
+    const source = read(GOOGLE_ROUTE)
+
+    expect(source).toContain('catch')
+    expect(source.match(/sendRedirect\(event, '\/login'\)/g) ?? []).not.toHaveLength(0)
+  })
 })
 
 describe('當前使用者的來源', () => {
@@ -80,13 +115,18 @@ describe('當前使用者的來源', () => {
   //
   // 認證導入前的暫時實作是 `findFirst({ orderBy: { createdAt: 'asc' } })`。它一旦留著，
   // 任何一支 handler 不小心用回去就等於全站共用同一位使用者——這是本 issue 要根除的東西。
+  // 掃整個 server/ 而不是只看 currentContext.ts：這條要守的是「這個查詢在 server 端
+  // 任何角落都不該再出現」，只讀一個檔的話，換個檔案寫回去就溜過去了。
   it('server 端不再有「取最早建立的那一位使用者」的查詢', () => {
-    const source = read('server/utils/currentContext.ts')
+    // 認得的是 `user.findFirst` 這個呼叫，不是 `orderBy: { createdAt: 'asc' }`——
+    // 後者在別處是正當的（生物依入缸順序排列，見 creatureList.ts、homeData.ts），
+    // 拿它當特徵只會把無關的查詢一起判有罪。
+    //
+    // 也不比對「createdAt」這幾個字：註解裡留著「而不是 createdAt 最早的那一位」，
+    // 那句話正是這條測試要守住的意思，不該把測試自己絆倒。
+    const offenders = serverSources().filter(file => read(file).includes('user.findFirst'))
 
-    // 比對查詢本身而不是裸字串：註解裡留著「而不是 createdAt 最早的那一位」這句話，
-    // 它正是這條測試要守住的意思，不該把測試自己絆倒。
-    expect(source).not.toContain('user.findFirst')
-    expect(source).not.toContain('orderBy: { createdAt: \'asc\' }')
+    expect(offenders).toEqual([])
   })
 
   it.each(HANDLERS)('%s 以 request 上的 session 決定身分', (handler) => {

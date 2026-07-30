@@ -17,6 +17,7 @@ const WATER: WaterSummaryDto = {
     { parameter: 'SALINITY', value: 1.026 },
   ],
   targets: [],
+  trends: [],
 }
 
 function mountCard(water: WaterSummaryDto | null, collapsed = false) {
@@ -175,6 +176,61 @@ describe('WaterSummaryCard — 收合', () => {
 
     expect(card.findAll('[data-testid="water-reading"]')).toHaveLength(6)
     expect(card.get('[data-testid="water-readings-slot"]').attributes('data-collapsed')).toBe('false')
+  })
+})
+
+// issue #10：摘要列同時是數據儀表板的入口。
+// 卡片自己不知道儀表板長什麼樣，只負責送出「使用者要看詳細」這個意圖。
+describe('WaterSummaryCard — 展開儀表板的入口', () => {
+  // Given 我在首頁，水質摘要列為收合狀態 / When 我點擊水質摘要列（或「詳細 ∨」）
+  it('有水質記錄時整列可點，並帶著「詳細 ∨」的提示', async () => {
+    const card = await mountCard(WATER)
+    const root = card.get('[data-testid="water-summary-card"]')
+
+    expect(card.get('[data-testid="water-detail-hint"]').text()).toContain('詳細')
+
+    // 整列是一顆按鈕：鍵盤焦點、Enter / 空白鍵都由瀏覽器原生處理
+    expect(root.element.tagName).toBe('BUTTON')
+    expect(root.attributes('type')).toBe('button')
+  })
+
+  it('點擊摘要列送出 expand', async () => {
+    const card = await mountCard(WATER)
+
+    await card.get('[data-testid="water-summary-card"]').trigger('click')
+
+    expect(card.emitted('expand')).toHaveLength(1)
+  })
+
+  it('點「詳細 ∨」同樣送出 expand', async () => {
+    const card = await mountCard(WATER)
+
+    await card.get('[data-testid="water-detail-hint"]').trigger('click')
+
+    expect(card.emitted('expand')).toHaveLength(1)
+  })
+
+  // 收合成單行 pill 之後仍然是同一個入口
+  it('收合狀態下依然可點', async () => {
+    const card = await mountCard(WATER, true)
+
+    await card.get('[data-testid="water-summary-card"]').trigger('click')
+
+    expect(card.emitted('expand')).toHaveLength(1)
+  })
+
+  // 沒有資料的儀表板沒東西可看，這時摘要列不是入口——
+  // 它裡面已經有自己的「記錄水質」連結，再包一層按鈕也是巢狀的互動元素
+  it('尚無水質記錄時不是按鈕，也沒有「詳細 ∨」', async () => {
+    const card = await mountCard(null)
+    const root = card.get('[data-testid="water-summary-card"]')
+
+    expect(root.element.tagName).toBe('SECTION')
+    expect(card.find('[data-testid="water-detail-hint"]').exists()).toBe(false)
+
+    await root.trigger('click')
+
+    expect(card.emitted('expand')).toBeUndefined()
   })
 })
 

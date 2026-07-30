@@ -85,13 +85,17 @@ async function main() {
 
   // ── 水質 ────────────────────────────────────────────────
   //
-  // 只設定 KH / Ca / Mg 三項的區間——正是 screen-2 右側標示的 7–9、380–450、1250–1350。
-  // NO₃ / PO₄ / 鹽度刻意「不」設定，讓應用層的預設區間也走得到
-  // （schema.prisma 的 WaterParameterTarget 註解要求那條路徑存在）。
+  // screen-2 儀表板右側標示的區間：7–9 / 380–450 / 1250–1350 / 2–10 / .02–.10 / 1.024–1.027。
+  //
+  // 鹽度刻意「不」設定，讓應用層的預設區間也走得到（schema.prisma 的
+  // WaterParameterTarget 註解要求那條路徑存在）——它的預設值正好就是 1.024–1.027，
+  // preview 上看到的區間文字仍與截圖一致。
   const targets = [
     { parameter: 'KH', minValue: 7, maxValue: 9 },
     { parameter: 'CA', minValue: 380, maxValue: 450 },
     { parameter: 'MG', minValue: 1250, maxValue: 1350 },
+    { parameter: 'NO3', minValue: 2, maxValue: 10 },
+    { parameter: 'PO4', minValue: 0.02, maxValue: 0.1 },
   ] as const
 
   for (const target of targets) {
@@ -103,7 +107,7 @@ async function main() {
   }
 
   // screen-1 的「· 4h」與橘色徽章「2 需注意」：
-  // Mg 1180 低於 1250（偏低），NO₃ 12 高於預設上限 10（偏高），其餘四項正常。
+  // Mg 1180 低於 1250（偏低），NO₃ 12 高於 10（偏高），其餘四項正常。
   const waterLog = await prisma.waterLog.upsert({
     where: { id: WATER_LOG_ID },
     update: { measuredAt: new Date(now.getTime() - 4 * HOUR) },
@@ -133,8 +137,8 @@ async function main() {
     })
   }
 
-  // 前幾筆歷史記錄：screen-3 的歷史列表與 screen-4 的趨勢折線要有東西可畫。
-  // 首頁只看最新一筆，這些不影響「· 4h」。
+  // 前幾筆歷史記錄：screen-2 的迷你趨勢線、screen-3 的歷史列表與 screen-4 的趨勢折線
+  // 都要有東西可畫。首頁的摘要列只看最新一筆，這些不影響「· 4h」。
   for (const daysAgo of [4, 11, 18, 25]) {
     const id = `seed-waterlog-${daysAgo}d`
     const measuredAt = new Date(now.getTime() - daysAgo * DAY)
@@ -145,12 +149,16 @@ async function main() {
       create: { id, tankId: tank.id, measuredAt },
     })
 
-    // 讓趨勢看得出走勢：Mg 一路下滑、NO₃ 一路上升，正好解釋最新一筆的兩個異常
+    // 讓趨勢看得出走勢：Mg 一路下滑、NO₃ 一路上升，正好解釋最新一筆的兩個異常。
+    // 六個測項都給，screen-2 的六列才都畫得出迷你趨勢線
+    // （少於兩筆讀數的測項不會硬畫一條假的線，見 shared/utils/sparkline.ts）。
     const history = [
       { parameter: 'KH', value: 7.8 + (daysAgo % 3) * 0.1 },
       { parameter: 'CA', value: 412 + (daysAgo % 4) * 5 },
       { parameter: 'MG', value: 1180 + daysAgo * 4 },
       { parameter: 'NO3', value: 12 - daysAgo * 0.3 },
+      { parameter: 'PO4', value: 0.04 - daysAgo * 0.0008 },
+      { parameter: 'SALINITY', value: 1.026 + (daysAgo % 3) * 0.0005 },
     ] as const
 
     for (const reading of history) {

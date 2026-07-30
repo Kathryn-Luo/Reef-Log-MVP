@@ -1,5 +1,12 @@
-import type { PrismaClient, Tank } from '@prisma/client'
-import type { CreatureDto, TankHomeData, TankOption, WaterSummaryDto } from '#shared/types/home'
+import type { PrismaClient, Tank, WaterLog, WaterReading } from '@prisma/client'
+import type {
+  CreatureDto,
+  TankHomeData,
+  TankOption,
+  WaterSummaryDto,
+  WaterTrendDto,
+} from '#shared/types/home'
+import { WATER_PARAMETER_ORDER, WATER_TREND_POINTS } from '#shared/utils/waterQuality'
 
 // 首頁（screen-1）的資料查詢。
 //
@@ -47,16 +54,43 @@ export async function listTankOptions(client: PrismaClient, userId: string): Pro
 }
 
 /**
- * 首頁單一缸的內容：最新一筆水質記錄（含讀數與該缸設定的正常區間）與全部生物。
+ * 把最近數筆記錄依測項分組，串成 screen-2 迷你趨勢線的數列。
+ *
+ * 傳入的 logs 是查詢回傳的順序（measuredAt 由新到舊），這裡反過來輸出，
+ * 折線才是左舊右新。某次沒量到的測項不補位——schema.prisma 定義「未量測」
+ * 就是不建立 WaterReading 列，補一個 0 或 null 進去只會畫出假的走勢。
+ */
+function toTrends(logs: (WaterLog & { readings: WaterReading[] })[]): WaterTrendDto[] {
+  const chronological = [...logs].reverse()
+
+  return WATER_PARAMETER_ORDER.flatMap<WaterTrendDto>((parameter) => {
+    const values = chronological.flatMap((log) => {
+      const reading = log.readings.find(candidate => candidate.parameter === parameter)
+
+      return reading ? [toNumber(reading.value)] : []
+    })
+
+    return values.length ? [{ parameter, values }] : []
+  })
+}
+
+/**
+ * 首頁單一缸的內容：最近數筆水質記錄（含讀數與該缸設定的正常區間）與全部生物。
+ *
+ * 只打一次 waterLog 查詢：最新一筆（screen-1 的摘要列）就是這個窗口的第一列，
+ * 整個窗口則是 screen-2 迷你趨勢線的來源，兩者本來就是同一份資料。
+ * 查詢走 WaterLog 的 @@index([tankId, measuredAt])，依 schema.prisma 的註解，
+ * WaterReading 上不建 parameter 索引，分組留在應用層做。
  *
  * 「N 需注意」「· 4h」「存活 · N 月」「×2」都不在這裡算——它們是純顯示推算，
  * 由 shared/utils 的函式在前端完成，這裡只負責把原始資料轉成可序列化的形狀。
  */
 export async function getTankHome(client: PrismaClient, tankId: string): Promise<TankHomeData> {
-  const [latestLog, targets, creatures] = await Promise.all([
-    client.waterLog.findFirst({
+  const [recentLogs, targets, creatures] = await Promise.all([
+    client.waterLog.findMany({
       where: { tankId },
       orderBy: { measuredAt: 'desc' },
+      take: WATER_TREND_POINTS,
       include: { readings: true },
     }),
     client.waterParameterTarget.findMany({ where: { tankId } }),
@@ -65,6 +99,8 @@ export async function getTankHome(client: PrismaClient, tankId: string): Promise
       orderBy: { createdAt: 'asc' },
     }),
   ])
+
+  const latestLog = recentLogs[0]
 
   const water: WaterSummaryDto | null = latestLog
     ? {
@@ -78,6 +114,7 @@ export async function getTankHome(client: PrismaClient, tankId: string): Promise
           minValue: toNumber(target.minValue),
           maxValue: toNumber(target.maxValue),
         })),
+        trends: toTrends(recentLogs),
       }
     : null
 

@@ -16,6 +16,13 @@ const props = withDefaults(defineProps<{
   collapsed?: boolean
 }>(), { collapsed: false })
 
+/**
+ * 使用者要看完整的數據儀表板（screen-2）。
+ * 卡片不知道儀表板長什麼樣，也不持有它的展開狀態——只送出意圖，
+ * 由首頁決定要開哪一個。
+ */
+const emit = defineEmits<{ expand: [] }>()
+
 // Story 說的「綠」就是 screen-1 量到的主色 teal-400（見 app/app.config.ts），
 // 所以正常項直接用 text-primary，跟著全站主色走
 const STATUS_CLASSES: Record<ReadingStatus, string> = {
@@ -34,9 +41,20 @@ const measuredAgo = computed(() =>
 </script>
 
 <template>
-  <section
-    class="rounded-2xl border border-default bg-elevated/40 px-4 transition-[padding] duration-200 ease-out motion-reduce:transition-none"
+  <!--
+    有水質記錄時整列就是數據儀表板的入口（issue #10），所以整張卡片是一顆 <button>：
+    鍵盤焦點、Enter / 空白鍵、按鈕語意全部交給瀏覽器，不必自己補 role 與 keydown。
+
+    尚無記錄時維持 <section>：那時候卡片裡已經有自己的「記錄水質」連結，
+    再包一層按鈕就成了巢狀的互動元素，而且沒有資料的儀表板也沒東西可攤開。
+  -->
+  <component
+    :is="summary ? 'button' : 'section'"
+    data-testid="water-summary-card"
+    :type="summary ? 'button' : undefined"
+    class="block w-full rounded-2xl border border-default bg-elevated/40 px-4 text-left transition-[padding] duration-200 ease-out motion-reduce:transition-none"
     :class="collapsed ? 'py-2.5' : 'py-4'"
+    @click="summary && emit('expand')"
   >
     <!--
       收合時空狀態與標題列並排成一列——它本來就只有一行，不必再往下擺。
@@ -71,6 +89,19 @@ const measuredAgo = computed(() =>
           class="text-xs text-dimmed"
         >
           · {{ measuredAgo }}
+        </span>
+
+        <!-- 截圖右側的「詳細 ∨」：整列都可點，這裡只是把「點了會怎樣」講出來 -->
+        <span
+          v-if="summary"
+          data-testid="water-detail-hint"
+          class="ml-auto flex shrink-0 items-center gap-0.5 text-sm text-muted"
+        >
+          詳細
+          <UIcon
+            name="i-lucide-chevron-down"
+            class="size-4"
+          />
         </span>
       </div>
 
@@ -140,5 +171,5 @@ const measuredAgo = computed(() =>
         </NuxtLink>
       </div>
     </div>
-  </section>
+  </component>
 </template>

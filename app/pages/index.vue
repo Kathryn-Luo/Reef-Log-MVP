@@ -57,6 +57,15 @@ const counts = computed(() => countCreaturesByCategory(creatures.value))
 // animated 是「過場已開放」——首幀（瀏覽器還原捲動位置那次）要直接落在最終樣態，不補播動畫。
 const { collapsed, animated } = useHeaderCollapse()
 
+// 數據儀表板（screen-2）的展開狀態。關閉的手勢有三種（✕ / 遮罩 / 下拉把手），
+// 狀態放在頁面這一層，三者才是在改同一個開關。
+const dashboardOpen = ref(false)
+
+// 換缸時把儀表板收起來：留著的話會變成「新缸的頁首配舊缸的數據」。
+watch(currentTankId, () => {
+  dashboardOpen.value = false
+})
+
 const activeCategory = ref<CreatureCategoryKey | 'ALL'>('ALL')
 
 const chips = computed(() => [
@@ -179,6 +188,7 @@ const cards = computed(() =>
             :water="home?.water ?? null"
             :now="now"
             :collapsed="collapsed"
+            @expand="dashboardOpen = true"
           />
         </div>
       </div>
@@ -244,6 +254,19 @@ const cards = computed(() =>
           這個分類還沒有生物。
         </p>
       </section>
+
+      <!--
+        點一下水質摘要列升起的數據儀表板（screen-2）。
+        放在頁面最後、sticky 頁首之外：它是覆蓋整個畫面的一層，
+        留在 sticky 容器裡會被容器的 z-30 壓在底部 tab 列（z-50）之下。
+      -->
+      <WaterDashboardSheet
+        :open="dashboardOpen"
+        :tank-name="currentTank.name"
+        :water="home?.water ?? null"
+        :now="now"
+        @close="dashboardOpen = false"
+      />
     </template>
   </div>
 </template>

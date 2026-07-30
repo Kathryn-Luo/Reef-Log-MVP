@@ -9,7 +9,7 @@
 // Epic #47「登入與資料歸屬」追加 1 張截圖：
 //   screen-1（#47）登入畫面 00a——「使用 Google 繼續」／「以訪客身分瀏覽」，
 //                  副標題「目前 Google + 訪客 · 其他方式預留」
-//   → 新增 Account model 與 AuthProvider enum；User.email 改為 nullable 且不再唯一。
+//   → 新增 Account model 與 AuthProvider enum；User.email 改為 nullable（唯一約束保留）。
 //   → session 策略是密封 cookie（內容只有 { userId, exp }，驗簽即得身分、不查 DB），
 //     所以刻意「不」建 Session model——這是 #47 已定案的取捨，不是漏掉。
 //
@@ -52,17 +52,29 @@ generator client {
 model User {
   id String @id @default(cuid())
 
-  /// Google 回傳的 email；訪客帳號用固定的示範信箱。
+  /// Google 回傳的 email。訪客帳號一律為 null（訪客沒有 email）。
   ///
-  /// 由 `String @unique` 改成 `String?`（可為 null、不唯一），兩個改動各自的理由：
+  /// 由 `String @unique` 改成 `String? @unique`：**只放寬 null，保留唯一約束。**
+  ///
   ///   - 可為 null：email 不再是身分來源（身分是 Account 的
-  ///     (provider, providerAccountId)），而「其他方式預留」的登入方式不保證
-  ///     給得出 email（例如 Apple 的隱藏信箱）。
-  ///   - 移除 @unique：同一個 email 從第二種登入方式進來時，唯一約束會讓
-  ///     資料庫直接丟 P2002 而中斷登入。「兩個登入方式要不要併成同一位使用者」
-  ///     （account linking）是產品決策，不該用一個只會 500 的 DB 約束代替。
-  ///     MVP 不做 linking：不同 provider 帳號就是不同使用者。
-  email String?
+  ///     (provider, providerAccountId)）。訪客帳號沒有 email；而「其他方式預留」
+  ///     的登入方式也不保證給得出 email（例如 Apple 的隱藏信箱）。
+  ///     Postgres 的 UNIQUE 視多個 NULL 為互異，所以「可空」與「唯一」並不衝突——
+  ///     語義恰好是「email 可有可無，但有值就必須唯一」，這正是下面要的。
+  ///
+  ///   - 保留 @unique：Epic #47 第 7 節定案「同一個 email 從第二種登入方式進來時，
+  ///     要視為同一個帳號」（account linking）。linking 的登入流程是
+  ///       ① 以 (provider, providerAccountId) 查 Account → 命中即結束
+  ///       ② 未命中 → 以 email 查 User → 命中則替既有 User 建一列新 Account
+  ///       ③ 仍未命中 → 建新的 User + Account
+  ///     第 ② 步永遠不會插入重複 email，所以 P2002 不會觸發；反之若 email 不唯一，
+  ///     第 ② 步只能用 findFirst，一旦累積出重複 email 就是不確定行為。
+  ///     **唯一約束是 linking 的正確性保證，不是它的阻礙。**
+  ///
+  ///     即使 linking 排在 MVP 之後實作，約束現在就得留著：日後要「加回」@unique，
+  ///     若 production 已累積重複 email，migration 會失敗、得先清資料；
+  ///     日後要「移除」則永遠安全。方向不對稱，所以選現在保留。
+  email String? @unique
 
   /// 顯示名稱。Google 登入取回傳的 name；訪客固定為「訪客」。
   displayName String?
@@ -94,7 +106,8 @@ model Account {
 
   /// provider 端那個帳號的穩定識別碼：
   ///   GOOGLE → OIDC 的 sub（不是 email——email 可以變更，sub 不會）
-  ///   GUEST  → 固定字串（訪客只有一個共用的示範帳號，見 prisma/seed.ts）
+  ///   GUEST  → 每位訪客各自一個隨機 id，於首次進站時產生並寫入其密封 cookie。
+  ///            「訪客」不是一個共用帳號，見 enum AuthProvider.GUEST 的說明。
   providerAccountId String
 
   createdAt DateTime @default(now())
@@ -103,9 +116,7 @@ model Account {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   /// 登入時唯一的查詢路徑，同時保證同一個 provider 帳號不會掛到兩位使用者身上。
-  /// 訪客帳號的「只有一個」也由這條約束提供：GUEST 的 providerAccountId 是固定值。
   @@unique([provider, providerAccountId])
-
   /// 刻意「不」加 @@unique([userId, provider])：那會禁止同一位使用者掛兩個 Google
   /// 帳號，而目前沒有畫面需要這個限制。
   ///
@@ -119,9 +130,23 @@ model Account {
 enum AuthProvider {
   GOOGLE
 
-  /// 共用的示範帳號（seed 資料的擁有者）。
-  /// Vercel preview 無法逐 branch 去 Google Console 登記 redirect URI，
-  /// 所以訪客是 preview 與 E2E 唯一走得通的登入路徑，不只是便利功能。
+  /// 訪客身分。**每位訪客一個獨立帳號**，不是共用的示範帳號（Epic #47 第 6 節定案）：
+  /// 首次進站建一位新的 User，並複製一份示範資料掛在他名下，密封 cookie 帶他自己的
+  /// userId。prisma/seed.ts 建的那一份因此是「永遠沒人登入的模板」。
+  ///
+  /// 沒有走「訪客唯讀」：ReefLog 是記錄工具，訪客不能記錄就等於看不到主要功能。
+  /// 共用帳號 + 可寫則會讓訪客互相干擾，而且示範缸能被任何人弄髒——這是作品集，
+  /// 下一位進站的人看到的就是那個；MVP 階段 production 與 preview 還共用同一個
+  /// Neon 分支，弄髒是兩邊一起髒。獨立沙盒同時解掉這兩件事，也讓授權邏輯對訪客與
+  /// Google 使用者完全一致（不需要在每支寫入 API 上判斷 provider）。
+  ///
+  /// 清理靠 User → Tank → {WaterLog, Creature, MaintenanceTask} 全鏈的 onDelete: Cascade：
+  /// 刪掉 provider = GUEST 且 User.createdAt 逾期的使用者，整棵資料自動消失。
+  /// Account.@@index([userId]) 就是為這件事存在的。
+  ///
+  /// 另外，Vercel preview 無法逐 branch 去 Google Console 登記 redirect URI
+  /// （Google 不支援萬用字元），所以訪客是 preview 與 E2E 唯一走得通的登入路徑，
+  /// 不只是便利功能。獨立沙盒讓 E2E 各跑在自己的沙盒裡，測試之間不互相污染。
   GUEST
 }
 
@@ -417,7 +442,7 @@ model MaintenanceTask {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tank        Tank                     @relation(fields: [tankId], references: [id], onDelete: Cascade)
+  tank        Tank                    @relation(fields: [tankId], references: [id], onDelete: Cascade)
   completions MaintenanceCompletion[]
 
   @@index([tankId, isActive, displayOrder])

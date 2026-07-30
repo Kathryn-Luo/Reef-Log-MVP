@@ -46,6 +46,20 @@ test('狀態三選一，目前狀態呈選中態，死亡者展開死亡記錄',
   await expect(record.locator('input[name="diedOn"]')).not.toHaveValue('')
 })
 
+// 「儲存」在「狀態」區任一值變更後才出現（PR #58 review）
+test('沒改任何東西時看不到儲存，改了狀態才出現', async ({ page }) => {
+  await openCreature(page, '六線龍')
+
+  await expect(page.getByTestId('creature-save')).toHaveCount(0)
+
+  await page.getByTestId('status-option').filter({ hasText: '生病' }).click()
+  await expect(page.getByTestId('creature-save')).toBeVisible()
+
+  // 改回原本的狀態就沒有東西可存了，按鈕跟著收起來
+  await page.getByTestId('status-option').filter({ hasText: '死亡' }).click()
+  await expect(page.getByTestId('creature-save')).toHaveCount(0)
+})
+
 // Given 某生物於 <入缸日> 入缸、於 <死亡日> 死亡 / When 詳情頁載入
 // Then 底部顯示「入缸日 YYYY / MM / DD」與「在缸天數 N 天」
 test('底部顯示入缸日與在缸天數', async ({ page }) => {

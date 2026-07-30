@@ -100,7 +100,14 @@ watch(creature, (value) => {
   }
 }, { immediate: true })
 
-/** 沒有改動就沒有東西可存——按鈕 disabled，免得按下去只是空跑一趟 */
+/**
+ * 沒有改動就沒有東西可存，「儲存」整顆不出現（PR #58 review）。
+ * 只是 disabled 的話，一顆按不下去的按鈕會讓人以為畫面壞了；
+ * 讓它在「狀態」區任一值被改動後才長出來，按鈕出現本身就是「有東西待存」的提示。
+ *
+ * 「任一值」包含狀態三選一與底下記錄區塊的欄位——那些欄位是狀態的一部分，
+ * 只改備註不改狀態同樣要存得起來。
+ */
 const dirty = computed(() => {
   const source = creature.value
 
@@ -421,7 +428,11 @@ async function save() {
         </p>
       </div>
 
-      <div class="mt-5 px-4">
+      <!-- 改了才出現。儲存失敗時 error 還在、改動也還在，這一區要留著讓人再按一次 -->
+      <div
+        v-if="dirty || error"
+        class="mt-5 px-4"
+      >
         <p
           v-if="error"
           data-testid="creature-error"
@@ -437,7 +448,6 @@ async function save() {
           color="primary"
           size="lg"
           block
-          :disabled="!dirty"
           :loading="saving"
           class="rounded-xl py-3"
           @click="save"

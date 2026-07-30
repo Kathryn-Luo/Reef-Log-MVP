@@ -186,15 +186,68 @@ describe('生物詳情 — 狀態切換', () => {
     expect(pressed[0]!.attributes('data-status')).toBe('DEAD')
   })
 
-  // 沒有改動時沒有東西可存，儲存按鈕不可按
-  it('什麼都沒改時儲存按鈕 disabled', async () => {
+  // 沒有改動時沒有東西可存，儲存按鈕整顆不出現（PR #58 review）
+  it('什麼都沒改時不渲染儲存按鈕', async () => {
     const page = await open()
 
-    expect(page.get('[data-testid="creature-save"]').attributes('disabled')).toBeDefined()
+    expect(page.find('[data-testid="creature-save"]').exists()).toBe(false)
+  })
+
+  it('改了狀態之後儲存按鈕才出現，且可以按', async () => {
+    const page = await open()
 
     await statusOption(page, 'DEAD').trigger('click')
 
-    expect(page.get('[data-testid="creature-save"]').attributes('disabled')).toBeUndefined()
+    const button = page.get('[data-testid="creature-save"]')
+    expect(button.text()).toContain('儲存')
+    expect(button.attributes('disabled')).toBeUndefined()
+  })
+
+  // 只改記錄區塊裡的欄位（狀態按鈕沒動）同樣算「狀態欄位中有值變更」
+  it('只改死亡記錄裡的備註，儲存按鈕也會出現', async () => {
+    state.creature = creature({ status: 'DEAD', diedOn: '2026-05-20', causeOfDeath: 'JUMPED' })
+
+    const page = await open()
+
+    expect(page.find('[data-testid="creature-save"]').exists()).toBe(false)
+
+    await page.get('textarea[name="deathNote"]').setValue('半夜跳出主缸')
+
+    expect(page.find('[data-testid="creature-save"]').exists()).toBe(true)
+  })
+
+  it('改完又改回原本的狀態，儲存按鈕再次收起來', async () => {
+    const page = await open()
+
+    await statusOption(page, 'DEAD').trigger('click')
+    await statusOption(page, 'ALIVE').trigger('click')
+
+    expect(page.find('[data-testid="creature-save"]').exists()).toBe(false)
+  })
+
+  it('儲存成功後儲存按鈕收起來', async () => {
+    const page = await open()
+
+    await statusOption(page, 'DEAD').trigger('click')
+    await page.get('input[name="diedOn"]').setValue('2026-05-20')
+    await save(page)
+
+    expect(state.patchCalls).toBe(1)
+    expect(page.find('[data-testid="creature-save"]').exists()).toBe(false)
+  })
+
+  // 儲存失敗時改動還在，按鈕與錯誤訊息都要留著讓人再按一次
+  it('儲存失敗時按鈕留在畫面上', async () => {
+    state.fail = true
+
+    const page = await open()
+
+    await statusOption(page, 'DEAD').trigger('click')
+    await page.get('input[name="diedOn"]').setValue('2026-05-20')
+    await save(page)
+
+    expect(page.find('[data-testid="creature-save"]').exists()).toBe(true)
+    expect(page.get('[data-testid="creature-error"]').text()).toBe('儲存失敗的原因')
   })
 })
 

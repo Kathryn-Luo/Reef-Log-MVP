@@ -22,9 +22,14 @@ ReefLog 是一個海水缸記錄工具，同時作為展示「AI Agent + GitHub 
     若 preset 落到 `vercel-edge` 執行環境會 crash。必要時在 `nuxt.config.ts` 明確設定 `nitro.preset = 'vercel'`。
   - build 階段必須執行 `prisma generate`（放入 build script，例如 `"build": "prisma generate && nuxt build"`）。
 - 資料庫：Neon（serverless PostgreSQL）+ Prisma 6（鎖定，勿升級至 7）
-  - **MVP 階段**：production 與 preview 共用同一個 Neon dev 分支（連線字串走 Vercel 環境變數）。夠用、零額外設定。
-  - **之後若需隔離**：改用 Neon 官方 Vercel 整合，為每個 Preview Deployment 自動建立 Neon 分支。
-    導入前需人類決策，貼 `needs-human`，勿自作主張切換。
+  - **定案（2026-07-30，issue #52）**：preview 使用**獨立的 Neon 分支**——透過 Neon 官方 Vercel 整合，
+    為每個 Preview Deployment 自動建立分支。production 走 Neon 的 production 分支。
+    設定步驟與尚未完成的前置條件見 `docs/PREVIEW_DATABASE.md`。
+  - **在該整合實際啟用之前**，production 與 preview 仍共用同一個 Neon dev 分支——
+    這是過渡狀態，不是目標狀態。此期間 **E2E 不可接進 CI**（見 #23），
+    因為會寫入的 E2E（`tests/e2e/tank-create.spec.ts`）每跑一次就在真實資料裡留下 3 個缸。
+  - 「共用一個分支就好」的舊結論已被 #52 推翻。若 issue、PR 或註解仍寫著
+    「MVP 階段共用同一個 Neon dev 分支，夠用」，視為過時敘述，勿據以行動。
 - 測試：Vitest（unit）、Playwright（E2E，跑在 Vercel preview URL 上）
 - 前端工程師主導的 solo side project — 文件與 handoff 材料以個人維護規模撰寫，非團隊 onboarding
 

@@ -5,6 +5,10 @@ import { expect, test } from '@playwright/test'
 // 前提：preview 環境的 seed 資料已經有一個「主缸」，所以首頁的空狀態在這裡看不到——
 // 那一條由 unit 測試（tests/unit/pages/home.test.ts）覆蓋，這裡走「已有缸」的入口。
 // E2E 不在 TDD Develop 的 job 內執行，跑在 Vercel preview URL 上。
+//
+// 這支會寫入資料庫（每跑一次建 3 個缸），刻意沒有清理——preview 的資料庫是該次
+// Preview Deployment 專屬的 Neon 分支，缸隨分支一起回收。見 docs/PREVIEW_DATABASE.md（#52）。
+// 該整合啟用前 preview 與 production 共用分支，此期間只能手動跑，不可接進 CI（#23）。
 
 // Given 我已經有至少一個缸 / When 我點擊頁首缸名旁的 ∨
 // Then 切換選單底部同樣有「新增缸」的入口

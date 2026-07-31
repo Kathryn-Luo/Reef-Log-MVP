@@ -160,6 +160,51 @@ describe('workflow 測試跑在 node 環境，不啟動 Nuxt', () => {
   })
 })
 
+// `tests/unit/server/` 底下的測試同樣一支都不碰 Vue / Nuxt / DOM——它們拿假的 Prisma
+// Client 呼叫 server/utils 的純函式。原本沒有納入守備範圍，代價已經付過一次：
+// `google-login.test.ts` 在 main 上以 `Hook timed out in 10000ms` 掛掉整個檔案
+// （形態正是本檔開頭描述的那一種），只因為它沒有那一行 pragma。
+//
+// 這裡的白名單條件與 workflows 那組不同：那些檔案只讀檔案做文字比對，所以可以嚴格到
+// 「只准 node: 與 vitest」；這些檔案要 import 受測的 server/utils 與型別，能守的是
+// 反面——不准出現只有 Nuxt 環境才給得起的東西。
+const SERVER_TESTS_DIR = 'tests/unit/server'
+
+/** 只有 Nuxt 環境才提供的模組。出現任何一個，就代表 node 環境的宣告是錯的。 */
+const NUXT_RUNTIME_MODULES = /^(vue$|vue\/|@vue\/|@nuxt\/|#app|#imports|#build)/
+
+function serverTestFiles(): string[] {
+  return readdirSync(resolve(process.cwd(), SERVER_TESTS_DIR))
+    .filter(name => name.endsWith('.test.ts'))
+    .sort()
+    .map(name => `${SERVER_TESTS_DIR}/${name}`)
+}
+
+const serverFiles = serverTestFiles()
+
+describe('server 測試跑在 node 環境，不啟動 Nuxt', () => {
+  // 錨點：掃不到檔案的話，下面的 it.each 會集體真空通過。
+  it('掃得到這個目錄下的測試檔', () => {
+    expect(serverFiles.length).toBeGreaterThanOrEqual(5)
+  })
+
+  it.each(serverFiles)('%s 第一行宣告 node 環境', (file) => {
+    expect(firstMeaningfulLine(read(file))).toBe(NODE_PRAGMA)
+  })
+
+  // 與上一條互為前提：宣告 node 環境只有在「這些測試真的不需要 Nuxt」時才是對的。
+  // 有人在這個目錄下寫了需要元件掛載的測試，會紅在這裡，而不是紅成一個難以理解的
+  // 執行期錯誤（或更糟：紅成上面那種整檔逾時）。
+  it.each(serverFiles)('%s 不 import 只有 Nuxt 環境才給得起的模組', (file) => {
+    const modules = importedModules(code(read(file)))
+
+    expect(modules.length).toBeGreaterThan(0)
+    expect(modules.filter(name => NUXT_RUNTIME_MODULES.test(name))).toEqual([])
+    // 相對路徑鑽進 app/ 的一律擋掉：那底下全是 Vue 元件與 composable
+    expect(modules.filter(name => /(^|\/)app\//.test(name))).toEqual([])
+  })
+})
+
 // Given 走建議做法 A
 // When  檢查 vitest.config.ts
 // Then  未變動——ci-runner-config.test.ts 的白名單斷言不需要放寬

@@ -28,10 +28,21 @@ const SECOND_TANK: TankOption = {
 // 固定資料 + 真實時鐘會隨日期漂移，所以夾具反過來由現在往回推。
 const FOUR_HOURS_AGO = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString()
 
+// ⚠ 不能直接 `setUTCMonth(getUTCMonth() - months)`：目標月份沒有今天這一號時，
+// Date 會往後正規化到下個月的 1 號（今天 31 號、目標月只有 30 天 → 落在下個月），
+// 推出來的日期因此少了整整一個月。只有「今天的號數 > 目標月份的天數」那幾天會炸
+// （2026–2027 兩年間共 58 天），所以能潛伏很久。先夾到目標月實際的最後一天再組日期。
 function monthsAgo(months: number): string {
-  const date = new Date()
-  date.setUTCMonth(date.getUTCMonth() - months)
-  return date.toISOString().slice(0, 10)
+  const now = new Date()
+  const year = now.getUTCFullYear()
+  const month = now.getUTCMonth() - months
+
+  // 該月的第 0 天 ＝ 前一個月的最後一天，用它取得目標月的天數
+  const lastDayOfTargetMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate()
+
+  return new Date(Date.UTC(year, month, Math.min(now.getUTCDate(), lastDayOfTargetMonth)))
+    .toISOString()
+    .slice(0, 10)
 }
 
 function creature(overrides: Partial<CreatureDto> & Pick<CreatureDto, 'id' | 'name'>): CreatureDto {

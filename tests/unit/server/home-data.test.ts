@@ -1,3 +1,6 @@
+// @vitest-environment node
+// 純函式測試，不碰 Vue 元件、Nuxt composable 或 DOM；理由見 test-environment.test.ts（issue #38）
+
 import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient } from '@prisma/client'
 import { getTankHome, listTankOptions } from '../../../server/utils/homeData'

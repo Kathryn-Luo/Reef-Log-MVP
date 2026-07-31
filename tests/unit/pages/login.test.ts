@@ -88,6 +88,23 @@ describe('登入畫面 — Google 按鈕', () => {
     expect(google.element.tagName).toBe('A')
     expect(google.attributes('href')).toBe('/auth/google')
   })
+
+  // /auth/ 底下全是「按下去就發生事情」的路由，尤其 /auth/guest 一次 GET 就建一位 User
+  // 並複製一整份示範資料（#66）。這一頁是公開的，#67 之後每一次爬 `/` 都會落在這裡。
+  //
+  // 驗的是「渲染出來的 <a> 上真的有」而不是原始碼裡寫了——UButton 可能不把未知屬性
+  // 往下傳，那樣寫了也等於沒寫。另一半（public/robots.txt）在 auth-wiring.test.ts。
+  // 連同 noopener / noreferrer 一起驗：rel 是整個屬性被覆寫、不是合併，只寫 nofollow
+  // 會把 UButton 對 external 連結自帶的那兩個值洗掉。這是實際踩過的——原始碼層級的
+  // 比對看不到，只有讀渲染結果才看得見。
+  it.each(['login-action-google', 'login-action-guest'])('%s 帶 rel="nofollow"，且沒洗掉 noopener / noreferrer', async (testid) => {
+    const page = await mountLogin()
+    const rel = page.get(`[data-testid="${testid}"]`).attributes('rel')?.split(/\s+/) ?? []
+
+    expect(rel).toContain('nofollow')
+    expect(rel).toContain('noopener')
+    expect(rel).toContain('noreferrer')
+  })
 })
 
 // Given 我在登入頁 / When 我檢視「以訪客身分瀏覽」按鈕

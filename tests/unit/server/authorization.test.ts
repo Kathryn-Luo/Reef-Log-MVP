@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient } from '@prisma/client'
 import {
   CREATURE_NOT_FOUND,
+  MISSING_CREATURE_ID,
+  MISSING_TANK_ID,
   NOT_SIGNED_IN,
   TANK_NOT_FOUND,
   applyCreatureStatus,
@@ -408,6 +410,27 @@ describe('不存在的 id 與別人的 id 得到同一個答案', () => {
     const others = await applyCreatureStatus(fakeClient(), USER_A, 'creature-b1', ALIVE_BODY)
 
     expect(missing).toEqual(others)
+  })
+})
+
+// 網址少了 id 那一段是既有的 400，本 issue 不改掉它，只把它排到身分檢查之後：
+// 未登入的人拿到的答案該是「你是誰」，不是「你的網址寫錯了」。
+describe('網址少了 id 時仍是既有的 400，但排在身分檢查之後', () => {
+  it('已登入時，缺少 tankId 回 400', async () => {
+    await expect(resolveTankHome(fakeClient(), USER_A, undefined))
+      .resolves.toEqual({ ok: false, error: MISSING_TANK_ID })
+  })
+
+  it('已登入時，缺少 creatureId 回 400', async () => {
+    await expect(resolveCreatureDetail(fakeClient(), USER_A, undefined))
+      .resolves.toEqual({ ok: false, error: MISSING_CREATURE_ID })
+  })
+
+  it('未登入時，缺少 id 仍然回 401', async () => {
+    await expect(resolveTankHome(fakeClient(), null, undefined))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+    await expect(resolveCreatureDetail(fakeClient(), null, undefined))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
   })
 })
 

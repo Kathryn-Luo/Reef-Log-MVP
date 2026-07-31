@@ -60,7 +60,8 @@ function contentOf<T>(row: object, ...foreignKeys: string[]): T {
  * 不會留下半個缸。跨缸之間的一致性則由呼叫端的交易負責。
  *
  * 模板還沒 seed（全新的資料庫）時複製 0 個缸，訪客照樣進得去——首頁走既有的「還沒有缸」
- * 空狀態，而不是一頁 500。
+ * 空狀態，而不是一頁 500。但那條路徑會留下一則警告：它同時也是「模板沒 seed」唯一的
+ * 徵兆，靜默的話畫面上只是空的，server 端一個字都沒說（見下方 warnEmptyTemplate）。
  */
 export async function copyTemplateSandbox(
   client: Prisma.TransactionClient,
@@ -73,6 +74,12 @@ export async function copyTemplateSandbox(
     // displayOrder 相同時複製出來的 createdAt 先後也才與模板一致。
     orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
   })
+
+  if (tanks.length === 0) {
+    warnEmptyTemplate()
+
+    return 0
+  }
 
   for (const tank of tanks) {
     // Unchecked 版的 create input：缸的歸屬直接寫 userId 這個純量欄位，而不是
@@ -120,4 +127,24 @@ export async function copyTemplateSandbox(
   }
 
   return tanks.length
+}
+
+/**
+ * 模板名下一個缸都沒有——訪客會拿到空沙盒。
+ *
+ * 這不是錯誤（全新的資料庫本來就是這樣，訪客也照樣要進得去），所以不拋、不擋，
+ * 只留一則 warn。但它值得留，因為**畫面上看不出差別**：使用者看到的是「還沒有缸」的
+ * 正常空狀態，跟真的沒有缸長得一模一樣。
+ *
+ * 實際踩過一次：#78 merge 之後 preview 上按訪客按鈕進去是空的，而那個資料庫是在
+ * #72（示範資料改掛模板使用者）之前 seed 的，缸還掛在舊的 seed-user-kathryn 名下。
+ * 當時 server 端完全沒有線索，只能從程式碼一路往回推。
+ *
+ * 訊息刻意寫上 userId 與該跑的指令：看 log 的人要能直接知道下一步做什麼。
+ */
+function warnEmptyTemplate(): void {
+  console.warn(
+    `[auth] 模板使用者（${TEMPLATE_USER.id}）名下沒有任何缸，訪客拿到的會是空沙盒。`
+    + ' 這個資料庫可能沒跑過 seed，或示範資料還掛在改名前的舊使用者名下——請對它執行 `pnpm db:seed`。',
+  )
 }

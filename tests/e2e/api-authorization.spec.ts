@@ -21,6 +21,9 @@ interface Sandbox {
   request: APIRequestContext
   tankId: string
   creatureId: string
+  /** 缸名與生物名——用來確認「被拒絕的回應裡沒有這個人的資料」，見下方 expectNoLeak */
+  tankName: string
+  creatureName: string
 }
 
 /** 開一個新的瀏覽器 context，走一遍訪客登入，回傳它自己那份沙盒裡的第一個缸與第一隻生物 */
@@ -32,17 +35,65 @@ async function openSandbox(browser: Browser): Promise<Sandbox> {
   await page.getByTestId('login-action-guest').click()
   await expect(page).toHaveURL('/')
 
-  const { tanks } = await (await context.request.get('/api/tanks')).json() as { tanks: { id: string }[] }
+  const { tanks } = await (await context.request.get('/api/tanks')).json() as { tanks: { id: string, name: string }[] }
 
   expect(tanks.length, '訪客沙盒裡沒有任何缸——preview 的資料庫可能沒跑過 pnpm db:seed').toBeGreaterThan(0)
 
-  const tankId = tanks[0]!.id
-  const { creatures } = await (await context.request.get(`/api/tanks/${tankId}/creatures`))
-    .json() as { creatures: { id: string }[] }
+  const tank = tanks[0]!
+  const { creatures } = await (await context.request.get(`/api/tanks/${tank.id}/creatures`))
+    .json() as { creatures: { id: string, name: string }[] }
 
   expect(creatures.length, '訪客沙盒的缸裡沒有任何生物——preview 的示範資料可能不完整').toBeGreaterThan(0)
 
-  return { context, request: context.request, tankId, creatureId: creatures[0]!.id }
+  const creature = creatures[0]!
+
+  return {
+    context,
+    request: context.request,
+    tankId: tank.id,
+    creatureId: creature.id,
+    tankName: tank.name,
+    creatureName: creature.name,
+  }
+}
+
+/**
+ * 「這個 404 沒有把別人的資料送出來」。
+ *
+ * 刻意**不**斷言「回應體不含那個 id」：被要求的 id 會出現在錯誤回應的 `url` 欄位裡
+ * （h3 把請求網址原樣回聲，production 也一樣，只有 `stack` 會被拿掉）。
+ * 那不是洩漏——那個 id 是發出請求的人自己打進網址的，回聲給他不會讓他知道任何新的事。
+ *
+ * 真正該擋的是「這個 id 背後是什麼」：缸名、生物名、缸裡的內容。
+ *
+ * ⚠ 光比對名稱不夠：訪客沙盒是同一份模板複製出來的（#66），A 與 B 的缸名、生物名
+ * 完全一樣，比對它等於在問「回應裡有沒有出現『主缸』」，分不出那是誰的。所以主力是
+ * 下面那圈**欄位**檢查——被拒絕的回應只該有 h3 的錯誤信封，一個承載資料的欄位都不該有。
+ * 名稱比對留著，是為了日後沙盒不再是複本時仍然守得住。
+ *
+ * 最後把 `data.message` 釘在既有常數上（server/utils/authorization.ts 的
+ * TANK_NOT_FOUND / CREATURE_NOT_FOUND）——「不存在」與「不屬於你」必須一模一樣。
+ */
+async function expectNoLeak(
+  response: Awaited<ReturnType<APIRequestContext['get']>>,
+  expectedMessage: string,
+  secrets: string[],
+) {
+  expect(response.status()).toBe(404)
+
+  const body = await response.text()
+
+  for (const secret of secrets) {
+    expect(body, `404 的回應體不該出現「${secret}」`).not.toContain(secret)
+  }
+
+  const parsed = JSON.parse(body) as Record<string, unknown> & { data?: { message?: string } }
+
+  for (const field of ['tank', 'tanks', 'creature', 'creatures', 'waterLogs', 'name']) {
+    expect(parsed, `404 的回應體不該帶著 ${field} 欄位`).not.toHaveProperty(field)
+  }
+
+  expect(parsed.data?.message).toBe(expectedMessage)
 }
 
 test.describe('別人的 id', () => {
@@ -67,9 +118,8 @@ test.describe('別人的 id', () => {
   test('A 打 B 的 tankId /home 得到 404，回應裡沒有 B 的資料', async () => {
     const response = await a.request.get(`/api/tanks/${b.tankId}/home`)
 
-    expect(response.status()).toBe(404)
     // 「狀態碼是 404」與「什麼都沒送出來」是兩件事——錯誤回應的內容也要看過
-    expect(await response.text()).not.toContain(b.tankId)
+    await expectNoLeak(response, '找不到這個缸。', [b.tankName, b.creatureName])
   })
 
   // Given 我以 A 帳號登入
@@ -77,8 +127,7 @@ test.describe('別人的 id', () => {
   test('A 打 B 的 tankId /creatures 得到 404', async () => {
     const response = await a.request.get(`/api/tanks/${b.tankId}/creatures`)
 
-    expect(response.status()).toBe(404)
-    expect(await response.text()).not.toContain(b.creatureId)
+    await expectNoLeak(response, '找不到這個缸。', [b.tankName, b.creatureName])
   })
 
   // Given 我以 A 帳號登入
@@ -86,7 +135,7 @@ test.describe('別人的 id', () => {
   test('A 打 B 的 creatureId 得到 404', async () => {
     const response = await a.request.get(`/api/creatures/${b.creatureId}`)
 
-    expect(response.status()).toBe(404)
+    await expectNoLeak(response, '找不到這隻生物。', [b.creatureName])
   })
 
   // Given 我以 A 帳號登入

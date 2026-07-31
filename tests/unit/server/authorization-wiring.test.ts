@@ -1,8 +1,8 @@
 // @vitest-environment node
 // 純文字比對，不需要 Nuxt 環境；理由見 test-environment.test.ts（issue #38）
 
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 // 「歸屬檢查有沒有真的被接上」（issue #68）。
@@ -15,6 +15,40 @@ import { describe, expect, it } from 'vitest'
 // 這種比對守得住「整段被拿掉或換掉」，守不住「寫錯順序」。
 
 const read = (file: string) => readFileSync(resolve(process.cwd(), file), 'utf8')
+
+/**
+ * 同一份原始碼，但去掉註解。
+ *
+ * 下面幾條 `not.toMatch` 問的是「這段程式碼還在不在」，而註解本來就會為了解釋
+ * 決定而引用它擋掉的寫法（例如「不要寫成 `await readBody(event)`」）。連註解一起比對
+ * 的話，把理由寫清楚反而會讓測試轉紅——那會逼著後人刪掉解釋來換一個綠燈。
+ */
+function readCode(file: string): string {
+  return read(file)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter(line => !line.trim().startsWith('//'))
+    .join('\n')
+}
+
+/**
+ * 遞迴列出 `server/api` 底下所有 handler，路徑一律相對於專案根、以 `/` 分隔。
+ *
+ * 這一段一定要真的讀檔案系統：只比對「同一個檔案裡宣告的兩份清單」的話，
+ * 兩邊會一起對、一起錯，新增一支沒授權的 API 也不會有任何一條測試轉紅。
+ */
+function listApiHandlers(dir: string): string[] {
+  return readdirSync(resolve(process.cwd(), dir), { withFileTypes: true })
+    .flatMap((entry) => {
+      const path = join(dir, entry.name)
+
+      if (entry.isDirectory()) {
+        return listApiHandlers(path)
+      }
+
+      return entry.name.endsWith('.ts') ? [path] : []
+    })
+}
 
 /** 六支要保護的 API，與各自該用的解析函式（server/api/health.get.ts 不涉及使用者資料，維持公開） */
 const HANDLERS = [
@@ -46,19 +80,32 @@ describe('每一支 API 都經過同一道歸屬檢查', () => {
 
   // 每一支都要「自己」判斷，不能有人漏接。這一條是清單本身的守衛：
   // 日後新增 API 時，忘了接上歸屬檢查的那一支會在這裡被抓到。
+  //
+  // 左邊必須來自檔案系統。原本兩邊都是這個檔案裡的字串字面量，等於拿一份清單
+  // 跟它自己比對——新增一支毫無授權的 handler 照樣全綠（實測過），註解卻宣稱
+  // 這裡守得住，比沒有這條測試更容易誤導 reviewer。
   it('server/api 底下除了健康檢查之外，沒有不做歸屬檢查的 handler', () => {
-    const known = new Set(HANDLERS.map(handler => handler.file))
+    const guarded = HANDLERS.map(handler => handler.file)
+    // 健康檢查不涉及使用者資料，維持公開。要新增例外就得動這一行——
+    // 那是一個看得見的決定，不是安安靜靜地少接一支。
     const unguarded = ['server/api/health.get.ts']
 
-    expect([...known, ...unguarded].sort()).toEqual([
-      'server/api/creatures/[id].get.ts',
-      'server/api/creatures/[id].patch.ts',
-      'server/api/health.get.ts',
-      'server/api/tanks/[id]/creatures.get.ts',
-      'server/api/tanks/[id]/home.get.ts',
-      'server/api/tanks/index.get.ts',
-      'server/api/tanks/index.post.ts',
-    ])
+    expect(listApiHandlers('server/api').sort()).toEqual([...guarded, ...unguarded].sort())
+  })
+
+  // 未登入的請求不必、也不該先把整個 request body 收進記憶體。
+  //
+  // body 寫成 `await readBody(event)` 的參數時，它在解析函式有機會判斷身分**之前**
+  // 就已經執行完畢；h3 對畸形 JSON 直接 throw 400，於是完全沒登入的人會拿到
+  // 「Bad Request」而不是 401——issue #68 的「未登入一律 401」在這條路徑上不成立。
+  it.each([
+    'server/api/tanks/index.post.ts',
+    'server/api/creatures/[id].patch.ts',
+  ])('%s 把 body 延後到身分檢查之後才讀', (file) => {
+    const source = readCode(file)
+
+    expect(source).toMatch(/\(\) => readBody\(event\)/)
+    expect(source).not.toMatch(/await readBody\(event\)/)
   })
 })
 
@@ -66,7 +113,7 @@ describe('未登入不再是一個看起來正常的空回應', () => {
   // 舊行為：沒有使用者時回 200 `{ tanks: [] }`。前端無法把它與「這個帳號還沒有缸」
   // 分開，$api 的 401 攔截器（#67）也就沒有機會把人帶回登入頁。
   it('GET /api/tanks 不再在無使用者時回傳空清單', () => {
-    expect(read('server/api/tanks/index.get.ts')).not.toContain('tanks: []')
+    expect(readCode('server/api/tanks/index.get.ts')).not.toContain('tanks: []')
   })
 
   // 未登入時把「這個 id 不存在」當答案送出去，等於用 404 掩蓋 401——
@@ -77,6 +124,6 @@ describe('未登入不再是一個看起來正常的空回應', () => {
     'server/api/creatures/[id].get.ts',
     'server/api/creatures/[id].patch.ts',
   ])('%s 不再用 `user ? ... : null` 把未登入折成 404', (file) => {
-    expect(read(file)).not.toMatch(/user \?/)
+    expect(readCode(file)).not.toMatch(/user \?/)
   })
 })

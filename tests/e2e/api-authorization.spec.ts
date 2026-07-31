@@ -200,6 +200,25 @@ test.describe('未登入', () => {
     await context.close()
   })
 
+  // 兩支寫入 API 的 body 由 h3 的 readBody 解析，畸形 JSON 會讓它直接 throw 400。
+  // 那一步若跑在身分檢查之前，完全沒登入的人就會拿到「Bad Request」而不是 401——
+  // 狀態碼是這條邊界對外唯一的說法，401 不能被任何前置檢查蓋掉。
+  //
+  // unit 測試餵的是已經解析好的物件，走不到這一段，只有真的送一段壞掉的 JSON 才驗得到。
+  test('未登入時，畸形的 JSON body 仍然回 401，不是 400', async ({ browser }) => {
+    const context = await browser.newContext()
+    const malformed = { data: '{"name":', headers: { 'content-type': 'application/json' } }
+
+    const responses = await Promise.all([
+      context.request.post('/api/tanks', malformed),
+      context.request.patch('/api/creatures/any-creature-id', malformed),
+    ])
+
+    expect(responses.map(response => response.status())).toEqual([401, 401])
+
+    await context.close()
+  })
+
   // 健康檢查不涉及使用者資料，維持公開——把它一起關掉的話，
   // 監控會在每次 session 設定出問題時跟著一起沉默。
   test('/api/health 仍然不需登入', async ({ browser }) => {

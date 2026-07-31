@@ -156,6 +156,17 @@ function expectNoQuery(client: ReturnType<typeof fakeClient>) {
 /** 存活狀態的合法 PATCH 內容，用來確認「被擋下來時連解析都不會生效」 */
 const ALIVE_BODY = { status: 'ALIVE' }
 
+/**
+ * 兩支寫入 API 的 body 一律以 thunk 餵入，因為 handler 那邊也是這樣傳的。
+ *
+ * 真正的 `readBody(event)` 對畸形 JSON 會直接 throw 400，所以「什麼時候呼叫它」
+ * 決定了未登入的人拿到 401 還是 400。延後到身分／歸屬檢查之後才呼叫，被擋下來的
+ * 請求就連 body 都不會讀——這也是 #68 之前 PATCH 的既有行為。
+ */
+function bodyThunk(value: unknown) {
+  return vi.fn(() => Promise.resolve(value))
+}
+
 // Given 我以 A 帳號登入、B 有一個缸
 // When  我對 GET /api/tanks/<B 的 tankId>/home 發出請求
 // Then  回傳 404，不含 B 的任何資料
@@ -259,7 +270,7 @@ describe('GET /api/creatures/:id 的歸屬檢查', () => {
 // And   B 的那隻生物完全沒有被修改
 describe('PATCH /api/creatures/:id 的歸屬檢查', () => {
   it('A 打 B 的 creatureId 回 404', async () => {
-    await expect(applyCreatureStatus(fakeClient(), USER_A, 'creature-b1', ALIVE_BODY))
+    await expect(applyCreatureStatus(fakeClient(), USER_A, 'creature-b1', bodyThunk(ALIVE_BODY)))
       .resolves.toEqual({ ok: false, error: CREATURE_NOT_FOUND })
   })
 
@@ -267,19 +278,19 @@ describe('PATCH /api/creatures/:id 的歸屬檢查', () => {
   it('B 的那隻生物完全沒有被寫入', async () => {
     const client = fakeClient()
 
-    await applyCreatureStatus(client, USER_A, 'creature-b1', {
+    await applyCreatureStatus(client, USER_A, 'creature-b1', bodyThunk({
       status: 'DEAD',
       diedOn: '2026-07-01',
       causeOfDeath: 'JUMPED',
       deathNote: '不該被寫進去的一行',
-    })
+    }))
 
     expect(client.creature.update).not.toHaveBeenCalled()
   })
 
   it('A 改自己的生物正常寫入', async () => {
     const client = fakeClient()
-    const result = await applyCreatureStatus(client, USER_A, 'creature-a1', ALIVE_BODY)
+    const result = await applyCreatureStatus(client, USER_A, 'creature-a1', bodyThunk(ALIVE_BODY))
 
     expect(result.ok).toBe(true)
     expect(client.creature.update).toHaveBeenCalledWith(
@@ -290,12 +301,12 @@ describe('PATCH /api/creatures/:id 的歸屬檢查', () => {
   // 入缸日不由請求提供（既有決定）：由 body 帶進來就能繞過「死亡日不能早於入缸日」
   it('死亡日早於實際入缸日時回 400，不採用 body 帶來的入缸日', async () => {
     const client = fakeClient()
-    const result = await applyCreatureStatus(client, USER_A, 'creature-a1', {
+    const result = await applyCreatureStatus(client, USER_A, 'creature-a1', bodyThunk({
       status: 'DEAD',
       diedOn: '2026-04-01',
       causeOfDeath: 'UNKNOWN',
       addedOn: '2026-01-01',
-    })
+    }))
 
     expect(result).toMatchObject({ ok: false, error: { statusCode: 400 } })
     expect(client.creature.update).not.toHaveBeenCalled()
@@ -304,9 +315,28 @@ describe('PATCH /api/creatures/:id 的歸屬檢查', () => {
   it('未登入時回 401，而且一次查詢都不發出', async () => {
     const client = fakeClient()
 
-    await expect(applyCreatureStatus(client, null, 'creature-a1', ALIVE_BODY))
+    await expect(applyCreatureStatus(client, null, 'creature-a1', bodyThunk(ALIVE_BODY)))
       .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
     expectNoQuery(client)
+  })
+
+  // 真正的 readBody 對畸形 JSON 會 throw 400。先讀 body 再判斷身分的話，
+  // 完全沒登入的人送一段壞掉的 JSON 就會拿到 400 而不是 401。
+  it('未登入時連 body 都不會讀取', async () => {
+    const body = bodyThunk(ALIVE_BODY)
+
+    await applyCreatureStatus(fakeClient(), null, 'creature-a1', body)
+
+    expect(body).not.toHaveBeenCalled()
+  })
+
+  // 歸屬沒過也一樣：#68 之前的 PATCH 就是先檢查、確認過了才讀 body
+  it('打別人的 creatureId 時連 body 都不會讀取', async () => {
+    const body = bodyThunk(ALIVE_BODY)
+
+    await applyCreatureStatus(fakeClient(), USER_A, 'creature-b1', body)
+
+    expect(body).not.toHaveBeenCalled()
   })
 })
 
@@ -339,7 +369,7 @@ describe('GET /api/tanks 的歸屬檢查', () => {
 describe('POST /api/tanks 的歸屬', () => {
   it('新缸掛在 A 名下', async () => {
     const client = fakeClient()
-    const result = await createOwnedTank(client, USER_A, { name: '新缸' })
+    const result = await createOwnedTank(client, USER_A, bodyThunk({ name: '新缸' }))
 
     expect(result.ok).toBe(true)
     expect(client.tank.create).toHaveBeenCalledWith(
@@ -350,7 +380,7 @@ describe('POST /api/tanks 的歸屬', () => {
   it('換 B 登入時新缸就掛在 B 名下，不受資料表順序影響', async () => {
     const client = fakeClient()
 
-    await createOwnedTank(client, USER_B, { name: '新缸' })
+    await createOwnedTank(client, USER_B, bodyThunk({ name: '新缸' }))
 
     expect(client.tank.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ userId: USER_B.id }) }),
@@ -361,7 +391,7 @@ describe('POST /api/tanks 的歸屬', () => {
   // And POST /api/tanks 的訊息是「未登入」，不再是「請先建立使用者資料（pnpm db:seed）」
   it('未登入時回 401，訊息是「未登入」而不是叫人去跑 seed', async () => {
     const client = fakeClient()
-    const result = await createOwnedTank(client, null, { name: '新缸' })
+    const result = await createOwnedTank(client, null, bodyThunk({ name: '新缸' }))
 
     expect(result).toEqual({ ok: false, error: NOT_SIGNED_IN })
     expect(NOT_SIGNED_IN.data.message).toContain('未登入')
@@ -372,14 +402,24 @@ describe('POST /api/tanks 的歸屬', () => {
   // 未登入的人不該先收到一份表單檢查報告——那等於告訴他這支 API 願意跟他對話。
   // 身分先於內容，401 才是「上述任何一支 API」都成立的答案。
   it('未登入且內容也不合法時仍然回 401，不是 400', async () => {
-    await expect(createOwnedTank(fakeClient(), null, { name: '' }))
+    await expect(createOwnedTank(fakeClient(), null, bodyThunk({ name: '' })))
       .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+  })
+
+  // 上一條餵的是「已經解析好但語意不合法」的內容，走不到 readBody 的語法解析。
+  // 真正的破口在更前面：body 壓根還沒解析成功時，h3 就已經 throw 400 了。
+  it('未登入時連 body 都不會讀取', async () => {
+    const body = bodyThunk({ name: '新缸' })
+
+    await createOwnedTank(fakeClient(), null, body)
+
+    expect(body).not.toHaveBeenCalled()
   })
 
   // 已登入時，表單檢查照舊（既有行為，不因為本 issue 而消失）
   it('已登入但內容不合法時回 400，並附上可以直接顯示的訊息', async () => {
     const client = fakeClient()
-    const result = await createOwnedTank(client, USER_A, { name: '' })
+    const result = await createOwnedTank(client, USER_A, bodyThunk({ name: '' }))
 
     expect(result).toMatchObject({ ok: false, error: { statusCode: 400 } })
     expect(client.tank.create).not.toHaveBeenCalled()
@@ -406,8 +446,8 @@ describe('不存在的 id 與別人的 id 得到同一個答案', () => {
   })
 
   it('PATCH：不存在的 creatureId 與 B 的 creatureId 回傳完全相同的錯誤', async () => {
-    const missing = await applyCreatureStatus(fakeClient(), USER_A, 'creature-does-not-exist', ALIVE_BODY)
-    const others = await applyCreatureStatus(fakeClient(), USER_A, 'creature-b1', ALIVE_BODY)
+    const missing = await applyCreatureStatus(fakeClient(), USER_A, 'creature-does-not-exist', bodyThunk(ALIVE_BODY))
+    const others = await applyCreatureStatus(fakeClient(), USER_A, 'creature-b1', bodyThunk(ALIVE_BODY))
 
     expect(missing).toEqual(others)
   })

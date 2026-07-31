@@ -110,6 +110,19 @@ function invalidInput(statusMessage: string, message: string): ApiErrorSpec {
 }
 
 /**
+ * 兩支寫入 API 的 request body，**刻意延後到通過檢查之後才取得**。
+ *
+ * 取 body 這件事本身就會拒絕請求：h3 的 `readBody` 對畸形 JSON 直接 throw 400
+ * `Invalid JSON body`。所以只要 handler 寫成 `await readBody(event)` 的參數，
+ * 它就跑在這裡的身分判斷**之前**，完全沒登入的人送一段壞掉的 JSON 會拿到 400——
+ * 而 issue #68 要的是「未登入的任何一支 API 一律 401」。狀態碼是這道邊界對外唯一的
+ * 說法，不能被一個前置的格式檢查蓋掉。
+ *
+ * 收成函式還恢復了 PATCH 在 #68 之前的行為：擋下來的請求連 body 都不會讀進記憶體。
+ */
+type BodyReader = () => Promise<unknown>
+
+/**
  * 這個缸是不是當前使用者名下、未封存的那一個。
  *
  * 條件與 listTankOptions 完全一致（`userId` + `archivedAt: null`），因為缸切換選單
@@ -249,7 +262,7 @@ export async function applyCreatureStatus(
   client: PrismaClient,
   user: SessionUser | null,
   creatureId: string | undefined,
-  body: unknown,
+  readBody: BodyReader,
 ): Promise<Authorized<CreatureDetailResponse>> {
   const owned = await requireOwnedCreature(client, user, creatureId)
 
@@ -257,7 +270,7 @@ export async function applyCreatureStatus(
     return owned
   }
 
-  const parsed = parseCreatureStatusInput(body, { addedOn: owned.value.addedOn })
+  const parsed = parseCreatureStatusInput(await readBody(), { addedOn: owned.value.addedOn })
 
   if (!parsed.ok) {
     return { ok: false, error: invalidInput('Invalid creature status input', parsed.message) }
@@ -276,13 +289,13 @@ export async function applyCreatureStatus(
 export async function createOwnedTank(
   client: PrismaClient,
   user: SessionUser | null,
-  body: unknown,
+  readBody: BodyReader,
 ): Promise<Authorized<CreateTankResponse>> {
   if (!user) {
     return { ok: false, error: NOT_SIGNED_IN }
   }
 
-  const parsed = parseTankInput(body)
+  const parsed = parseTankInput(await readBody())
 
   if (!parsed.ok) {
     return { ok: false, error: invalidInput('Invalid tank input', parsed.message) }

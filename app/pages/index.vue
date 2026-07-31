@@ -22,8 +22,11 @@ const EMPTY_PREVIEWS = [
 // 摘要列與卡片才不會各自抓到差一秒的基準。
 const now = new Date()
 
+// $api 而不是裸 $fetch：session 過期時要被帶去登入頁，而不是停在一頁空資料上（#67）
+const { $api } = useNuxtApp()
+
 const { data: tankList } = await useAsyncData('home:tanks', () =>
-  $fetch<{ tanks: TankOption[] }>('/api/tanks'),
+  $api<{ tanks: TankOption[] }>('/api/tanks'),
 )
 
 const tanks = computed(() => tankList.value?.tanks ?? [])
@@ -45,7 +48,7 @@ const { data: home } = await useAsyncData<TankHomeData | null>(
   () => {
     const tankId = currentTankId.value
 
-    return tankId ? $fetch<TankHomeData>(`/api/tanks/${tankId}/home`) : Promise.resolve(null)
+    return tankId ? $api<TankHomeData>(`/api/tanks/${tankId}/home`) : Promise.resolve(null)
   },
   { watch: [currentTankId] },
 )

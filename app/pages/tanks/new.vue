@@ -21,6 +21,10 @@ const form = reactive({
   startedOn: '',
 })
 
+// $api 而不是裸 $fetch：session 過期時（API 回 401）要被帶去登入頁，
+// 而不是停在一個怎麼按都失敗的表單上（#67 Story ⑤）
+const { $api } = useNuxtApp()
+
 const error = ref<string | null>(null)
 const submitting = ref(false)
 
@@ -49,7 +53,7 @@ async function submit() {
   let created: CreateTankResponse
 
   try {
-    created = await $fetch<CreateTankResponse>('/api/tanks', {
+    created = await $api<CreateTankResponse>('/api/tanks', {
       method: 'POST',
       body: parsed.value,
     })

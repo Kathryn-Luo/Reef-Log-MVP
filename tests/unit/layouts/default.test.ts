@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
 import DefaultLayout from '../../../app/layouts/default.vue'
+import { signedInUserSession } from '../support/session'
+
+// 這個 layout 只在登入之後看得到（#67 的全域路由保護）。少了這張 session，
+// mountSuspended 的導覽會先被導去 /login，選中的 tab 就對不上。
+mockNuxtImport('useUserSession', () => () => signedInUserSession())
 
 const slots = { default: () => '頁面內容' }
 

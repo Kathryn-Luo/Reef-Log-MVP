@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
 import BottomTabBar from '../../../app/components/BottomTabBar.vue'
+import { signedInUserSession } from '../support/session'
+
+// tab 列只在登入之後看得到（#67 的全域路由保護）。少了這張 session，
+// mountSuspended 的導覽會先被導去 /login，選中的 tab 就永遠是「都沒選中」。
+mockNuxtImport('useUserSession', () => () => signedInUserSession())
 
 const LABELS = ['首頁', '記錄', '趨勢', '生物', '保養']
 const PATHS = ['/', '/log', '/trends', '/creatures', '/maintenance']

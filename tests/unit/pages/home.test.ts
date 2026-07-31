@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mountSuspended, registerEndpoint } from '@nuxt/test-utils/runtime'
+import { mockNuxtImport, mountSuspended, registerEndpoint } from '@nuxt/test-utils/runtime'
 import { enableAutoUnmount, flushPromises } from '@vue/test-utils'
 import HomePage from '../../../app/pages/index.vue'
 import BottomTabBar from '../../../app/components/BottomTabBar.vue'
+import { signedInUserSession } from '../support/session'
 import type { CreatureDto, TankHomeData, TankOption } from '#shared/types/home'
 import { HEADER_COLLAPSE_AT, HEADER_EXPAND_BELOW } from '#shared/utils/stickyHeader'
 
@@ -107,6 +108,10 @@ const state = {
   tanks: [] as TankOption[],
   home: {} as Record<string, TankHomeData>,
 }
+
+// 首頁要登入才進得去（#67 的全域路由保護）。少了這張 session，mountSuspended
+// 的導覽會先被導去 /login，頁面就讀不到網址上的 ?tank=<id>。
+mockNuxtImport('useUserSession', () => () => signedInUserSession())
 
 registerEndpoint('/api/tanks', () => ({ tanks: state.tanks }))
 registerEndpoint('/api/tanks/tank-1/home', () => state.home['tank-1'] ?? { water: null, creatures: [] })

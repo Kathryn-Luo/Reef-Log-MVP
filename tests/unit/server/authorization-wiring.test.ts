@@ -109,6 +109,22 @@ describe('每一支 API 都經過同一道歸屬檢查', () => {
   })
 })
 
+// 上面那條清單守的是「沒有漏接的 handler」，這一條守的是它的反面：
+// 唯一的例外要真的維持是例外。unit 這一層原本完全沒有碰過它，只有 E2E 打得到——
+// 而 E2E 不在 CI 的 job 內跑，等於健康檢查被誤加上登入要求時，合併前沒有任何一道會紅。
+describe('健康檢查維持公開', () => {
+  it('server/api/health.get.ts 不讀身分、也不做歸屬檢查', () => {
+    const source = readCode('server/api/health.get.ts')
+
+    expect(source).not.toContain('getCurrentUser')
+    expect(source).not.toContain('createError')
+
+    for (const { resolver } of HANDLERS) {
+      expect(source).not.toContain(resolver)
+    }
+  })
+})
+
 describe('未登入不再是一個看起來正常的空回應', () => {
   // 舊行為：沒有使用者時回 200 `{ tanks: [] }`。前端無法把它與「這個帳號還沒有缸」
   // 分開，$api 的 401 攔截器（#67）也就沒有機會把人帶回登入頁。

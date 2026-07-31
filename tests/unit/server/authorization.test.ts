@@ -51,6 +51,9 @@ const TANKS: TankRow[] = [
 
 const CREATURES: CreatureRow[] = [
   { id: 'creature-a1', tankId: 'tank-a1' },
+  // A 自己的生物，但缸已封存——getCreatureDetail 的 archivedAt 那一半要有東西可測，
+  // 否則「已封存的缸不該從詳情頁繞進去」只有註解，沒有行為驗證
+  { id: 'creature-a-archived', tankId: 'tank-a-archived' },
   { id: 'creature-b1', tankId: 'tank-b1' },
 ]
 
@@ -84,6 +87,11 @@ function creatureRow(row: CreatureRow) {
     causeOfDeath: null,
     deathNote: null,
   }
+}
+
+/** Prisma 在 `where` 一列都沒對上時丟的錯誤 */
+function recordNotFound() {
+  return Object.assign(new Error('Record to update not found.'), { code: 'P2025' })
 }
 
 function fakeClient() {
@@ -123,10 +131,16 @@ function fakeClient() {
       findMany: vi.fn(({ where }: { where: { tankId: string } }) => Promise.resolve(
         creatures.filter(creature => creature.tankId === where.tankId),
       )),
-      update: vi.fn(({ where, data }: { where: { id: string }, data: Record<string, unknown> }) => Promise.resolve({
-        ...creatures.find(creature => creature.id === where.id)!,
-        ...data,
-      })),
+      // where 也帶歸屬條件（見 updateCreatureStatus）：對不上任何一列時
+      // Prisma 丟的是 P2025，替身照做，否則「寫入時歸屬已經不成立」就沒得測
+      update: vi.fn(({ where, data }: { where: { id: string, tank?: { userId: string, archivedAt: null } }, data: Record<string, unknown> }) => {
+        const creature = creatures.find(candidate => candidate.id === where.id)
+        const tank = creature ? ownedTank({ id: creature.tankId, ...where.tank }) : null
+
+        return creature && tank
+          ? Promise.resolve({ ...creature, ...data })
+          : Promise.reject(recordNotFound())
+      }),
     },
     waterLog: { findMany: vi.fn().mockResolvedValue([]) },
     waterParameterTarget: { findMany: vi.fn().mockResolvedValue([]) },
@@ -231,6 +245,11 @@ describe('GET /api/tanks/:id/creatures 的歸屬檢查', () => {
     expect(result).toEqual({ ok: true, value: { creatures: [expect.objectContaining({ id: 'creature-a1' })] } })
   })
 
+  it('自己已封存的缸同樣回 404', async () => {
+    await expect(resolveTankCreatures(fakeClient(), USER_A, 'tank-a-archived'))
+      .resolves.toEqual({ ok: false, error: TANK_NOT_FOUND })
+  })
+
   it('未登入時回 401，而且一次查詢都不發出', async () => {
     const client = fakeClient()
 
@@ -253,6 +272,13 @@ describe('GET /api/creatures/:id 的歸屬檢查', () => {
     const result = await resolveCreatureDetail(fakeClient(), USER_A, 'creature-a1')
 
     expect(result).toEqual({ ok: true, value: { creature: expect.objectContaining({ id: 'creature-a1' }) } })
+  })
+
+  // 自己的生物，但缸已封存——那些缸不出現在任何清單裡，就不該從詳情頁的網址繞進去
+  // （getCreatureDetail 的 `tank: { userId, archivedAt: null }` 的後半段）
+  it('自己已封存的缸底下的生物同樣回 404', async () => {
+    await expect(resolveCreatureDetail(fakeClient(), USER_A, 'creature-a-archived'))
+      .resolves.toEqual({ ok: false, error: CREATURE_NOT_FOUND })
   })
 
   it('未登入時回 401，而且一次查詢都不發出', async () => {
@@ -294,7 +320,7 @@ describe('PATCH /api/creatures/:id 的歸屬檢查', () => {
 
     expect(result.ok).toBe(true)
     expect(client.creature.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'creature-a1' } }),
+      expect.objectContaining({ where: { id: 'creature-a1', tank: { userId: USER_A.id, archivedAt: null } } }),
     )
   })
 
@@ -337,6 +363,26 @@ describe('PATCH /api/creatures/:id 的歸屬檢查', () => {
     await applyCreatureStatus(fakeClient(), USER_A, 'creature-b1', body)
 
     expect(body).not.toHaveBeenCalled()
+  })
+
+  it('自己已封存的缸底下的生物回 404，而且沒有被寫入', async () => {
+    const client = fakeClient()
+
+    await expect(applyCreatureStatus(client, USER_A, 'creature-a-archived', bodyThunk(ALIVE_BODY)))
+      .resolves.toEqual({ ok: false, error: CREATURE_NOT_FOUND })
+    expect(client.creature.update).not.toHaveBeenCalled()
+  })
+
+  // 查完到寫入之間有一段空隙。目前沒有 API 能在那段時間內改變歸屬，但「把生物換缸」
+  // 是計畫中的功能——那支 API 一出現，這段空隙就變成真的可以被利用。
+  // 歸屬條件因此也寫進 update 的 where：對不上就是 P2025，回與「查不到」相同的 404。
+  it('查到與寫入之間歸屬變了（生物被換到別的缸）就回 404，不是 500', async () => {
+    const client = fakeClient()
+
+    client.creature.update.mockRejectedValueOnce(recordNotFound())
+
+    await expect(applyCreatureStatus(client, USER_A, 'creature-a1', bodyThunk(ALIVE_BODY)))
+      .resolves.toEqual({ ok: false, error: CREATURE_NOT_FOUND })
   })
 })
 

@@ -28,12 +28,16 @@ useSeoMeta({
 // 免得畫面上兩處各自抓到差一秒的基準。
 const now = new Date()
 
+// $api 而不是裸 $fetch：session 過期時要被帶去登入頁，而不是停在一頁空資料上（#67）。
+// 下面那個 .catch 不會把 401 一起吞掉——導向發生在 $api 自己的攔截器裡，比這裡早。
+const { $api } = useNuxtApp()
+
 const { data } = await useAsyncData<CreatureDetailResponse | null>(
   () => `creature:${creatureId.value}`,
   () =>
     // 找不到（或不屬於自己）時不炸掉整頁：這一頁自己畫得出「找不到這隻生物」，
     // 而且底部的 tab 列要留著，人才走得回去。
-    $fetch<CreatureDetailResponse>(`/api/creatures/${creatureId.value}`).catch(() => null),
+    $api<CreatureDetailResponse>(`/api/creatures/${creatureId.value}`).catch(() => null),
   { watch: [creatureId] },
 )
 
@@ -153,7 +157,7 @@ async function save() {
   saving.value = true
 
   try {
-    data.value = await $fetch<CreatureDetailResponse>(`/api/creatures/${source.id}`, {
+    data.value = await $api<CreatureDetailResponse>(`/api/creatures/${source.id}`, {
       method: 'PATCH',
       body: parsed.value,
     })

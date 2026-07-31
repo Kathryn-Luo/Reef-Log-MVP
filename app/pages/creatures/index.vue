@@ -50,8 +50,11 @@ const FILTER_IDLE_CLASSES: Record<CreatureStatusFilterKey, string> = {
 // 沒有照片的縮圖：設計稿的斜線佔位。Tailwind 沒有對應的工具類，直接給漸層。
 const PHOTO_PLACEHOLDER = 'repeating-linear-gradient(135deg, rgba(148,163,184,0.16) 0 6px, transparent 6px 12px)'
 
+// $api 而不是裸 $fetch：session 過期時要被帶去登入頁，而不是停在一頁空資料上（#67）
+const { $api } = useNuxtApp()
+
 const { data: tankList } = await useAsyncData('creatures:tanks', () =>
-  $fetch<{ tanks: TankOption[] }>('/api/tanks'),
+  $api<{ tanks: TankOption[] }>('/api/tanks'),
 )
 
 const tanks = computed(() => tankList.value?.tanks ?? [])
@@ -64,7 +67,7 @@ const { data: inventory } = await useAsyncData<TankCreaturesData | null>(
   () => {
     const tankId = currentTank.value?.id
 
-    return tankId ? $fetch<TankCreaturesData>(`/api/tanks/${tankId}/creatures`) : Promise.resolve(null)
+    return tankId ? $api<TankCreaturesData>(`/api/tanks/${tankId}/creatures`) : Promise.resolve(null)
   },
   { watch: [currentTank] },
 )

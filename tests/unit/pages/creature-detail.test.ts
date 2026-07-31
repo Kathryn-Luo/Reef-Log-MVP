@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mountSuspended, registerEndpoint } from '@nuxt/test-utils/runtime'
+import { mockNuxtImport, mountSuspended, registerEndpoint } from '@nuxt/test-utils/runtime'
 import { enableAutoUnmount, flushPromises } from '@vue/test-utils'
 import CreatureDetailPage from '../../../app/pages/creatures/[id].vue'
+import { signedInUserSession } from '../support/session'
 import type { CreatureDetailDto } from '#shared/types/creature'
 
 // 生物詳情 · 死亡記錄（Epic #1 screen-6，issue #14）。
+
+// 這一頁要登入才進得去（#67 的全域路由保護）。少了這張 session，mountSuspended
+// 的導覽會先被導去 /login，頁面就拿不到網址上的 :id。
+mockNuxtImport('useUserSession', () => () => signedInUserSession())
 
 function creature(overrides: Partial<CreatureDetailDto> = {}): CreatureDetailDto {
   return {

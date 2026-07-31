@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mockNuxtImport, mountSuspended, registerEndpoint } from '@nuxt/test-utils/runtime'
 import { enableAutoUnmount, flushPromises } from '@vue/test-utils'
 import NewTankPage from '../../../app/pages/tanks/new.vue'
+import { signedInUserSession } from '../support/session'
 import type { TankOption } from '#shared/types/home'
 
 // 建立缸的表單（issue #46）。
@@ -13,6 +14,10 @@ import type { TankOption } from '#shared/types/home'
 const { navigateToMock } = vi.hoisted(() => ({ navigateToMock: vi.fn() }))
 
 mockNuxtImport('navigateTo', () => navigateToMock)
+
+// 這一頁要登入才進得去（#67 的全域路由保護）。少了這張 session，
+// mountSuspended 的導覽會先被導去 /login，每一題都會多出一次導向。
+mockNuxtImport('useUserSession', () => () => signedInUserSession())
 
 const CREATED_TANK: TankOption = {
   id: 'tank-new',
@@ -325,8 +330,33 @@ describe('建立缸的表單 — 送出', () => {
   })
 
   // API 把可以直接顯示的訊息放在 data.message（statusMessage 只留 ASCII，h3 會濾掉中文）。
-  // 不讀它的話，「請先登入」這種說得出原因的失敗會被蓋成一句無用的通用訊息。
+  // 不讀它的話，說得出原因的失敗會被蓋成一句無用的通用訊息。
+  //
+  // ⚠ 這一題原本用的是 401（「請先登入再建立缸。」）。issue #67 之後 401 有了新的
+  // 意思——那是「session 沒了」，該做的是把人帶去登入頁而不是留在表單上（見下一題），
+  // 所以這裡改用同樣會附上訊息、但語意是「這張表單填錯了」的 400。
   it('API 說明了失敗原因時，原樣顯示那則訊息', async () => {
+    state.fail = true
+    state.failure = {
+      statusCode: 400,
+      statusMessage: 'Invalid tank input',
+      message: '水量請填正整數。',
+    }
+
+    const page = await mountForm()
+
+    await fill(page, { name: '主缸' })
+    await submit(page)
+
+    expect(navigateToMock).not.toHaveBeenCalled()
+    expect(page.get('[data-testid="tank-form-error"]').text()).toBe(
+      '水量請填正整數。',
+    )
+  })
+
+  // Given 我的 session 已過期 / When 我在頁面上操作並收到 401
+  // Then 我被導向 /login，而不是停在一個一直失敗的畫面上（issue #67 Story ⑤）
+  it('收到 401 時導向 /login，不留在一個怎麼按都失敗的表單上', async () => {
     state.fail = true
     state.failure = {
       statusCode: 401,
@@ -339,10 +369,7 @@ describe('建立缸的表單 — 送出', () => {
     await fill(page, { name: '主缸' })
     await submit(page)
 
-    expect(navigateToMock).not.toHaveBeenCalled()
-    expect(page.get('[data-testid="tank-form-error"]').text()).toBe(
-      '請先登入再建立缸。',
-    )
+    expect(navigateToMock).toHaveBeenCalledWith('/login', { replace: true })
   })
 
   // 連不上、逾時、500——說不出原因時仍然要有話可說

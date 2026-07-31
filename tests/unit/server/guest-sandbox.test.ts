@@ -406,10 +406,48 @@ describe('copyTemplateSandbox — 複製鏈的每一層', () => {
 // 模板還沒 seed（例如一個全新的資料庫）時，訪客仍要能進站——沙盒是空的，
 // 首頁走的是既有的「還沒有缸」空狀態，不是一頁 500。
 describe('copyTemplateSandbox — 模板不存在', () => {
+  /** 這一段刻意會叫 console.warn，測試裡收掉才不會把輸出洗成一片黃 */
+  const silencedWarn = () => vi.spyOn(console, 'warn').mockImplementation(() => {})
+
   it('模板沒有任何缸時不寫入，也不拋錯', async () => {
+    const warn = silencedWarn()
     const client = fakeClient([])
 
     await expect(copyTemplateSandbox(client, GUEST_USER_ID)).resolves.toBe(0)
     expect(client.tank.create).not.toHaveBeenCalled()
+
+    warn.mockRestore()
+  })
+
+  // 這件事實際發生過：#78 merge 之後 preview 上按訪客按鈕進去是空畫面，而 server 端
+  // 一個字都沒說。原因是那個資料庫從 #72（模板改名）之後就沒再 seed 過，缸還掛在舊的
+  // seed-user-kathryn 名下——查 seed-user-template 自然是 0 個缸。
+  //
+  // 「複製 0 個缸」本身是合法路徑（全新的資料庫也會走到，訪客照樣要進得去），所以不能
+  // 拋錯。但它同時也是「模板沒 seed」唯一的徵兆，靜默的話下次只能從頭查一遍。
+  it('模板沒有任何缸時留下警告，並指出該跑 seed', async () => {
+    const warn = silencedWarn()
+
+    await copyTemplateSandbox(fakeClient([]), GUEST_USER_ID)
+
+    expect(warn).toHaveBeenCalledTimes(1)
+
+    const message = warn.mock.calls[0]!.join(' ')
+
+    // 訊息要能直接告訴看 log 的人下一步做什麼，而不是只說「有 0 個缸」
+    expect(message).toContain('db:seed')
+    expect(message).toContain(TEMPLATE_USER.id)
+
+    warn.mockRestore()
+  })
+
+  it('模板有缸時不留警告', async () => {
+    const warn = silencedWarn()
+
+    await copyTemplateSandbox(fakeClient([TEMPLATE_TANK]), GUEST_USER_ID)
+
+    expect(warn).not.toHaveBeenCalled()
+
+    warn.mockRestore()
   })
 })

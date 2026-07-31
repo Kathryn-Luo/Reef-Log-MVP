@@ -16,10 +16,26 @@ const MAIN_TANK: TankOption = {
 
 // 入缸月數與觀察天數都是「相對現在」的推算值，
 // 固定資料 + 真實時鐘會隨日期漂移，所以夾具反過來由現在往回推。
+//
+// ⚠ 不能直接 `setUTCMonth(getUTCMonth() - months)`：目標月份沒有今天這一號時，
+// Date 會往後正規化到下個月的 1 號（今天 31 號、目標月只有 30 天 → 落在下個月），
+// 推出來的日期因此少了整整一個月，斷言跟著差一號。
+//
+// 只有「今天的號數 > 目標月份的天數」那幾天會炸——實測 2026–2027 兩年間共 58 天
+// （29 至 31 號都可能，2 月只有 28 天所以連 1/29 也算），其餘 673 天都是綠的。
+// 潛伏得夠久，久到它是在 merge 進 main 的那天（7/31）才第一次燒掉 CI。
+// 先夾到目標月實際的最後一天再組日期。
 function monthsAgo(months: number): string {
-  const date = new Date()
-  date.setUTCMonth(date.getUTCMonth() - months)
-  return date.toISOString().slice(0, 10)
+  const now = new Date()
+  const year = now.getUTCFullYear()
+  const month = now.getUTCMonth() - months
+
+  // 該月的第 0 天 ＝ 前一個月的最後一天，用它取得目標月的天數
+  const lastDayOfTargetMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate()
+
+  return new Date(Date.UTC(year, month, Math.min(now.getUTCDate(), lastDayOfTargetMonth)))
+    .toISOString()
+    .slice(0, 10)
 }
 
 function daysAgo(days: number): string {

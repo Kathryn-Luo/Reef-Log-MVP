@@ -1,3 +1,6 @@
+// @vitest-environment node
+// 純函式測試，不碰 Vue 元件、Nuxt composable 或 DOM；理由見 test-environment.test.ts（issue #38）
+
 import { describe, expect, it } from 'vitest'
 import {
   SESSION_MAX_AGE_SECONDS,

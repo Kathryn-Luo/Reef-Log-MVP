@@ -20,6 +20,7 @@ import { describe, expect, it } from 'vitest'
 const read = (file: string) => readFileSync(resolve(process.cwd(), file), 'utf8')
 
 const GOOGLE_ROUTE = 'server/routes/auth/google.get.ts'
+const GUEST_ROUTE = 'server/routes/auth/guest.get.ts'
 const LOGOUT_ROUTE = 'server/routes/auth/logout.post.ts'
 
 /** server/ 底下所有的 .ts，用來做「整個 server 端都沒有某段程式碼」這種掃描 */
@@ -72,6 +73,66 @@ describe('Google 登入路由', () => {
     expect(source).toContain('replaceUserSession(')
     // 比對呼叫形狀而不是裸字串：註解裡點名了 setUserSession，說明為什麼不能用它
     expect(source).not.toContain('setUserSession(')
+  })
+})
+
+// issue #66。與 Google 那一段同樣的分工：有分支的邏輯全在 server/utils/guestLogin.ts 與
+// guestSandbox.ts 兩支純函式裡（由 guest-login.test.ts、guest-sandbox.test.ts 直接呼叫驗證），
+// 這裡只守「有沒有真的接上」——`replaceUserSession`、`getCurrentUser` 都是 Nitro 的自動匯入，
+// 在 vitest 裡 import 不進來，只能看原始碼本文。
+describe('訪客登入路由', () => {
+  // 登入頁的「以訪客身分瀏覽」是 external 連結，指向 /auth/guest（#63 已定案的路徑）。
+  // 檔案不在這個位置的話，按下去會是 404，而 login.test.ts 只驗得到 href 本身。
+  it('掛在登入頁按鈕指向的 /auth/guest', () => {
+    expect(existsSync(resolve(process.cwd(), GUEST_ROUTE))).toBe(true)
+    expect(read('app/pages/login.vue')).toContain('\'/auth/guest\'')
+  })
+
+  // Story ②「Given 我已有訪客 session / Then 沿用同一位訪客 User，不會再建一個沙盒」
+  //
+  // 「已經是誰」只能從 request 上的密封 cookie 得知。少了這一段，每次按下按鈕都會
+  // 再建一位訪客、再複製一份示範資料。
+  it('先以 request 上的 session 判斷是不是已經有身分', () => {
+    const source = read(GUEST_ROUTE)
+
+    expect(source).toContain('getCurrentUser(event)')
+    expect(source).toContain('resolveGuestLogin')
+  })
+
+  // Story ①「And 發出帶著我自己 userId 的密封 cookie」
+  //
+  // 與 Google 那一支同樣必須 replace 不能 set：setUserSession 是 defu 合併，
+  // 前一位使用者留在 cookie 裡的欄位會原封不動被保留。
+  it('以 replaceUserSession 寫入 buildSessionPayload 的內容', () => {
+    const source = read(GUEST_ROUTE)
+
+    expect(source).toContain('buildSessionPayload')
+    expect(source).toContain('replaceUserSession(')
+    expect(source).not.toContain('setUserSession(')
+  })
+})
+
+// Story ⑤「Given 我是訪客 / When 我對任何寫入 API 發出請求 / Then 行為與 Google 使用者
+// 完全一致——沒有『唯讀訪客』的分支，也不判斷 provider」
+//
+// 這一條沒有可執行的反例可寫：要驗的正是「某種分支不存在」。獨立沙盒的整個好處就在
+// 這裡，而它會被悄悄破壞——某支 handler 加一個 provider 判斷，測試不會有任何反應。
+// 所以在原始碼層級擋住（與 seed-user.test.ts 擋「不要幫模板補 Account」同一個手法）。
+describe('訪客與 Google 使用者走同一條授權路徑', () => {
+  it('API handler 一律不判斷 provider，也沒有唯讀訪客的分支', () => {
+    const offenders = serverSources('server/api')
+      .filter(file => /GUEST|isGuest|guestOnly|readOnly|唯讀/.test(read(file)))
+
+    expect(offenders).toEqual([])
+  })
+
+  // 授權一律是「先確認該缸屬於當前使用者」（schema.prisma 的 User 註解），
+  // 訪客與 Google 使用者共用同一支 getCurrentUser——不另開一條訪客專用的取得方式。
+  it('沒有訪客專用的當前使用者取得方式', () => {
+    const offenders = serverSources()
+      .filter(file => /getCurrentGuest|guestUser\(/.test(read(file)))
+
+    expect(offenders).toEqual([])
   })
 })
 

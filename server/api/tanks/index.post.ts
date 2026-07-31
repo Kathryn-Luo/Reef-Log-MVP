@@ -17,19 +17,18 @@ export default defineEventHandler(async (event): Promise<CreateTankResponse> => 
     })
   }
 
-  const user = await getCurrentUser(prisma)
+  const user = await getCurrentUser(event)
 
   if (!user) {
-    // 認證尚未導入（見 server/utils/currentContext.ts）：一個使用者都沒有時，
-    // 無從決定這個缸該掛在誰名下。導入認證（#47）後這裡會變成「未登入」。
+    // 未登入（沒有 cookie、簽章驗不過、已過期，或 cookie 指向的使用者已不存在）：
+    // 無從決定這個缸該掛在誰名下。
     //
-    // 這條路徑正好是首頁空狀態的使用者會走到的——什麼都還沒有的資料庫（沒跑過 seed）
-    // 按下「建立我的第一個缸」就會落在這裡。訊息同樣走 data，讓表單說得出原因，
-    // 而不是丟一句「請稍後再試」讓人一直重試一個必然失敗的動作。
+    // 訊息走 data 而不是 statusMessage，讓表單說得出原因——h3 會過濾掉非 ASCII 字元。
+    // 路由保護是另一支子 issue，在那之前這裡就是這條路徑唯一的把關。
     throw createError({
       statusCode: 401,
-      statusMessage: 'No current user',
-      data: { message: '目前沒有可用的使用者，無法決定這個缸屬於誰。請先建立使用者資料（pnpm db:seed）。' },
+      statusMessage: 'Not signed in',
+      data: { message: '請先登入再建立缸。' },
     })
   }
 

@@ -325,13 +325,13 @@ describe('建立缸的表單 — 送出', () => {
   })
 
   // API 把可以直接顯示的訊息放在 data.message（statusMessage 只留 ASCII，h3 會濾掉中文）。
-  // 不讀它的話，「沒有可用的使用者」這種說得出原因的失敗會被蓋成一句無用的通用訊息。
+  // 不讀它的話，「請先登入」這種說得出原因的失敗會被蓋成一句無用的通用訊息。
   it('API 說明了失敗原因時，原樣顯示那則訊息', async () => {
     state.fail = true
     state.failure = {
       statusCode: 401,
-      statusMessage: 'No current user',
-      message: '目前沒有可用的使用者，無法決定這個缸屬於誰。',
+      statusMessage: 'Not signed in',
+      message: '請先登入再建立缸。',
     }
 
     const page = await mountForm()
@@ -341,7 +341,7 @@ describe('建立缸的表單 — 送出', () => {
 
     expect(navigateToMock).not.toHaveBeenCalled()
     expect(page.get('[data-testid="tank-form-error"]').text()).toBe(
-      '目前沒有可用的使用者，無法決定這個缸屬於誰。',
+      '請先登入再建立缸。',
     )
   })
 

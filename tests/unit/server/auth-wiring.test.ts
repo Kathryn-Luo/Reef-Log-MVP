@@ -110,6 +110,42 @@ describe('訪客登入路由', () => {
     expect(source).toContain('replaceUserSession(')
     expect(source).not.toContain('setUserSession(')
   })
+
+  // 取當前使用者要一起被 catch 罩住。`getCurrentUser()` 自己只接住「讀 session 失敗」，
+  // 底下那次 `user.findUnique` 的資料庫錯誤仍會往外拋——放在 try 外面的話，同一個
+  // 資料庫故障會有兩種結果：發生在這一行是 500，發生在下一行的 resolveGuestLogin
+  // 裡則導回 /login。
+  it('取當前使用者也在 try 之內，資料庫故障不會變成 500', () => {
+    const source = read(GUEST_ROUTE)
+
+    expect(source.indexOf('try {')).toBeGreaterThan(-1)
+    expect(source.indexOf('try {')).toBeLessThan(source.indexOf('getCurrentUser(event)'))
+  })
+})
+
+// 訪客登入是「GET 而且會寫入」——一次跟隨就是一位 User 加一整份沙盒複製。
+//
+// 登入頁是公開頁面，那顆按鈕渲染出來就是一個普通的 <a href="/auth/guest">。#67
+// （未登入一律導向 /login）落地之後，每一次爬 `/` 都會落在這一頁，那顆連結就在
+// 爬蟲正前方。兩道各自獨立、缺一不可：
+//   robots.txt —— 只是「請求」，不守規矩的爬蟲照樣會來
+//   rel=nofollow —— 守規矩的爬蟲不會跟隨，但也只是提示
+// 真正的止血是「反正拿不到 cookie，沙盒沒人用」，加上過期訪客清理（另一支子 issue）。
+describe('不引導爬蟲去踩會寫入的登入路由', () => {
+  it('robots.txt 存在且擋掉整個 /auth/', () => {
+    expect(existsSync(resolve(process.cwd(), 'public/robots.txt'))).toBe(true)
+
+    const robots = read('public/robots.txt')
+
+    expect(robots).toMatch(/^User-agent:\s*\*$/m)
+    expect(robots).toMatch(/^Disallow:\s*\/auth\/$/m)
+  })
+
+  // rel="nofollow" 那一半刻意「不」在這裡驗。原本寫過一條比對 login.vue 原始碼的，
+  // 但它嚴格弱於 login.test.ts 裡讀渲染結果的那條——UButton 有可能不把屬性往下傳，
+  // 原始碼寫了不等於 <a> 上真的有（而且 rel 是整個覆寫、會洗掉元件自帶的
+  // noopener / noreferrer，這件事只有讀渲染結果才看得見）。留兩條只是讓同一件事有
+  // 兩個會壞的地方，其中一條還會因為屬性值多加一個詞就誤紅。
 })
 
 // Story ⑤「Given 我是訪客 / When 我對任何寫入 API 發出請求 / Then 行為與 Google 使用者

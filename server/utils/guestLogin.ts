@@ -22,6 +22,16 @@ export const GUEST_DISPLAY_NAME = '訪客'
  */
 const SANDBOX_TRANSACTION_TIMEOUT_MS = 30_000
 
+/**
+ * 等一條可用連線的上限（毫秒）。
+ *
+ * 與 timeout 是兩件事：timeout 管的是「交易開始之後能跑多久」，maxWait 管的是「交易
+ * 開始之前能等多久」，預設只有 2 秒。Neon 是 serverless，連線吃緊時光是拿到連線就可能
+ * 超過 2 秒——只放寬 timeout 會留下一個很難查的故障：交易根本還沒開始就失敗了，
+ * 而錯誤訊息談的是交易。
+ */
+const SANDBOX_TRANSACTION_MAX_WAIT_MS = 10_000
+
 export interface GuestLoginResult {
   userId: string
   /** 首次進站（順帶建了帳號與沙盒）。呼叫端目前只用來決定要不要記 log。 */
@@ -87,7 +97,10 @@ export async function resolveGuestLogin(
 
       return user.id
     },
-    { timeout: SANDBOX_TRANSACTION_TIMEOUT_MS },
+    {
+      timeout: SANDBOX_TRANSACTION_TIMEOUT_MS,
+      maxWait: SANDBOX_TRANSACTION_MAX_WAIT_MS,
+    },
   )
 
   return { userId, isNewGuest: true }

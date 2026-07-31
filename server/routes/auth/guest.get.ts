@@ -14,11 +14,15 @@
 // 判斷全部在 server/utils/guestLogin.ts 的 resolveGuestLogin() 裡，由 unit test 直接呼叫
 // 驗證；這裡只有接線，由 auth-wiring.test.ts 看原始碼守著。
 export default defineEventHandler(async (event) => {
-  // Story ②：已經有身分就沿用，不再建一個沙盒。「已經是誰」只能從 request 上的密封
-  // cookie 得知——少了這一段，每按一次按鈕就多一位訪客與一整份複製出來的示範資料。
-  const existingUser = await getCurrentUser(event)
-
   try {
+    // Story ②：已經有身分就沿用，不再建一個沙盒。「已經是誰」只能從 request 上的密封
+    // cookie 得知——少了這一段，每按一次按鈕就多一位訪客與一整份複製出來的示範資料。
+    //
+    // 這一行也要在 try 之內：getCurrentUser() 自己只接住「讀 session 失敗」，底下那次
+    // user.findUnique 的資料庫錯誤仍會往外拋。放在外面的話，同一個資料庫故障發生在
+    // 這一行是 500、發生在下一行則導回 /login。
+    const existingUser = await getCurrentUser(event)
+
     const { userId } = await resolveGuestLogin(prisma, existingUser)
 
     // 一定要 replace 不能 set：setUserSession 是 defu 合併，前一位使用者留在 cookie 裡的

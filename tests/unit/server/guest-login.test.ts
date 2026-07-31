@@ -160,6 +160,28 @@ describe('resolveGuestLogin — 首次進站', () => {
     expect(client.$transaction).toHaveBeenCalledTimes(1)
     expect(calls).toEqual(['$transaction', 'user.create', 'tank.create'])
   })
+
+  // Prisma 互動式交易有兩個上限，兩個都要放寬：
+  //   timeout —— 交易本身能跑多久（預設 5 秒）。要跑的是「模板有幾個缸就幾句 nested
+  //              create」，每一句底下數十筆 insert。
+  //   maxWait —— 等一條可用連線的上限（預設 2 秒）。Neon 是 serverless，連線吃緊時
+  //              光是拿到連線就可能超過 2 秒。
+  //
+  // 只放寬 timeout 會留下一個很難查的故障：交易根本還沒開始就失敗了，而錯誤訊息談的
+  // 是交易。訪客這條路徑一位訪客只走一次，失敗就沒有第二次機會（下次進站是新沙盒）。
+  it('交易的 timeout 與 maxWait 都放寬，不留下預設值', async () => {
+    const { client } = fakeClient()
+
+    await resolveGuestLogin(client, null)
+
+    const [, options] = client.$transaction.mock.calls[0] as unknown as [
+      unknown,
+      { timeout?: number, maxWait?: number } | undefined,
+    ]
+
+    expect(options?.timeout).toBeGreaterThan(5_000)
+    expect(options?.maxWait).toBeGreaterThan(2_000)
+  })
 })
 
 // Given 我已有訪客 session / When 我再次進站

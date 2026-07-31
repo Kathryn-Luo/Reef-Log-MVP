@@ -264,6 +264,12 @@ export async function applyCreatureStatus(
   creatureId: string | undefined,
   readBody: BodyReader,
 ): Promise<Authorized<CreatureDetailResponse>> {
+  // 身分先於一切。這一條與 requireOwnedCreature 裡的那條重複，但它讓下面用得到 user.id
+  // ——寫入語句自己也要帶歸屬條件，不能只依賴「呼叫之前已經檢查過了」。
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
   const owned = await requireOwnedCreature(client, user, creatureId)
 
   if (!owned.ok) {
@@ -276,7 +282,13 @@ export async function applyCreatureStatus(
     return { ok: false, error: invalidInput('Invalid creature status input', parsed.message) }
   }
 
-  return { ok: true, value: { creature: await updateCreatureStatus(client, owned.value.id, parsed.value) } }
+  const creature = await updateCreatureStatus(client, owned.value.id, user.id, parsed.value)
+
+  // null＝查到之後、寫入之前歸屬變了。回與「查不到」完全相同的 404：
+  // 那正是此刻為真的事，而且與其他路徑一個字都不差（見 CREATURE_NOT_FOUND）。
+  return creature
+    ? { ok: true, value: { creature } }
+    : { ok: false, error: CREATURE_NOT_FOUND }
 }
 
 /**

@@ -15,6 +15,14 @@ useSeoMeta({
 // ⚠ 兩顆按鈕指向的是「server 路由」，不是前端路由——OAuth 的起點與訪客 session 的
 // 建立都必須整頁導出去，交給 vue-router 接手只會變成前端找不到頁面。因此一律 external。
 //
+// 兩顆都帶 rel="nofollow"：這一頁是公開的，而 /auth/guest 是「一次 GET 就建一位 User
+// 並複製一整份示範資料」（#66）。#67 之後每一次爬 `/` 都會落在這裡，那顆連結就在爬蟲
+// 正前方。另一半在 public/robots.txt——兩道都只是提示，所以兩道都要。
+//
+// noopener noreferrer 要一起寫上：UButton 對 external 連結本來就會補這兩個值，而
+// rel 是整個屬性被覆寫、不是合併——只寫 nofollow 會把它們洗掉。這兩個連結是同源
+// 同分頁導向，掉了實際上不痛，但沒有理由留一個自己製造的退步。
+//
 // 這兩條路由目前「尚未存在」：它們屬於 `nuxt-auth-utils`，而依 CLAUDE.md 新增套件
 // 依賴需要人類核准，本輪不自行安裝。路徑先照該套件的慣例定下來（`/auth/<provider>`），
 // 套件裝上、Google client id / secret 與 session 密鑰設好之後即可接上。
@@ -77,6 +85,7 @@ const PRIVACY = '/privacy'
           data-emphasis="primary"
           :to="GOOGLE_START"
           external
+          rel="nofollow noopener noreferrer"
           size="xl"
           block
           class="rounded-2xl bg-white py-3.5 text-base font-semibold text-slate-900 hover:bg-white/90"
@@ -118,6 +127,7 @@ const PRIVACY = '/privacy'
           data-emphasis="secondary"
           :to="GUEST_START"
           external
+          rel="nofollow noopener noreferrer"
           color="neutral"
           variant="outline"
           size="xl"

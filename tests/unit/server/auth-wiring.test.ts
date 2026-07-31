@@ -20,6 +20,7 @@ import { describe, expect, it } from 'vitest'
 const read = (file: string) => readFileSync(resolve(process.cwd(), file), 'utf8')
 
 const GOOGLE_ROUTE = 'server/routes/auth/google.get.ts'
+const GUEST_ROUTE = 'server/routes/auth/guest.get.ts'
 const LOGOUT_ROUTE = 'server/routes/auth/logout.post.ts'
 
 /** server/ 底下所有的 .ts，用來做「整個 server 端都沒有某段程式碼」這種掃描 */
@@ -72,6 +73,102 @@ describe('Google 登入路由', () => {
     expect(source).toContain('replaceUserSession(')
     // 比對呼叫形狀而不是裸字串：註解裡點名了 setUserSession，說明為什麼不能用它
     expect(source).not.toContain('setUserSession(')
+  })
+})
+
+// issue #66。與 Google 那一段同樣的分工：有分支的邏輯全在 server/utils/guestLogin.ts 與
+// guestSandbox.ts 兩支純函式裡（由 guest-login.test.ts、guest-sandbox.test.ts 直接呼叫驗證），
+// 這裡只守「有沒有真的接上」——`replaceUserSession`、`getCurrentUser` 都是 Nitro 的自動匯入，
+// 在 vitest 裡 import 不進來，只能看原始碼本文。
+describe('訪客登入路由', () => {
+  // 登入頁的「以訪客身分瀏覽」是 external 連結，指向 /auth/guest（#63 已定案的路徑）。
+  // 檔案不在這個位置的話，按下去會是 404，而 login.test.ts 只驗得到 href 本身。
+  it('掛在登入頁按鈕指向的 /auth/guest', () => {
+    expect(existsSync(resolve(process.cwd(), GUEST_ROUTE))).toBe(true)
+    expect(read('app/pages/login.vue')).toContain('\'/auth/guest\'')
+  })
+
+  // Story ②「Given 我已有訪客 session / Then 沿用同一位訪客 User，不會再建一個沙盒」
+  //
+  // 「已經是誰」只能從 request 上的密封 cookie 得知。少了這一段，每次按下按鈕都會
+  // 再建一位訪客、再複製一份示範資料。
+  it('先以 request 上的 session 判斷是不是已經有身分', () => {
+    const source = read(GUEST_ROUTE)
+
+    expect(source).toContain('getCurrentUser(event)')
+    expect(source).toContain('resolveGuestLogin')
+  })
+
+  // Story ①「And 發出帶著我自己 userId 的密封 cookie」
+  //
+  // 與 Google 那一支同樣必須 replace 不能 set：setUserSession 是 defu 合併，
+  // 前一位使用者留在 cookie 裡的欄位會原封不動被保留。
+  it('以 replaceUserSession 寫入 buildSessionPayload 的內容', () => {
+    const source = read(GUEST_ROUTE)
+
+    expect(source).toContain('buildSessionPayload')
+    expect(source).toContain('replaceUserSession(')
+    expect(source).not.toContain('setUserSession(')
+  })
+
+  // 取當前使用者要一起被 catch 罩住。`getCurrentUser()` 自己只接住「讀 session 失敗」，
+  // 底下那次 `user.findUnique` 的資料庫錯誤仍會往外拋——放在 try 外面的話，同一個
+  // 資料庫故障會有兩種結果：發生在這一行是 500，發生在下一行的 resolveGuestLogin
+  // 裡則導回 /login。
+  it('取當前使用者也在 try 之內，資料庫故障不會變成 500', () => {
+    const source = read(GUEST_ROUTE)
+
+    expect(source.indexOf('try {')).toBeGreaterThan(-1)
+    expect(source.indexOf('try {')).toBeLessThan(source.indexOf('getCurrentUser(event)'))
+  })
+})
+
+// 訪客登入是「GET 而且會寫入」——一次跟隨就是一位 User 加一整份沙盒複製。
+//
+// 登入頁是公開頁面，那顆按鈕渲染出來就是一個普通的 <a href="/auth/guest">。#67
+// （未登入一律導向 /login）落地之後，每一次爬 `/` 都會落在這一頁，那顆連結就在
+// 爬蟲正前方。兩道各自獨立、缺一不可：
+//   robots.txt —— 只是「請求」，不守規矩的爬蟲照樣會來
+//   rel=nofollow —— 守規矩的爬蟲不會跟隨，但也只是提示
+// 真正的止血是「反正拿不到 cookie，沙盒沒人用」，加上過期訪客清理（另一支子 issue）。
+describe('不引導爬蟲去踩會寫入的登入路由', () => {
+  it('robots.txt 存在且擋掉整個 /auth/', () => {
+    expect(existsSync(resolve(process.cwd(), 'public/robots.txt'))).toBe(true)
+
+    const robots = read('public/robots.txt')
+
+    expect(robots).toMatch(/^User-agent:\s*\*$/m)
+    expect(robots).toMatch(/^Disallow:\s*\/auth\/$/m)
+  })
+
+  // rel="nofollow" 那一半刻意「不」在這裡驗。原本寫過一條比對 login.vue 原始碼的，
+  // 但它嚴格弱於 login.test.ts 裡讀渲染結果的那條——UButton 有可能不把屬性往下傳，
+  // 原始碼寫了不等於 <a> 上真的有（而且 rel 是整個覆寫、會洗掉元件自帶的
+  // noopener / noreferrer，這件事只有讀渲染結果才看得見）。留兩條只是讓同一件事有
+  // 兩個會壞的地方，其中一條還會因為屬性值多加一個詞就誤紅。
+})
+
+// Story ⑤「Given 我是訪客 / When 我對任何寫入 API 發出請求 / Then 行為與 Google 使用者
+// 完全一致——沒有『唯讀訪客』的分支，也不判斷 provider」
+//
+// 這一條沒有可執行的反例可寫：要驗的正是「某種分支不存在」。獨立沙盒的整個好處就在
+// 這裡，而它會被悄悄破壞——某支 handler 加一個 provider 判斷，測試不會有任何反應。
+// 所以在原始碼層級擋住（與 seed-user.test.ts 擋「不要幫模板補 Account」同一個手法）。
+describe('訪客與 Google 使用者走同一條授權路徑', () => {
+  it('API handler 一律不判斷 provider，也沒有唯讀訪客的分支', () => {
+    const offenders = serverSources('server/api')
+      .filter(file => /GUEST|isGuest|guestOnly|readOnly|唯讀/.test(read(file)))
+
+    expect(offenders).toEqual([])
+  })
+
+  // 授權一律是「先確認該缸屬於當前使用者」（schema.prisma 的 User 註解），
+  // 訪客與 Google 使用者共用同一支 getCurrentUser——不另開一條訪客專用的取得方式。
+  it('沒有訪客專用的當前使用者取得方式', () => {
+    const offenders = serverSources()
+      .filter(file => /getCurrentGuest|guestUser\(/.test(read(file)))
+
+    expect(offenders).toEqual([])
   })
 })
 

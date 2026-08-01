@@ -37,11 +37,21 @@ test('再次進站沿用同一個沙盒，不會多長出一份示範資料', as
 
   const before = await tankIds(context)
 
-  // 再按一次「以訪客身分瀏覽」是「再次進站」最嚴格的形式：連建立沙盒的那條路徑
-  // 都再走一遍，沙盒仍該原封不動。
-  await page.goto('/login')
-  await page.getByTestId('login-action-guest').click()
-  await expect(page).toHaveURL('/')
+  // 「再次進站」最嚴格的形式是連建立沙盒的那條路徑都再走一遍，沙盒仍該原封不動。
+  //
+  // 這一段不能經過登入頁的 UI（issue #87）：#67 之後 route middleware 會把已登入的人
+  // 從 /login 帶回首頁，那顆「以訪客身分瀏覽」按鈕永遠不會出現，click() 只能等到超時。
+  // 所以直接打那顆按鈕指向的終點 /auth/guest——按鈕本身由上面第一條 test 顧著，
+  // 這條要驗的「建立沙盒那條路徑再跑一次也不會多長出東西」原封不動保留。
+  //
+  // context.request 與瀏覽器共用同一份 cookie，伺服器看到的仍是「已經有身分」的那一位。
+  const again = await context.request.get('/auth/guest')
+
+  // 已經有身分時沿用現有 session、照樣導回首頁。這一條不是順便驗的：登入失敗時
+  // 這支路由會改導向 /login 而不留下任何痕跡，少了它，一次失敗的訪客登入會因為
+  // 「沙盒沒變」而被下面那句判成通過。
+  expect(again.ok()).toBe(true)
+  expect(new URL(again.url()).pathname).toBe('/')
 
   expect(await tankIds(context)).toEqual(before)
 })

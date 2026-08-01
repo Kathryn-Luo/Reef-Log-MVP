@@ -48,7 +48,8 @@ export default defineOAuthGoogleEventHandler({
       return sendRedirect(event, '/login')
     }
 
-    // 首次登入引導是另一支子 issue，這裡一律回首頁。isNewUser 因此暫時沒有用到。
+    // 一律回首頁。首次登入引導（#69）已判定不需要——沒有缸的人由首頁空狀態的
+    // 「建立第一個缸」入口（#46）承接，不再另外導向 /tanks/new。isNewUser 因此沒有用到。
     return sendRedirect(event, '/')
   },
 

@@ -37,6 +37,16 @@ function fakeClient(found: unknown = null, updated: unknown = null) {
   return client as unknown as PrismaClient & typeof client
 }
 
+/**
+ * 寫入時 `where` 一列都沒對上，Prisma 丟的就是 P2025。
+ *
+ * 歸屬條件進到 `where` 之後，這是「查的時候還是你的、寫的時候已經不是了」唯一的訊號
+ * ——生物被搬到別的缸、缸被封存、或那一列剛被刪掉。
+ */
+function recordNotFound() {
+  return Object.assign(new Error('An operation failed because it depends on one or more records that were required but not found.'), { code: 'P2025' })
+}
+
 describe('getCreatureDetail', () => {
   // 網址被改成別人的 creatureId 時不該回傳資料——與 /api/tanks/:id/creatures 同一道檢查，
   // 只是這裡的歸屬要透過 tank 才看得到。
@@ -82,7 +92,7 @@ describe('updateCreatureStatus', () => {
   it('把狀態與死亡記錄寫進去，日期釘在 UTC 零時', async () => {
     const client = fakeClient(ROW)
 
-    await updateCreatureStatus(client, 'f5', {
+    await updateCreatureStatus(client, 'f5', 'user-1', {
       status: 'DEAD',
       observedSickOn: '2026-05-16',
       ailment: '白點',
@@ -92,7 +102,7 @@ describe('updateCreatureStatus', () => {
     })
 
     expect(client.creature.update).toHaveBeenCalledWith({
-      where: { id: 'f5' },
+      where: { id: 'f5', tank: { userId: 'user-1', archivedAt: null } },
       data: {
         status: 'DEAD',
         // @db.Date 釘在 UTC 零時，UTC+8 的使用者選 05/20 才不會被記成 05/19
@@ -109,7 +119,7 @@ describe('updateCreatureStatus', () => {
   it('改回存活時把死亡與生病的欄位一併寫成 null', async () => {
     const client = fakeClient(ROW, { ...ROW, status: 'ALIVE', observedSickOn: null, ailment: null, diedOn: null, causeOfDeath: null, deathNote: null })
 
-    const creature = await updateCreatureStatus(client, 'f5', {
+    const creature = await updateCreatureStatus(client, 'f5', 'user-1', {
       status: 'ALIVE',
       observedSickOn: null,
       ailment: null,
@@ -119,7 +129,7 @@ describe('updateCreatureStatus', () => {
     })
 
     expect(client.creature.update).toHaveBeenCalledWith({
-      where: { id: 'f5' },
+      where: { id: 'f5', tank: { userId: 'user-1', archivedAt: null } },
       data: {
         status: 'ALIVE',
         observedSickOn: null,
@@ -141,7 +151,7 @@ describe('updateCreatureStatus', () => {
   it('回傳更新後的詳情（與 GET 同一個形狀）', async () => {
     const client = fakeClient(ROW)
 
-    const creature = await updateCreatureStatus(client, 'f5', {
+    const creature = await updateCreatureStatus(client, 'f5', 'user-1', {
       status: 'DEAD',
       observedSickOn: null,
       ailment: null,
@@ -151,5 +161,61 @@ describe('updateCreatureStatus', () => {
     })
 
     expect(creature).toMatchObject({ id: 'f5', name: '火焰仙', subCategory: '神仙' })
+  })
+
+  // 歸屬條件必須在寫入語句本身成立，不能只靠「呼叫之前已經檢查過了」。
+  //
+  // 查完到寫入之間有一段空隙，而「把生物換缸」是計畫中的功能：一旦有那支 API，
+  // 這段空隙就變成真的可以被利用——A 讀到自己的生物、B 在同一瞬間把它搬走 /
+  // A 自己在另一個分頁把缸封存，寫入卻仍然照舊發生。
+  it('寫入的 where 帶著歸屬條件，不是只有 id', async () => {
+    const client = fakeClient(ROW)
+
+    await updateCreatureStatus(client, 'f5', 'user-1', {
+      status: 'ALIVE',
+      observedSickOn: null,
+      ailment: null,
+      diedOn: null,
+      causeOfDeath: null,
+      deathNote: null,
+    })
+
+    expect(client.creature.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'f5', tank: { userId: 'user-1', archivedAt: null } } }),
+    )
+  })
+
+  // 兩步之間歸屬變了：`where` 對不上任何一列，Prisma 丟 P2025。
+  // 這裡把它轉成 null，讓呼叫端回與「查不到」完全相同的 404，而不是 500。
+  it('寫入時歸屬已經不成立（P2025）就回傳 null，不讓例外冒出去', async () => {
+    const client = fakeClient(ROW)
+
+    client.creature.update.mockRejectedValueOnce(recordNotFound())
+
+    await expect(updateCreatureStatus(client, 'f5', 'user-1', {
+      status: 'DEAD',
+      observedSickOn: null,
+      ailment: null,
+      diedOn: '2026-05-20',
+      causeOfDeath: 'JUMPED',
+      deathNote: null,
+    })).resolves.toBeNull()
+  })
+
+  // P2025 以外的錯誤（連線斷掉、約束衝突…）不該被折成「找不到」——
+  // 那會把一次真正的故障顯示成一個看起來正常的 404。
+  it('其他錯誤照常往外丟', async () => {
+    const client = fakeClient(ROW)
+
+    client.creature.update.mockRejectedValueOnce(Object.assign(new Error('connection lost'), { code: 'P1001' }))
+
+    await expect(updateCreatureStatus(client, 'f5', 'user-1', {
+      status: 'ALIVE',
+      observedSickOn: null,
+      ailment: null,
+      diedOn: null,
+      causeOfDeath: null,
+      deathNote: null,
+    })).rejects.toThrow('connection lost')
   })
 })

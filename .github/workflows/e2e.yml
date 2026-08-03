@@ -19,21 +19,38 @@ permissions:
   contents: read
 
 concurrency:
-  # 用「被部署的那個分支」當 key，不是 deployment.environment：
-  # Vercel 給所有 preview 的 environment 可能是同一個字串，那樣會變成
-  # A 的 PR 推一版就取消掉 B 的 PR 正在跑的 E2E。
-  # payload 取不到時退回 environment_url（每個 deployment 各自唯一，等於不取消）,
-  # 寧可多跑一輪，也不要取消到別人的。
-  group: e2e-${{ github.event.deployment.payload.githubCommitRef || github.event.deployment_status.environment_url }}
+  # 用 environment_url（每個 deployment 各自唯一）當 key。
+  #
+  # 「同一個分支的舊 run 要被新的取消」是原本想要的，但這個事件給不出分支：
+  # Vercel 的 `deployment.ref` 是 commit SHA 不是分支名，而 `deployment.payload`
+  # 實測是**空的**（見 #23 的留言），拿不到 githubCommitRef。
+  # 用 environment_url 的結果是「不會取消任何東西」——多跑一輪，
+  # 總比 A 的 PR 推一版就殺掉 B 正在跑的 E2E 好。
+  #
+  # 特別不能用 deployment.environment：Vercel 給**所有** preview 的都是字串 `Preview`，
+  # 那樣就是跨 PR 互相取消。
+  group: e2e-${{ github.event.deployment_status.environment_url }}
   cancel-in-progress: true
 
 jobs:
   playwright:
     # deployment_status 每次狀態變動都會觸發（pending / in_progress / success / failure），
-    # 只挑成功的那一次；Production 的部署不在這裡驗——那上面的寫入會進 Neon 的 main 分支。
+    # 只挑成功的那一次。
+    #
+    # 環境用**白名單**而不是「排除 Production」：`deployment_status` 不是 Vercel 專屬的
+    # 事件，GitHub 自己的 environment 也會發。本 repo 的 `tdd-develop.yml` 掛著
+    # `environment: agent`（人工核准閘門），它每次跑都產生一個 environment 為 `agent`、
+    # **environment_url 為空**的 deployment——黑名單放它過去之後，
+    # `PLAYWRIGHT_BASE_URL` 會是空字串，playwright.config.ts 就退回「起本機 dev server」
+    # 那條 fallback，然後在沒有資料庫的 runner 上等到逾時。main 上那次失敗就是這樣來的
+    # （見 #23 的留言）。
+    #
+    # Vercel 實際只用 `Preview` 與 `Production` 兩個字串（實測），所以白名單就是這一個。
+    # 順帶一提 main 不會進來：push 到 main 只產生 Production 的部署。
     if: >-
       github.event.deployment_status.state == 'success'
-      && github.event.deployment.environment != 'Production'
+      && github.event.deployment.environment == 'Preview'
+      && github.event.deployment_status.environment_url != ''
     runs-on: ubuntu-latest
     # 97 條 test，每條都要走一次訪客登入（preview 上實測 13～21 秒，#95），
     # 加上安裝依賴與下載瀏覽器。CI 上 retries 是 2，失敗的那幾條還會再花時間。

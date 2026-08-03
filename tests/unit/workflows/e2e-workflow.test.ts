@@ -98,10 +98,24 @@ describe('觸發條件挑得出「該跑的那一次」', () => {
     expect(jobCondition()).toMatch(/deployment_status\.state\s*==\s*'success'/)
   })
 
-  // Production 的部署打的是 Neon 的 main 分支（CLAUDE.md 的分支隔離）。
-  // 在那上面跑 E2E 等於把幾十位訪客帳號灌進 production 在用的資料庫。
-  it('排除 Production 的部署', () => {
-    expect(jobCondition()).toMatch(/deployment\.environment\s*!=\s*'Production'/)
+  // 環境要用白名單，不能用「排除 Production」的黑名單。
+  //
+  // `deployment_status` 不是 Vercel 專屬的事件——本 repo 的 `tdd-develop.yml` 掛著
+  // `environment: agent`，它每次跑都會發一個同樣的事件。黑名單放它過去之後，
+  // E2E 會對著一個空的 URL 跑，然後在沒有資料庫的 runner 上等到逾時（見 #23 的留言）。
+  //
+  // Production 同樣被這個白名單擋在外面：那上面的寫入會進 Neon 的 main 分支。
+  it('只跑 Vercel 的 Preview 部署（白名單，不是排除 Production）', () => {
+    const condition = jobCondition()
+
+    expect(condition).toMatch(/deployment\.environment\s*==\s*'Preview'/)
+    expect(condition, '黑名單擋不住 Vercel 以外的 deployment 事件').not.toMatch(/deployment\.environment\s*!=/)
+  })
+
+  // 白名單之外的第二道：environment_url 是這支 workflow 唯一的輸入，空的就沒有東西可測。
+  // 少了它，任何「environment 剛好叫 Preview 但沒有 URL」的來源都會讓 job 白跑一輪。
+  it('沒有 environment_url 就不跑', () => {
+    expect(jobCondition()).toMatch(/deployment_status\.environment_url\s*!=\s*''/)
   })
 })
 

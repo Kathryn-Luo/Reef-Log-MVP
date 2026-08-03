@@ -52,13 +52,15 @@ const LOGGED_IN_SPECS = [
  * 不該被自動登入碰到的四支。
  *
  * login 驗的是登入頁本身（前提正是「未登入」）、auth-guard 與 api-authorization 各自
- * 有「未登入」那一半、guest-login 驗的就是訪客登入這條路徑本身——四支都自己管理身分。
+ * 有「未登入」那一半、guest-login 與 guest-login-timing 驗的就是訪客登入這條路徑本身
+ * ——五支都自己管理身分。
  */
 const SELF_MANAGED_SPECS = [
   'tests/e2e/login.spec.ts',
   'tests/e2e/auth-guard.spec.ts',
   'tests/e2e/api-authorization.spec.ts',
   'tests/e2e/guest-login.spec.ts',
+  'tests/e2e/guest-login-timing.spec.ts',
 ]
 
 /**

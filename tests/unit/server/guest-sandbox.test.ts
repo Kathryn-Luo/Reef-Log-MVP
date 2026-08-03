@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Prisma } from '@prisma/client'
 import { TEMPLATE_USER } from '../../../prisma/seedUser'
 import { copyTemplateSandbox } from '../../../server/utils/guestSandbox'
+import { createTimer } from '../../../server/utils/requestTiming'
 
 // 訪客沙盒的「複製鏈」（issue #66 的 Story ① 第三條、Story ④）。
 //
@@ -400,6 +401,48 @@ describe('copyTemplateSandbox — 複製鏈的每一層', () => {
         note: null,
       },
     ])
+  })
+})
+
+// issue #98 的方向 A「先量再改」。
+//
+// 複製沙盒是這條路徑上最重的一段，但「重」在哪裡有兩種可能，對策完全不同：
+//   讀模板那一次巨大的 findMany 慢 → 要改的是讀取那一側
+//   逐缸的 nested create 慢       → 方向 B（改成批次寫入）或 C（縮小模板）
+// 而且逐缸各自量得到，才分得出「三個缸平均慢」與「只有主缸慢」——前者才輪得到 C。
+describe('copyTemplateSandbox — 分段計時', () => {
+  const names = (timer: ReturnType<typeof createTimer>) => timer.segments().map(segment => segment.name)
+
+  it('讀模板自己一段，逐缸的寫入各自一段', async () => {
+    const client = fakeClient([TEMPLATE_TANK, ARCHIVED_TANK])
+    const timer = createTimer()
+
+    await copyTemplateSandbox(client, GUEST_USER_ID, timer)
+
+    expect(names(timer)).toEqual([
+      'tx.sandbox.read',
+      'tx.sandbox.tank1',
+      'tx.sandbox.tank2',
+    ])
+  })
+
+  it('模板是空的時候只量得到讀取那一段', async () => {
+    // 空模板會叫 console.warn（見下方「模板不存在」那一組），測試裡收掉
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const client = fakeClient([])
+    const timer = createTimer()
+
+    await copyTemplateSandbox(client, GUEST_USER_ID, timer)
+
+    expect(names(timer)).toEqual(['tx.sandbox.read'])
+
+    warn.mockRestore()
+  })
+
+  it('不傳計時器也照常複製', async () => {
+    const client = fakeClient([TEMPLATE_TANK])
+
+    await expect(copyTemplateSandbox(client, GUEST_USER_ID)).resolves.toBe(1)
   })
 })
 

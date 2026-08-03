@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient, User } from '@prisma/client'
 import { TEMPLATE_USER } from '../../../prisma/seedUser'
 import { GUEST_DISPLAY_NAME, createGuestAccountId, resolveGuestLogin } from '../../../server/utils/guestLogin'
+import { createTimer } from '../../../server/utils/requestTiming'
 
 // 訪客登入的「查／建帳號 + 建沙盒」（issue #66）。
 //
@@ -34,6 +35,10 @@ function fakeClient() {
   let tanks = 0
 
   const client = {
+    // issue #98：連線建立與交易要分開量，所以這條路徑上多了一次明確的 $connect
+    $connect: vi.fn(async () => {
+      calls.push('$connect')
+    }),
     $transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) => {
       calls.push('$transaction')
 
@@ -152,13 +157,16 @@ describe('resolveGuestLogin — 首次進站', () => {
 
   // 建帳號與複製沙盒之間失敗的話，訪客會拿到一個半份資料的沙盒，而且因為 User 已經存在，
   // 之後再進站也不會補完（Story ② 不重複複製）。兩件事因此必須一起成立或一起不成立。
+  // `$connect` 排在最前面是 issue #98 加的：連線建立要在交易之外完成，量出來的
+  // `tx` 才是交易本身的成本。它不影響這條斷言要守的東西——建帳號與複製沙盒仍然
+  // 都在 `$transaction` 之後、同一個交易裡。
   it('建帳號與複製沙盒包在同一個交易裡', async () => {
     const { client, calls } = fakeClient()
 
     await resolveGuestLogin(client, null)
 
     expect(client.$transaction).toHaveBeenCalledTimes(1)
-    expect(calls).toEqual(['$transaction', 'user.create', 'tank.create'])
+    expect(calls).toEqual(['$connect', '$transaction', 'user.create', 'tank.create'])
   })
 
   // Prisma 互動式交易有兩個上限，兩個都要放寬：
@@ -209,6 +217,78 @@ describe('resolveGuestLogin — 已有 session', () => {
     expect(client.tank.findMany).not.toHaveBeenCalled()
     expect(client.tank.create).not.toHaveBeenCalled()
     expect(client.$transaction).not.toHaveBeenCalled()
+  })
+})
+
+// issue #98 的方向 A「先量再改」。
+//
+// preview 上 `/auth/guest` 這一次請求要 9.4～14.8 秒，而「交易太重」與「Neon 連線建立慢」
+// 這兩個猜測，目前沒有任何數據分得開——B（減少往返）、C（縮小模板）挑錯了就是白改。
+// 所以這條路徑上每一段都要各自量到。
+describe('resolveGuestLogin — 分段計時', () => {
+  /** 量到的段落名稱，依開始順序 */
+  const names = (timer: ReturnType<typeof createTimer>) => timer.segments().map(segment => segment.name)
+
+  // 連線建立要在交易之外先做完。Prisma 預設是「第一次查詢時才連」，那樣 Neon 的
+  // 握手時間會被算進 `tx` 裡（甚至算進 maxWait 的等待），量出來的交易時間就不是交易的。
+  it('連線建立自己一段，而且排在交易之前', async () => {
+    const { client, calls } = fakeClient()
+    const timer = createTimer()
+
+    await resolveGuestLogin(client, null, timer)
+
+    expect(client.$connect).toHaveBeenCalledTimes(1)
+    expect(names(timer).indexOf('connect')).toBeGreaterThan(-1)
+    expect(names(timer).indexOf('connect')).toBeLessThan(names(timer).indexOf('tx'))
+    // 真的先連再開交易，不只是段落的排序好看
+    expect(calls.indexOf('$connect')).toBeLessThan(calls.indexOf('$transaction'))
+  })
+
+  // 交易整體之外還要分得出「建帳號」與「複製沙盒」：#98 的方向 C（縮小模板）只有在
+  // 時間確實花在複製那一段時才值得做。
+  it('交易整體、建帳號、複製沙盒各自一段', async () => {
+    const { client } = fakeClient()
+    const timer = createTimer()
+
+    await resolveGuestLogin(client, null, timer)
+
+    // 沙盒那一段自己還會再切細（讀模板、逐缸寫入），細分在 guest-sandbox.test.ts 顧
+    expect(names(timer)).toEqual(expect.arrayContaining(['tx', 'tx.user', 'tx.sandbox.read']))
+    // 巢狀：交易整體排在自己的子段落前面
+    expect(names(timer).indexOf('tx')).toBeLessThan(names(timer).indexOf('tx.user'))
+  })
+
+  // 失敗那一次最需要數據——交易逾時的時候，人要知道它是卡在哪一段才逾時的。
+  it('交易失敗時，已經量到的段落仍然留著', async () => {
+    const { client } = fakeClient()
+    const boom = new Error('transaction timed out')
+
+    client.tank.create.mockRejectedValueOnce(boom)
+
+    const timer = createTimer()
+
+    await expect(resolveGuestLogin(client, null, timer)).rejects.toBe(boom)
+    // 連拋錯的那一段（tank1）自己都留著耗時——「卡在哪裡才逾時的」正是要看這個
+    expect(names(timer)).toEqual(expect.arrayContaining(['connect', 'tx', 'tx.sandbox.tank1']))
+  })
+
+  // Story ②：已經有身分時這支函式一次資料庫都不碰，所以也沒有任何段落可量。
+  // 有段落就代表它又去連了一次資料庫。
+  it('已有 session 時不連線、不留下任何段落', async () => {
+    const { client } = fakeClient()
+    const timer = createTimer()
+
+    await resolveGuestLogin(client, { id: 'guest-user-existing' } as User, timer)
+
+    expect(client.$connect).not.toHaveBeenCalled()
+    expect(timer.segments()).toEqual([])
+  })
+
+  // 計時是附加的，不是必要參數：沒有計時器照樣登入得了。
+  it('不傳計時器也照常運作', async () => {
+    const { client } = fakeClient()
+
+    await expect(resolveGuestLogin(client, null)).resolves.toMatchObject({ isNewGuest: true })
   })
 })
 

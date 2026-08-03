@@ -121,6 +121,77 @@ describe('訪客登入路由', () => {
     expect(source.indexOf('try {')).toBeGreaterThan(-1)
     expect(source.indexOf('try {')).toBeLessThan(source.indexOf('getCurrentUser(event)'))
   })
+
+  // 登入失敗時把人帶回登入頁重試，而不是一頁 500（與 Google 那一支同樣的處置）。
+  // guest-login.spec.ts 那條「再次進站沿用同一個沙盒」正是靠這個差別，
+  // 才不會把一次失敗的登入誤判成「沙盒沒變 → 通過」。
+  it('登入失敗時導回登入頁', () => {
+    const source = read(GUEST_ROUTE)
+
+    expect(source).toContain('catch')
+    expect(source).toContain('\'/login\'')
+  })
+})
+
+// issue #98 的方向 A「先量再改」：preview 上這一次請求要 9.4～14.8 秒，而「交易太重」、
+// 「Neon 連線建立慢」、「Vercel 冷啟」三個猜測目前分不開。
+//
+// 分段本身在 server/utils/requestTiming.ts、guestLogin.ts、guestSandbox.ts 裡，由各自的
+// unit test 直接呼叫驗證；這裡與本檔其他組同樣只守「有沒有真的接上」——`setResponseHeader`
+// 是 Nitro 的自動匯入，在 vitest 裡 import 不進來，只能看原始碼本文。
+describe('訪客登入的分段計時', () => {
+  it('每個請求開一個計時器，並把它交給 resolveGuestLogin', () => {
+    const source = read(GUEST_ROUTE)
+
+    expect(source).toContain('createTimer(')
+    expect(source).toMatch(/resolveGuestLogin\(\s*prisma,\s*existingUser,\s*timer\s*\)/)
+  })
+
+  // 讀 session 那一次自己也是一趟資料庫查詢（getCurrentUser 會 user.findUnique），
+  // 寫 session 則要做一次密封。兩段都不在 resolveGuestLogin 裡面，這裡不量就沒人量，
+  // 而 total 扣掉各段落剩下的空檔會被誤讀成「不知道花到哪去了」。
+  it('讀 session 與寫 session 也各自量一段', () => {
+    const source = read(GUEST_ROUTE)
+
+    expect(source).toContain('\'session.read\'')
+    expect(source).toContain('\'session.write\'')
+  })
+
+  // instance 的探針一定要在 handler 外面建立：建在裡面的話每個請求都是「第一次」，
+  // cold 永遠是 true，Vercel 冷啟這個猜測就永遠排除不掉——那正是要量的東西。
+  it('instance 探針建在 handler 之外，才分得出冷啟', () => {
+    const source = read(GUEST_ROUTE)
+
+    expect(source).toContain('createInstanceProbe()')
+    expect(source.indexOf('createInstanceProbe()')).toBeLessThan(source.indexOf('defineEventHandler'))
+  })
+
+  // 成功與失敗都要留下數據。失敗那一次（交易逾時、連不上 Neon）反而是最需要知道
+  // 「卡在哪一段」的一次，靜默的話 log 裡只剩一個沒有上下文的錯誤。
+  it('成功與失敗都留下計時 log', () => {
+    const source = read(GUEST_ROUTE)
+
+    expect(source.match(/formatTimingLog\(/g) ?? []).toHaveLength(2)
+    expect(source).toContain('console.info')
+    expect(source).toContain('console.error')
+  })
+
+  // 數字也要回到回應上：#95 量那五次用的是 Playwright，翻 Vercel runtime log 才看得到
+  // 的數據等於每量一次都要進 console 一趟。
+  it('回應帶上計時標頭，量測不必去翻 runtime log', () => {
+    const source = read(GUEST_ROUTE)
+
+    expect(source).toContain('formatServerTiming(')
+    expect(source).toContain('setResponseHeader(event, \'Server-Timing\'')
+  })
+
+  // `Server-Timing` 到不了 preview 的客戶端：E2E 第一次在 CI 上跑時三條計時的 test 全部
+  // 拿到 undefined，三次重試皆然（run 30809735121），而本機用同版 h3 重現同樣的形狀時
+  // 標頭都還在——吃掉它的是 Vercel 那一層。所以量測真正依賴的是這個自訂名稱，
+  // 它一旦被拿掉，E2E 會退回「量不到」，而 unit 這一側原本一句話都不會說。
+  it('同一份數據另外發一個 Vercel 不會改寫的自訂標頭', () => {
+    expect(read(GUEST_ROUTE)).toContain('setResponseHeader(event, \'X-Guest-Timing\'')
+  })
 })
 
 // 訪客登入是「GET 而且會寫入」——一次跟隨就是一位 User 加一整份沙盒複製。

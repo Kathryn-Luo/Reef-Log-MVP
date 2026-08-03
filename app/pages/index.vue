@@ -58,12 +58,14 @@ const counts = computed(() => countCreaturesByCategory(creatures.value))
 
 // 捲動位置的還原自己做（issue #103）：SPA 下瀏覽器在 load 當下文件只有一個 viewport 高，
 // 無處可還原，等資料到齊也不會再回頭補——捲到一半重新整理因此會回到頂端。
-const { settled } = useScrollRestore()
+const { settled, pending } = useScrollRestore()
 
 // 向下捲動時固定的頁首收合成兩層（缸名列 + 水質單行 pill）。
 // animated 是「過場已開放」——還原捲動位置的那一次要直接落在最終樣態，不補播動畫，
 // 所以開放的時機要等到 settled（還原已經處理完）之後。
-const { collapsed, animated } = useHeaderCollapse({ until: settled })
+// at 是「樣態要對齊哪個位置」：還原期間頁首要先擺成補回去之後的樣子，
+// 否則那一捲之後才收合，抽掉的高度會被 scroll anchoring 從落點上扣回來。
+const { collapsed, animated } = useHeaderCollapse({ until: settled, at: pending })
 
 // 數據儀表板（screen-2）的展開狀態。關閉的手勢有三種（✕ / 遮罩 / 下拉把手），
 // 狀態放在頁面這一層，三者才是在改同一個開關。

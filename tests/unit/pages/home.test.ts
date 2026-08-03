@@ -4,6 +4,7 @@ import { enableAutoUnmount, flushPromises } from '@vue/test-utils'
 import HomePage from '../../../app/pages/index.vue'
 import BottomTabBar from '../../../app/components/BottomTabBar.vue'
 import { signedInUserSession } from '../support/session'
+import { SCROLL_RESTORE_MAX_FRAMES } from '../../../app/composables/useScrollRestore'
 import type { CreatureDto, TankHomeData, TankOption } from '#shared/types/home'
 import { HEADER_COLLAPSE_AT, HEADER_EXPAND_BELOW } from '#shared/utils/stickyHeader'
 import { scrollRestoreKey, serializeScrollMark } from '#shared/utils/scrollRestore'
@@ -895,7 +896,9 @@ describe('首頁 — 捲動位置還原', () => {
     await runFrames(3)
 
     expect(window.scrollY).toBe(0)
-    expect(isCollapsed(page)).toBe('false')
+    // 還沒捲，但頁首已經先擺成還原後的樣態——那一捲之後才收合的話，
+    // 抽掉的高度會被 scroll anchoring 從落點上扣回來（見下方那條 test）
+    expect(isCollapsed(page)).toBe('true')
 
     setDocumentHeight(3000)
     await runFrames(2)
@@ -928,6 +931,41 @@ describe('首頁 — 捲動位置還原', () => {
 
     expect(sticky(page).attributes('data-animated')).toBe('true')
     expect(sticky(page).classes()).not.toContain('reef-motion-off')
+  })
+
+  // 順序不能反過來：先捲過去、再讓頁首收合的話，收合會把文件上方抽掉約 108px，
+  // 瀏覽器的 scroll anchoring 為了讓眼前的內容不跳動，會把 scrollY 往回推同樣的距離——
+  // 補回去的位置就永遠差那 108px（PR #105 的 E2E 在 preview 上量到的：
+  // 目標 1171、落點 1063，而收合把頁首從 215 縮到 107）。
+  //
+  // 所以還原期間頁首的樣態要由「等一下要補回去的位置」決定，而不是由當下的
+  // scrollY（那時還在頂端）。捲過去的那一刻上方高度已經定案，就沒有東西可以推它。
+  it('捲過去之前頁首就先擺成收合樣態，落點才不會被收合推走', async () => {
+    markFromPreviousDocument(1200)
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    await runFrames(3)
+
+    // 還沒捲，但頁首已經是最終樣態了
+    expect(window.scrollY).toBe(0)
+    expect(isCollapsed(page)).toBe('true')
+    // 這段期間過場仍未開放，所以「先擺成收合」不會被看成一段動畫
+    expect(sticky(page).attributes('data-animated')).toBe('false')
+  })
+
+  // 先擺成收合是為了還原；還原沒發生就要擺回去，否則頁首會停在
+  // 「收合樣態、人卻在頂端」的錯位狀態
+  it('等不到內容而放棄時，頁首回到展開樣態', async () => {
+    markFromPreviousDocument(1200)
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    await runFrames(SCROLL_RESTORE_MAX_FRAMES + 2)
+
+    expect(window.scrollY).toBe(0)
+    expect(isCollapsed(page)).toBe('false')
+    expect(sticky(page).attributes('data-animated')).toBe('true')
   })
 
   // Given 我在首頁頂端（未捲動）/ When 我重新整理頁面

@@ -19,6 +19,14 @@ export interface HeaderCollapseOptions {
    * 行為與這個選項存在之前相同。
    */
   until?: MaybeRefOrGetter<boolean>
+  /**
+   * 樣態要對齊的捲動位置；0（或省略）代表對齊當下的 `window.scrollY`。
+   *
+   * 還原捲動位置（issue #103）時給的是「等一下要補回去的位置」。頁首必須在那一捲
+   * **之前**就擺成最終樣態：反過來的話收合會把文件上方抽掉約 108px，瀏覽器的
+   * scroll anchoring 會把 scrollY 往回推同樣的距離，落點就永遠差那一段。
+   */
+  at?: MaybeRefOrGetter<number>
 }
 
 /**
@@ -35,10 +43,15 @@ export function useHeaderCollapse(options: HeaderCollapseOptions = {}): HeaderCo
   const animated = ref(false)
   let frame: number | null = null
   let stopGate: (() => void) | null = null
+  let stopAt: (() => void) | null = null
   let opened = false
 
   function sync() {
-    collapsed.value = shouldCollapseHeader(window.scrollY, collapsed.value)
+    // 還原中就以「要補回去的位置」為準；還原不在進行中時它是 0，落回實際的捲動位置
+    collapsed.value = shouldCollapseHeader(
+      toValue(options.at) || window.scrollY,
+      collapsed.value,
+    )
   }
 
   function openTransitions() {
@@ -68,6 +81,10 @@ export function useHeaderCollapse(options: HeaderCollapseOptions = {}): HeaderCo
     // 只讀 scrollY、不呼叫 preventDefault，passive 讓捲動不必等這個 handler
     window.addEventListener('scroll', sync, { passive: true })
 
+    // 還原的目標是在 useScrollRestore 的 onMounted 裡才定下來的，可能比這裡晚一步；
+    // 之後放棄還原時它也會歸零。兩種變動都要讓樣態跟著重對一次
+    stopAt = watch(() => toValue(options.at) ?? 0, sync)
+
     // 沒有 until 時，這一輪 immediate 就直接開放，與還原機制存在之前一樣
     stopGate = watch(() => toValue(options.until ?? true), (ready) => {
       if (ready) {
@@ -82,6 +99,7 @@ export function useHeaderCollapse(options: HeaderCollapseOptions = {}): HeaderCo
     }
 
     stopGate?.()
+    stopAt?.()
     window.removeEventListener('scroll', sync)
   })
 

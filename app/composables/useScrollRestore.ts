@@ -15,6 +15,15 @@ export interface ScrollRestore {
    * 補回去的那一次捲動不能觸發過場，否則使用者會看到頁首演一遍收合。
    */
   settled: Readonly<Ref<boolean>>
+  /**
+   * 等一下要補回去的位置；0 代表沒有東西要補（含已經補完）。
+   *
+   * 頁面拿它當「樣態要對齊的位置」（`useHeaderCollapse` 的 `at`）。捲過去之後
+   * 才讓頁首收合的話，收合會把文件上方抽掉約 108px，瀏覽器的 scroll anchoring
+   * 為了讓眼前的內容不跳動會把 scrollY 往回推同樣的距離，補回去的位置就永遠差
+   * 那一段。順序因此必須是「先擺成最終樣態，再捲過去」。
+   */
+  pending: Readonly<Ref<number>>
 }
 
 /**
@@ -66,6 +75,7 @@ export function useScrollRestore(): ScrollRestore {
   const route = useRoute()
   const key = scrollRestoreKey(route.path)
   const settled = ref(false)
+  const pending = ref(0)
   let frame: number | null = null
 
   function remember() {
@@ -81,6 +91,8 @@ export function useScrollRestore(): ScrollRestore {
    */
   function finish() {
     frame = null
+    // 樣態的依據交還給實際的捲動位置：補完了兩者一致，放棄了則要擺回頂端的樣子
+    pending.value = 0
     remember()
     settled.value = true
   }
@@ -97,6 +109,10 @@ export function useScrollRestore(): ScrollRestore {
 
       return
     }
+
+    // 先讓等著看它的人（頁首）擺成還原後的樣態，再開始等文件長高。
+    // 捲過去的那一刻上方的高度已經定案，就沒有東西可以把落點推走
+    pending.value = target
 
     // 進站當下的位置：使用者在等待期間自己捲動的話，控制權就交還給他們
     const startedAt = window.scrollY
@@ -137,5 +153,5 @@ export function useScrollRestore(): ScrollRestore {
     window.removeEventListener('scroll', remember)
   })
 
-  return { settled: readonly(settled) }
+  return { settled: readonly(settled), pending: readonly(pending) }
 }

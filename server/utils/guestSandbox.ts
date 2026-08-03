@@ -7,8 +7,9 @@ import { TEMPLATE_USER } from '../../prisma/seedUser'
 // prisma/seed.ts 建的那一份因此是「永遠沒人登入的模板」（見 prisma/seedUser.ts）。
 //
 // 為什麼要整份複製而不是共用：示範缸能被任何人弄髒的話，下一位進站的人看到的就是那個
-// ——這是作品集，而且 MVP 階段 production 與 preview 共用同一個 Neon 分支，弄髒是兩邊
-// 一起髒。也沒有走「訪客唯讀」：ReefLog 是記錄工具，訪客不能記錄就等於看不到主要功能。
+// ——這是作品集。（2026-08-01 起 production 與 preview 已是不同的 Neon 分支，弄髒不再會
+// 波及 production；但「下一位訪客看到被弄髒的示範缸」這個理由本身不受影響。）也沒有走
+// 「訪客唯讀」：ReefLog 是記錄工具，訪客不能記錄就等於看不到主要功能。
 //
 // Prisma Client 由呼叫端傳入（實際上是 resolveGuestLogin 開的交易），與 googleLogin.ts、
 // currentContext.ts 同一個作法：函式因此能在完全連不到資料庫的情況下測試。

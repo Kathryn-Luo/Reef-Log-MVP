@@ -51,7 +51,10 @@ export function toGoogleProfile(raw: unknown): GoogleProfile | null {
 
 export interface GoogleLoginResult {
   userId: string
-  /** 首次登入（順帶建了帳號）。首次登入引導是另一支子 issue，這裡只把事實回報出去。 */
+  /**
+   * 首次登入（順帶建了帳號）。目前沒有任何呼叫端用到它——首次登入引導（#69）已判定
+   * 不需要，登入後一律回首頁。保留是因為它是這個函式的事實，不是為了某個功能而存在。
+   */
   isNewUser: boolean
 }
 

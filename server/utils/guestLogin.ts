@@ -1,5 +1,7 @@
 import type { PrismaClient, User } from '@prisma/client'
+import type { Timer } from './requestTiming'
 import { copyTemplateSandbox } from './guestSandbox'
+import { createTimer } from './requestTiming'
 
 // 訪客登入的「查／建帳號」（issue #66、Epic #47 第 6 節）。
 //
@@ -67,20 +69,31 @@ export function createGuestAccountId(): string {
  * 沒有 P2002 的重試路徑（googleLogin.ts 有）：那裡的衝突來自「同一個 Google 帳號同時
  * 首次登入兩次」，而訪客的 providerAccountId 是每次現產的隨機值，兩個併發請求本來就
  * 該是兩位不同的訪客。
+ *
+ * `timer` 是 issue #98 的分段計時（方向 A「先量再改」）。不傳就自己開一個丟掉——
+ * 計時是附加的，沒有它照樣登入得了。
  */
 export async function resolveGuestLogin(
   client: PrismaClient,
   existingUser: User | null,
+  timer: Timer = createTimer(),
 ): Promise<GuestLoginResult> {
   if (existingUser) {
     return { userId: existingUser.id, isNewGuest: false }
   }
 
-  const userId = await client.$transaction(
+  // 明確先連一次，而不是靠 Prisma 的「第一次查詢時才連」（issue #98）。
+  //
+  // 懶連線會把 Neon 的握手時間算進交易裡——甚至算進 maxWait 的等待，因為那時交易
+  // 還沒真的開始。那樣量出來的 `tx` 不是交易的成本，而「連線慢」與「交易重」對應的
+  // 是完全不同的對策（前者做方向 B / C 全是白改）。先連完再開交易，兩個數字才分得開。
+  await timer.measure('connect', () => client.$connect())
+
+  const userId = await timer.measure('tx', () => client.$transaction(
     async (tx) => {
       // 與 Google 登入同樣用 nested create：分兩次寫的話，中間失敗會留下一位沒有任何
       // Account 的孤兒 User——訪客的身分只存在於 cookie 裡，對不回來就再也清不掉。
-      const user = await tx.user.create({
+      const user = await timer.measure('tx.user', () => tx.user.create({
         data: {
           email: null,
           displayName: GUEST_DISPLAY_NAME,
@@ -91,9 +104,9 @@ export async function resolveGuestLogin(
             },
           },
         },
-      })
+      }))
 
-      await copyTemplateSandbox(tx, user.id)
+      await copyTemplateSandbox(tx, user.id, timer)
 
       return user.id
     },
@@ -101,7 +114,7 @@ export async function resolveGuestLogin(
       timeout: SANDBOX_TRANSACTION_TIMEOUT_MS,
       maxWait: SANDBOX_TRANSACTION_MAX_WAIT_MS,
     },
-  )
+  ))
 
   return { userId, isNewGuest: true }
 }

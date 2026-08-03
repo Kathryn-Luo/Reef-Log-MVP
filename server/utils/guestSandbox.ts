@@ -1,5 +1,7 @@
 import type { Prisma } from '@prisma/client'
+import type { Timer } from './requestTiming'
 import { TEMPLATE_USER } from '../../prisma/seedUser'
+import { createTimer } from './requestTiming'
 
 // 訪客沙盒的複製鏈（issue #66、Epic #47 第 6 節）。
 //
@@ -63,18 +65,24 @@ function contentOf<T>(row: object, ...foreignKeys: string[]): T {
  * 模板還沒 seed（全新的資料庫）時複製 0 個缸，訪客照樣進得去——首頁走既有的「還沒有缸」
  * 空狀態，而不是一頁 500。但那條路徑會留下一則警告：它同時也是「模板沒 seed」唯一的
  * 徵兆，靜默的話畫面上只是空的，server 端一個字都沒說（見下方 warnEmptyTemplate）。
+ *
+ * `timer` 是 issue #98 的分段計時（方向 A「先量再改」）。這裡切得比呼叫端細一層是
+ * 因為「複製沙盒很慢」還不夠決定對策：慢在讀模板那一次巨大的 findMany，要改的是讀取
+ * 那一側；慢在逐缸的 nested create，才輪得到方向 B（批次寫入）與 C（縮小模板）。
+ * 而逐缸各自量得到，才分得出「三個缸平均慢」與「只有主缸慢」——後者做 C 也省不了多少。
  */
 export async function copyTemplateSandbox(
   client: Prisma.TransactionClient,
   targetUserId: string,
+  timer: Timer = createTimer(),
 ): Promise<number> {
-  const tanks = await client.tank.findMany({
+  const tanks = await timer.measure('tx.sandbox.read', () => client.tank.findMany({
     where: { userId: TEMPLATE_USER.id },
     include: TEMPLATE_INCLUDE,
     // 缸的排序即「預設缸」的定義（schema.prisma 的 Tank.displayOrder），照著讀進來，
     // displayOrder 相同時複製出來的 createdAt 先後也才與模板一致。
     orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
-  })
+  }))
 
   if (tanks.length === 0) {
     warnEmptyTemplate()
@@ -82,7 +90,7 @@ export async function copyTemplateSandbox(
     return 0
   }
 
-  for (const tank of tanks) {
+  for (const [index, tank] of tanks.entries()) {
     // Unchecked 版的 create input：缸的歸屬直接寫 userId 這個純量欄位，而不是
     // `user: { connect: … }`。訪客這一位是同一個交易裡剛建好的，沒有什麼好 connect 的。
     const data: Prisma.TankUncheckedCreateInput = {
@@ -124,7 +132,9 @@ export async function copyTemplateSandbox(
       },
     }
 
-    await client.tank.create({ data })
+    // 段落名以序號而不是缸名：缸名是示範資料的內容，會跟著 seed 一起變，
+    // 拿它當 log 與 Server-Timing 的鍵，前後兩次量測就對不起來了。
+    await timer.measure(`tx.sandbox.tank${index + 1}`, () => client.tank.create({ data }))
   }
 
   return tanks.length

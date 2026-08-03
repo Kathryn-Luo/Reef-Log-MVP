@@ -1,0 +1,84 @@
+name: E2E
+
+# 用途：對 Vercel 的 Preview Deployment 跑 Playwright（issue #23）。
+#
+# 為什麼掛 deployment_status 而不是 pull_request：這個事件本身就帶著一個「已經就緒」
+# 的 URL（environment_url），不必在 PR 上輪詢等 preview 好。preview 沒好就沒有事件，
+# 也就不會有一次註定連不上的 run。
+#
+# 為什麼打 preview 而不是本機起 server：這個 runner 沒有資料庫、也沒有 .env，
+# 而 E2E 要走的訪客登入需要真的寫得進 Neon。preview 上那些寫入落在 Neon 的
+# `preview` 分支（CLAUDE.md），碰不到 production 的資料。
+#
+# 這支不呼叫 agent、不碰任何 secret、也不寫 repo。
+on: deployment_status
+
+# 只讀。跑 E2E 不需要寫 repo；日後若要把結果貼回 PR，再單獨加 pull-requests: write，
+# 別順手把整包權限放寬——這支會 checkout 並執行 PR 上的程式碼。
+permissions:
+  contents: read
+
+concurrency:
+  # 用「被部署的那個分支」當 key，不是 deployment.environment：
+  # Vercel 給所有 preview 的 environment 可能是同一個字串，那樣會變成
+  # A 的 PR 推一版就取消掉 B 的 PR 正在跑的 E2E。
+  # payload 取不到時退回 environment_url（每個 deployment 各自唯一，等於不取消）,
+  # 寧可多跑一輪，也不要取消到別人的。
+  group: e2e-${{ github.event.deployment.payload.githubCommitRef || github.event.deployment_status.environment_url }}
+  cancel-in-progress: true
+
+jobs:
+  playwright:
+    # deployment_status 每次狀態變動都會觸發（pending / in_progress / success / failure），
+    # 只挑成功的那一次；Production 的部署不在這裡驗——那上面的寫入會進 Neon 的 main 分支。
+    if: >-
+      github.event.deployment_status.state == 'success'
+      && github.event.deployment.environment != 'Production'
+    runs-on: ubuntu-latest
+    # 97 條 test，每條都要走一次訪客登入（preview 上實測 13～21 秒，#95），
+    # 加上安裝依賴與下載瀏覽器。CI 上 retries 是 2，失敗的那幾條還會再花時間。
+    timeout-minutes: 45
+    steps:
+      # 明確指定部署的那個 commit，不靠事件的預設值——
+      # spec 的版本與 preview 上跑的版本必須是同一個，否則會出現
+      # 「改了測試卻跑到舊版」這種最難查的鬼打牆。
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.deployment.sha }}
+
+      # 前置與 ci.yml 對齊：pnpm/action-setup 要在 setup-node 之前，
+      # setup-node 的 cache: pnpm 才找得到 store。
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 只裝 chromium：playwright.config.ts 的 projects 只有這一個。
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      # 設了 PLAYWRIGHT_BASE_URL，config 的 webServer 就是 undefined（不起本機 server）。
+      # --workers=3：workers 沒設時預設是核心數的一半，runner 上通常只有 2，
+      # 97 條各自要走一次十幾秒的登入會拖到 30 分鐘以上。
+      - name: E2E
+        env:
+          PLAYWRIGHT_BASE_URL: ${{ github.event.deployment_status.environment_url }}
+        run: pnpm test:e2e --workers=3
+
+      # 失敗時要看得到 trace（config 是 trace: 'on-first-retry'）。
+      # playwright-report/ 已在 .gitignore 內。
+      - name: Upload report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

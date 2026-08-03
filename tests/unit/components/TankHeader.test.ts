@@ -206,3 +206,33 @@ describe('TankHeader — 收合', () => {
     expect(header.get('[data-testid="tank-subtitle-slot"]').attributes('data-collapsed')).toBe('false')
   })
 })
+
+// issue #102：副標原本把上方間距給成自己的 `pt-0.5`，那 2px padding 不吃 `min-height: 0`，
+// 收合後把 0fr 的軌道撐在 2px。修法是比照 `WaterSummaryCard` 補一層只負責裁切的收合層，
+// 把間距移到那一層「裡面」。
+//
+// 「收合層長什麼樣」的契約與對照組寫在一起（collapse-slot.test.ts）；
+// 這裡守的是副標自己的兩件事：間距的大小沒變、單行省略沒被搬家搬掉。
+describe('TankHeader — 副標的收合層', () => {
+  // Given 頁首處於展開狀態 / When 畫面渲染
+  // Then 副標仍為單行省略（truncate）
+  it('副標仍是單行省略', async () => {
+    const header = await mountHeader([MAIN_TANK])
+
+    // truncate 要留在 <p> 上：收合層若戴上它，nowrap 與 ellipsis 就跑到了包裝層，
+    // 真正要省略的那一行反而沒人管
+    expect(header.get('[data-testid="tank-subtitle"]').classes()).toContain('truncate')
+  })
+
+  // Then 缸副標與缸名之間的間距與現在一致
+  it('上方間距的大小不變，只是換了位置', async () => {
+    const header = await mountHeader([MAIN_TANK])
+    const subtitle = header.get('[data-testid="tank-subtitle"]')
+
+    // 原本是 pt-0.5（2px）。位置從「收合層自己」移到「收合層裡面」，數值不動
+    expect(subtitle.classes().some(name => /^[pm]t-0\.5$/.test(name))).toBe(true)
+
+    // 帶著間距的 <p> 不可以又是被量高度的那個元素，否則等於沒搬
+    expect(subtitle.element.parentElement).not.toBe(header.get('[data-testid="tank-subtitle-slot"]').element)
+  })
+})

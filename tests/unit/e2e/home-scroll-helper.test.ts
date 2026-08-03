@@ -328,10 +328,12 @@ describe('home.spec.ts 的 9 條 test 不再卡在 helper 上', () => {
     expect(helper).toMatch(/waitForScrollableHome\(page\)/)
   })
 
-  it('34 條 test 都還在，沒有被刪掉或跳過', () => {
+  // issue #102 新增了一條「展開時缸副標仍是單行省略，與缸名之間的間距不變」，34 → 35。
+  // 這裡數的是「一條都沒少」，所以新增時要跟著加；維持精確比對，刪掉仍然會紅。
+  it('35 條 test 都還在，沒有被刪掉或跳過', () => {
     const source = read(HOME_SPEC)
 
-    expect(source.match(/^\s*test\(/gm) ?? []).toHaveLength(34)
+    expect(source.match(/^\s*test\(/gm) ?? []).toHaveLength(35)
     expect(source).not.toContain('test.only')
     // 既有的那一條 `test.skip` 是條件式跳過（Chromium 以外沒有 CDP），不是本次新增的
     expect(source.match(/test\.skip/g) ?? []).toHaveLength(1)

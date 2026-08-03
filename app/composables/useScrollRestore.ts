@@ -72,8 +72,16 @@ export function useScrollRestore(): ScrollRestore {
     writeMark(key, { top: window.scrollY, document: DOCUMENT_ID })
   }
 
+  /**
+   * 還原處理完：不管是補回去了、放棄了、還是根本沒東西要補。
+   *
+   * 收尾一律重設存檔。少了這一步就會留下「舊文件寫的、位置不是 0」的存檔——
+   * 這一次沒用到它（同文件返回、或等不到內容而放棄），下一次重新整理卻會把它
+   * 當成「重新整理前的位置」補回去，把停在頂端的人拉走。
+   */
   function finish() {
     frame = null
+    remember()
     settled.value = true
   }
 
@@ -103,8 +111,7 @@ export function useScrollRestore(): ScrollRestore {
 
       if (canRestoreTo(target, document.documentElement.scrollHeight, window.innerHeight)) {
         window.scrollTo({ top: target, behavior: 'instant' })
-        // 這個位置現在是「這一份文件」寫的了，之後在站內換頁回來不會再被補一次
-        remember()
+        // finish() 會把這個位置記成「這一份文件」寫的，之後在站內換頁回來不會再被補一次
         finish()
 
         return

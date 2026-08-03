@@ -497,6 +497,36 @@ test.describe('sticky 頁首', () => {
     expect(await page.evaluate(() => window.scrollY)).toBe(0)
   })
 
+  // Given 我捲動過首頁、換到別的 tab 再回到首頁（畫面停在頂端）/ When 我重新整理頁面
+  // Then 畫面停在頂端，不會被拉回換 tab 之前的位置
+  //
+  // 站內換頁回首頁時不還原（捲動位置歸 router 管），但存檔要跟著更新——
+  // 留著換 tab 之前那個位置的話，它會在下一次重新整理變成「重新整理前的位置」。
+  test('站內換頁回首頁後重新整理，仍停在頂端', async ({ page }) => {
+    await page.goto('/')
+    await scrollPastCollapse(page)
+
+    const tabBar = page.getByRole('navigation', { name: '主要導覽' })
+
+    await tabBar.getByRole('link', { name: '趨勢' }).click()
+    await expect(page).toHaveURL(/\/trends$/)
+
+    await tabBar.getByRole('link', { name: '首頁' }).click()
+    await waitForScrollableHome(page)
+
+    // 前提：router 把換頁後的首頁帶回頂端。不成立的話這條 test 驗的就不是它要驗的東西
+    expect(await page.evaluate(() => window.scrollY)).toBe(0)
+
+    await page.reload()
+
+    const header = page.getByTestId('home-sticky-header')
+
+    // 等還原處理完，確認它「真的沒出手」而不是「還沒出手」
+    await expect(header).toHaveAttribute('data-animated', 'true')
+    await expect(header).toHaveAttribute('data-collapsed', 'false')
+    expect(await page.evaluate(() => window.scrollY)).toBe(0)
+  })
+
   // Given 該缸尚無任何水質記錄 / When 我向下捲動
   // Then 頁首與水質摘要列照常固定在頂端，水質摘要列維持空狀態內容，不顯示需注意徽章
   //

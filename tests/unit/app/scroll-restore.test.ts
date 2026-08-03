@@ -6,7 +6,7 @@ import {
   useScrollRestore,
 } from '../../../app/composables/useScrollRestore'
 import { signedInUserSession } from '../support/session'
-import { scrollRestoreKey, serializeScrollMark } from '#shared/utils/scrollRestore'
+import { parseScrollMark, scrollRestoreKey, serializeScrollMark } from '#shared/utils/scrollRestore'
 
 // 路由保護是全域 middleware：沒有身分的話 mountSuspended 那次導覽會被帶去 /login，
 // 存檔的 key 也就跟著變成別的路由（見 tests/unit/support/session.ts）
@@ -73,6 +73,11 @@ function markFromPreviousDocument(path: string, top: number) {
 
 function settledOf(probe: Awaited<ReturnType<typeof mountSuspended>>) {
   return probe.get('div').attributes('data-settled')
+}
+
+/** 目前存下的那一筆 */
+function storedMark(path: string) {
+  return parseScrollMark(window.sessionStorage.getItem(scrollRestoreKey(path)))
 }
 
 beforeEach(() => {
@@ -228,6 +233,38 @@ describe('存檔本身', () => {
     await runFrames(5)
 
     expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  // 存檔在「還原處理完」的當下一律重設成現在的位置。
+  //
+  // 不重設的話會留下一筆「舊文件寫的、位置不是 0」的存檔：這一次因為同文件或因為
+  // 放棄而沒有用到它，下一次重新整理卻會把它當成「重新整理前的位置」補回去，
+  // 把停在頂端的人拉走（PR #105 的 review）。
+  it('同文件返回頂端後，舊位置不會留到下一次重新整理', async () => {
+    const first = await mountSuspended(Probe, { route: '/' })
+
+    scroll(991)
+    first.unmount()
+
+    Object.defineProperty(window, 'scrollY', { value: 0, configurable: true })
+    setDocumentHeight(1943)
+
+    // 從別的 tab 換回首頁：同一份文件，所以不還原——但存檔要跟著回到頂端
+    await mountSuspended(Probe, { route: '/' })
+    await runFrames(5)
+
+    expect(storedMark('/')?.top).toBe(0)
+  })
+
+  it('等不到內容而放棄之後，舊位置不會留到下一次重新整理', async () => {
+    markFromPreviousDocument('/', 991)
+
+    await mountSuspended(Probe, { route: '/' })
+    await runFrames(FRAME_BUDGET)
+
+    // 放棄＝停在頂端，那就是這一份文件現在的位置；留著 991 的話下一次會被它拉走
+    expect(storedMark('/')?.top).toBe(0)
+    expect(storedMark('/')?.document).not.toBe('previous-document')
   })
 
   // 隱私模式下 sessionStorage 會直接丟例外。還原是加分功能，不值得讓整頁壞掉

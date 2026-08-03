@@ -4,8 +4,10 @@ import { enableAutoUnmount, flushPromises } from '@vue/test-utils'
 import HomePage from '../../../app/pages/index.vue'
 import BottomTabBar from '../../../app/components/BottomTabBar.vue'
 import { signedInUserSession } from '../support/session'
+import { SCROLL_RESTORE_MAX_FRAMES } from '../../../app/composables/useScrollRestore'
 import type { CreatureDto, TankHomeData, TankOption } from '#shared/types/home'
 import { HEADER_COLLAPSE_AT, HEADER_EXPAND_BELOW } from '#shared/utils/stickyHeader'
+import { scrollRestoreKey, serializeScrollMark } from '#shared/utils/scrollRestore'
 
 const MAIN_TANK: TankOption = {
   id: 'tank-1',
@@ -547,20 +549,29 @@ describe('首頁 — sticky 頁首（捲動時收合）', () => {
   })
 
   // 監聽器掛在共用的 window 上，頁面離開後還留著就會對著已卸載的元件寫值
+  // 頁面掛著兩個 scroll 監聽：頁首收合（#55）與捲動位置的存檔（#103）。
+  // 條數不是重點，「掛上去的每一個都拆掉」才是——洩漏的監聽會在下一次掛載後繼續作用
   it('離開頁面時把 scroll 監聽拆掉', async () => {
     const addEventListener = vi.spyOn(window, 'addEventListener')
     const removeEventListener = vi.spyOn(window, 'removeEventListener')
 
     const page = await mountSuspended(HomePage, { route: '/' })
 
-    const added = addEventListener.mock.calls.filter(([type]) => type === 'scroll')
-    expect(added).toHaveLength(1)
+    const added = addEventListener.mock.calls
+      .filter(([type]) => type === 'scroll')
+      .map(([, handler]) => handler)
+
+    expect(added.length).toBeGreaterThan(0)
 
     page.unmount()
 
-    const removed = removeEventListener.mock.calls.filter(([type]) => type === 'scroll')
-    expect(removed).toHaveLength(1)
-    expect(removed[0]![1]).toBe(added[0]![1])
+    const removed = removeEventListener.mock.calls
+      .filter(([type]) => type === 'scroll')
+      .map(([, handler]) => handler)
+
+    // 拆的必須是同一個 handler 實例：拆錯對象的話監聽照樣留在 window 上
+    expect(removed).toHaveLength(added.length)
+    expect(new Set(removed)).toEqual(new Set(added))
 
     addEventListener.mockRestore()
     removeEventListener.mockRestore()
@@ -801,6 +812,187 @@ describe('首頁 — 收合過場', () => {
 
     expect(classes).toContain('fixed')
     expect(classes).toContain('bottom-0')
+  })
+})
+
+// issue #103：SPA（#84）下瀏覽器的捲動位置還原永遠落空——`load` 當下文件只有一個
+// viewport 高，等資料到齊、文件變長時瀏覽器不會再回頭補。還原改由頁面自己做，
+// 而 #55 的 animated 旗標本來就是為這一刻寫的：補回去的那一次不能演一遍收合。
+//
+// requestAnimationFrame 換成手動推進：這幾題驗的正是先後順序（還原 → 開放過場），
+// 交給真實時鐘的話，「還原當下過場還沒開放」會退化成一條靠 sleep 賭運氣的斷言。
+describe('首頁 — 捲動位置還原', () => {
+  let frames: FrameRequestCallback[] = []
+
+  /** 推進 n 幀：每一幀把目前排隊的 callback 全部執行掉 */
+  async function runFrames(count = 1) {
+    for (let index = 0; index < count; index++) {
+      const pending = frames
+
+      frames = []
+
+      for (const callback of pending) {
+        callback(index)
+      }
+
+      await flushPromises()
+    }
+  }
+
+  /** 內容到齊、文件長到這麼高——還原的時機看的是這個值 */
+  function setDocumentHeight(height: number) {
+    Object.defineProperty(document.documentElement, 'scrollHeight', {
+      value: height,
+      configurable: true,
+    })
+  }
+
+  /** 上一份文件（重新整理前）留下的存檔 */
+  function markFromPreviousDocument(top: number) {
+    window.sessionStorage.setItem(
+      scrollRestoreKey('/'),
+      serializeScrollMark({ top, document: 'previous-document' }),
+    )
+  }
+
+  function sticky(page: Awaited<ReturnType<typeof mountSuspended>>) {
+    return page.get('[data-testid="home-sticky-header"]')
+  }
+
+  beforeEach(() => {
+    frames = []
+    window.sessionStorage.clear()
+
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback)
+
+      return frames.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+
+    // happy-dom 的 scrollTo 不會動到 scrollY，補上瀏覽器的那一半
+    vi.stubGlobal('scrollTo', (options: ScrollToOptions) => {
+      scrollTo(options.top ?? 0)
+    })
+
+    Object.defineProperty(window, 'innerHeight', { value: 844, configurable: true })
+
+    // 進站當下：資料還在路上，文件只有一個 viewport 高
+    setDocumentHeight(844)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  // Given 我在首頁向下捲動到頁首已經收合的位置 / When 我重新整理頁面
+  // Then 內容到齊之後，捲動位置回到重新整理前的位置，頁首呈收合樣態
+  it('內容到齊之後捲動位置回到原處，頁首呈收合樣態', async () => {
+    markFromPreviousDocument(1200)
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    // 文件還只有一個 viewport 高，這時候捲過去只會被夾回頂端
+    await runFrames(3)
+
+    expect(window.scrollY).toBe(0)
+    // 還沒捲，但頁首已經先擺成還原後的樣態——那一捲之後才收合的話，
+    // 抽掉的高度會被 scroll anchoring 從落點上扣回來（見下方那條 test）
+    expect(isCollapsed(page)).toBe('true')
+
+    setDocumentHeight(3000)
+    await runFrames(2)
+
+    expect(window.scrollY).toBe(1200)
+    expect(isCollapsed(page)).toBe('true')
+  })
+
+  // Given 上述的捲動位置還原正在發生 / When 畫面首次以還原後的位置渲染
+  // Then 頁首直接以收合樣態出現，不會先展開再播一次收合動畫（issue #55 的既有條件）
+  it('還原的那一次不補播收合動畫，之後才開放過場', async () => {
+    markFromPreviousDocument(1200)
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    // 還原還沒發生：過場在這段期間不能開放，否則補回去的那一下會演一次收合
+    await runFrames(3)
+
+    expect(sticky(page).attributes('data-animated')).toBe('false')
+
+    setDocumentHeight(3000)
+    await runFrames(2)
+
+    expect(isCollapsed(page)).toBe('true')
+    expect(sticky(page).attributes('data-animated')).toBe('false')
+    expect(sticky(page).classes()).toContain('reef-motion-off')
+
+    // 落地之後才開放，之後真正由捲動觸發的翻轉照樣有過場
+    await runFrames(2)
+
+    expect(sticky(page).attributes('data-animated')).toBe('true')
+    expect(sticky(page).classes()).not.toContain('reef-motion-off')
+  })
+
+  // 順序不能反過來：先捲過去、再讓頁首收合的話，收合會把文件上方抽掉約 108px，
+  // 瀏覽器的 scroll anchoring 為了讓眼前的內容不跳動，會把 scrollY 往回推同樣的距離——
+  // 補回去的位置就永遠差那 108px（PR #105 的 E2E 在 preview 上量到的：
+  // 目標 1171、落點 1063，而收合把頁首從 215 縮到 107）。
+  //
+  // 所以還原期間頁首的樣態要由「等一下要補回去的位置」決定，而不是由當下的
+  // scrollY（那時還在頂端）。捲過去的那一刻上方高度已經定案，就沒有東西可以推它。
+  it('捲過去之前頁首就先擺成收合樣態，落點才不會被收合推走', async () => {
+    markFromPreviousDocument(1200)
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    await runFrames(3)
+
+    // 還沒捲，但頁首已經是最終樣態了
+    expect(window.scrollY).toBe(0)
+    expect(isCollapsed(page)).toBe('true')
+    // 這段期間過場仍未開放，所以「先擺成收合」不會被看成一段動畫
+    expect(sticky(page).attributes('data-animated')).toBe('false')
+  })
+
+  // 先擺成收合是為了還原；還原沒發生就要擺回去，否則頁首會停在
+  // 「收合樣態、人卻在頂端」的錯位狀態
+  it('等不到內容而放棄時，頁首回到展開樣態', async () => {
+    markFromPreviousDocument(1200)
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    await runFrames(SCROLL_RESTORE_MAX_FRAMES + 2)
+
+    expect(window.scrollY).toBe(0)
+    expect(isCollapsed(page)).toBe('false')
+    expect(sticky(page).attributes('data-animated')).toBe('true')
+  })
+
+  // Given 我在首頁頂端（未捲動）/ When 我重新整理頁面
+  // Then 畫面停在頂端，頁首呈展開樣態，不會被還原到別的位置
+  it('在頂端重新整理時停在頂端，頁首展開且過場照常開放', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    setDocumentHeight(3000)
+    await runFrames(3)
+
+    expect(window.scrollY).toBe(0)
+    expect(isCollapsed(page)).toBe('false')
+    // 沒有東西要等，過場不該被還原機制拖住
+    expect(sticky(page).attributes('data-animated')).toBe('true')
+  })
+
+  // 存哪裡是實作細節，但「不要存進 URL」不是——網址是使用者會複製、會分享的東西
+  it('捲動位置存在 sessionStorage，不寫進網址', async () => {
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    setDocumentHeight(3000)
+    await runFrames(2)
+    scrollTo(1200)
+    await flushPromises()
+
+    expect(window.sessionStorage.getItem(scrollRestoreKey('/'))).toContain('1200')
+    expect(page.vm.$route.fullPath).toBe('/')
   })
 })
 

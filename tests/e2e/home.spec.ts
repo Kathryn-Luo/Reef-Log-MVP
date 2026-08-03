@@ -412,13 +412,57 @@ test.describe('sticky 頁首', () => {
     await expect(header).toHaveAttribute('data-collapsed', 'true')
     const collapsedHeight = (await header.boundingBox())!.height
 
-    // 瀏覽器會還原捲動位置，重新整理後應該直接落在收合樣態
+    // 捲動位置由頁面自己還原（issue #103：SPA 下瀏覽器在 load 當下無處可還原），
+    // 重新整理後應該直接落在收合樣態
     await page.reload()
     await expect(header).toHaveAttribute('data-collapsed', 'true')
 
     // 逐幀量：整段期間都是收合高度，沒有從展開演過來的那一段
     const { headerHeights } = await sampleDuringCollapse(page, PAST_COLLAPSE)
     expect(Math.max(...headerHeights)).toBeLessThan(collapsedHeight + 2)
+  })
+
+  // Given 我在首頁向下捲動到頁首已經收合的位置 / When 我重新整理頁面
+  // Then 內容到齊之後，捲動位置回到重新整理前的位置，頁首呈收合樣態
+  //
+  // issue #103：SPA 下 `load` 當下文件只有一個 viewport 高，瀏覽器沒有位置可以還原，
+  // 等資料到齊、文件變長時它不會再回頭補——捲到一半重新整理因此會回到頂端。
+  test('重新整理後捲動位置回到原本的位置', async ({ page }) => {
+    await page.goto('/')
+
+    const before = await scrollPastCollapse(page)
+
+    expect(before).toBeGreaterThan(0)
+
+    await page.reload()
+
+    const header = page.getByTestId('home-sticky-header')
+
+    // data-animated 轉 true ＝ 還原已經處理完（過場在還原落地之前不開放）。
+    // 等頁面自己給的訊號，而不是硬等一個猜出來的秒數（#95）
+    await expect(header).toHaveAttribute('data-animated', 'true')
+    await expect(header).toHaveAttribute('data-collapsed', 'true')
+
+    // 容差 2px 吸收次像素的捨入，其餘一律算沒還原到位——這條 test 的斷言對象
+    // 正是「停在哪一個 px」，放寬到收合前後的高度差（~108px）就等於什麼都沒驗
+    expect(Math.abs(await page.evaluate(() => window.scrollY) - before)).toBeLessThanOrEqual(2)
+  })
+
+  // Given 我在首頁頂端（未捲動）/ When 我重新整理頁面
+  // Then 畫面停在頂端，頁首呈展開樣態，不會被還原到別的位置
+  test('在頂端重新整理時停在頂端，頁首維持展開', async ({ page }) => {
+    await page.goto('/')
+    await waitForScrollableHome(page)
+
+    await page.reload()
+    await waitForScrollableHome(page)
+
+    const header = page.getByTestId('home-sticky-header')
+
+    // 同樣等還原處理完，確認它「真的沒出手」而不是「還沒出手」
+    await expect(header).toHaveAttribute('data-animated', 'true')
+    await expect(header).toHaveAttribute('data-collapsed', 'false')
+    expect(await page.evaluate(() => window.scrollY)).toBe(0)
   })
 
   // Given 該缸尚無任何水質記錄 / When 我向下捲動

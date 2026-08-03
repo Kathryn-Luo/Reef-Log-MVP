@@ -1,11 +1,13 @@
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
+import { scrollPastCollapse, scrollTo, waitForScrollableHome } from './support/scroll'
 
 // 首頁 · 生物優先（Epic #1 screen-1）。
 //
 // 前提：preview 環境需有 seed 資料（`prisma/seed.ts`，PR #49）——一位使用者、
 // 一個名為「主缸」的缸（4 尺 / SPS MIXED / 420L）、一筆數小時前的水質記錄與 12 隻生物，
-// 外加兩個尚無水質記錄的缸。sticky 的 spec 需要生物多到捲得動，資料量變少時要一併回頭調整。
+// 外加兩個尚無水質記錄的缸。sticky 的 spec 需要生物多到捲得動：資料量少到捲不動時，
+// `scrollPastCollapse` 會直接說「捲不到收合門檻」，不會靜默地留下一個沒捲動的畫面（#96）。
 
 // Given 我有一個名為「主缸」的缸，設定為 4 尺 / SPS MIXED / 420L / When 我開啟首頁
 // Then 頁首顯示缸的代表色塊、缸名「主缸 · 4 尺」與副標「SPS MIXED · 420L」，缸名右側有可切換的 ∨
@@ -94,19 +96,9 @@ test('點擊生物卡片導向生物詳情頁', async ({ page }) => {
 //
 // 手機尺寸才是這個 Story 的情境：12 隻生物在 390×844 下必定超過一個螢幕。
 
-/** 捲到指定位置（超過頁面高度就捲到底），再等捲動位置定下來才回傳 */
-async function scrollTo(page: Page, offset: number) {
-  const target = await page.evaluate((top) => {
-    const max = document.documentElement.scrollHeight - window.innerHeight
-    const clamped = Math.max(0, Math.min(top, max))
-
-    window.scrollTo({ top: clamped, behavior: 'instant' })
-
-    return clamped
-  }, offset)
-
-  await page.waitForFunction(top => Math.abs(window.scrollY - top) < 2, target)
-}
+// 捲動的 helper 在 `./support/scroll`：收合會讓文件變矮、捲動位置被夾回新的最大值，
+// 「捲到哪裡」因此不是呼叫時算得出來的（issue #96）。這裡一律用語意化的
+// `scrollPastCollapse`（捲到夠遠、足以觸發收合），不再拿寫死的數字當目標。
 
 test.describe('sticky 頁首', () => {
   test.use({ viewport: { width: 390, height: 844 } })
@@ -128,7 +120,7 @@ test.describe('sticky 頁首', () => {
     await expect(firstChip).toBeInViewport()
     await expect(page.getByTestId('water-reading')).toHaveCount(6)
 
-    await scrollTo(page, 1200)
+    await scrollPastCollapse(page)
 
     await expect(heading).toBeInViewport()
     await expect(waterTitle).toBeInViewport()
@@ -139,12 +131,14 @@ test.describe('sticky 頁首', () => {
   // And 頁首收合為兩層：缸副標與六格數字讓位，固定區明顯變矮
   test('向下捲動後頁首收合，固定區高度明顯縮小', async ({ page }) => {
     await page.goto('/')
+    // 展開時的高度要等內容到齊才量得準：水質六格是後到的，早一步量會量到一個偏矮的頁首
+    await waitForScrollableHome(page)
 
     const header = page.getByTestId('home-sticky-header')
     await expect(header).toHaveAttribute('data-collapsed', 'false')
     const expandedHeight = (await header.boundingBox())!.height
 
-    await scrollTo(page, 1200)
+    await scrollPastCollapse(page)
 
     await expect(header).toHaveAttribute('data-collapsed', 'true')
 
@@ -170,7 +164,7 @@ test.describe('sticky 頁首', () => {
   // Then 卡片被頁首遮住而不是蓋在頁首上（頁首在上層）
   test('生物卡片從固定的頁首下方穿過，頁首在上層', async ({ page }) => {
     await page.goto('/')
-    await scrollTo(page, 1200)
+    await scrollPastCollapse(page)
 
     const header = page.getByTestId('home-sticky-header')
     const box = (await header.boundingBox())!
@@ -189,13 +183,15 @@ test.describe('sticky 頁首', () => {
   // Then 版面回到初始樣態，與「尚未捲動」時一致
   test('捲回頂端後版面回到初始樣態', async ({ page }) => {
     await page.goto('/')
+    // 「初始樣態」的快照要在內容到齊之後取，否則比對的是一個還在載入中的頁首
+    await waitForScrollableHome(page)
 
     const total = page.getByTestId('creature-total')
     const header = page.getByTestId('home-sticky-header')
     const before = await header.innerHTML()
     const expandedHeight = (await header.boundingBox())!.height
 
-    await scrollTo(page, 1200)
+    await scrollPastCollapse(page)
     await expect(header).toHaveAttribute('data-collapsed', 'true')
 
     await scrollTo(page, 0)
@@ -218,7 +214,7 @@ test.describe('sticky 頁首', () => {
     const tabBar = page.getByRole('navigation', { name: '主要導覽' })
     const before = await tabBar.boundingBox()
 
-    await scrollTo(page, 1200)
+    await scrollPastCollapse(page)
 
     await expect(tabBar).toBeInViewport()
     expect(await tabBar.boundingBox()).toEqual(before)
@@ -233,7 +229,7 @@ test.describe('sticky 頁首', () => {
   // Then 選單完整顯示在生物卡片之上，不被卡片蓋住、不被 sticky 區裁切
   test('收合狀態下切換缸的選單完整顯示在卡片之上', async ({ page }) => {
     await page.goto('/')
-    await scrollTo(page, 1200)
+    await scrollPastCollapse(page)
     await expect(page.getByTestId('home-sticky-header')).toHaveAttribute('data-collapsed', 'true')
 
     await page.getByTestId('tank-switch').click()
@@ -260,11 +256,19 @@ test.describe('sticky 頁首', () => {
   // 過場驗得到的只有「中途真的出現過中間值」與「不動的東西沒被帶著動」，
   // 別去斷言具體毫秒數——機器慢一點就會偽陰性。
 
+  /** 捲到底——一定超過收合門檻，也不預設任何精確落點（issue #96） */
+  const PAST_COLLAPSE = Number.MAX_SAFE_INTEGER
+
   /**
    * 捲到 offset，並從捲動前一格開始用 rAF 逐幀量測：
    * 固定區高度、底部 tab 列位置、第一張生物卡片位置。
    */
   async function sampleDuringCollapse(page: Page, offset: number) {
+    // 取樣前先等內容到齊：資料還在路上時 querySelector 會拿到 null，
+    // 頁面也還捲不動，量到的會是一整串「什麼都沒發生」（issue #96）
+    await waitForScrollableHome(page)
+    await page.getByTestId('creature-card').first().waitFor()
+
     return page.evaluate(async (top) => {
       const header = document.querySelector('[data-testid="home-sticky-header"]')!
       const tabBar = document.querySelector('nav[aria-label="主要導覽"]')!
@@ -312,7 +316,7 @@ test.describe('sticky 頁首', () => {
     await page.goto('/')
     await expect(page.getByTestId('home-sticky-header')).toHaveAttribute('data-collapsed', 'false')
 
-    const { headerHeights } = await sampleDuringCollapse(page, 1200)
+    const { headerHeights } = await sampleDuringCollapse(page, PAST_COLLAPSE)
 
     expect(Math.min(...headerHeights)).toBeLessThan(Math.max(...headerHeights) / 2)
     expect(midwayFrames(headerHeights).length).toBeGreaterThan(0)
@@ -321,7 +325,7 @@ test.describe('sticky 頁首', () => {
   // Given 頁首已收合 / When 我向上捲回頂端、頁首展開 / Then 展開同樣有過場
   test('展開時同樣有過場，方向與收合對稱', async ({ page }) => {
     await page.goto('/')
-    await scrollTo(page, 1200)
+    await scrollPastCollapse(page)
     await expect(page.getByTestId('home-sticky-header')).toHaveAttribute('data-collapsed', 'true')
 
     const { headerHeights } = await sampleDuringCollapse(page, 0)
@@ -343,7 +347,7 @@ test.describe('sticky 頁首', () => {
       .evaluate(element => getComputedStyle(element).transitionProperty)
     expect(property).toBe('none')
 
-    const { headerHeights } = await sampleDuringCollapse(page, 1200)
+    const { headerHeights } = await sampleDuringCollapse(page, PAST_COLLAPSE)
 
     // 高度只會有展開與收合兩種，中間一格都不該出現
     expect(Math.min(...headerHeights)).toBeLessThan(Math.max(...headerHeights) / 2)
@@ -355,7 +359,7 @@ test.describe('sticky 頁首', () => {
   test('過場進行中底部 tab 列不移動，生物卡片不回彈', async ({ page }) => {
     await page.goto('/')
 
-    const { tabBarTops, cardTops } = await sampleDuringCollapse(page, 1200)
+    const { tabBarTops, cardTops } = await sampleDuringCollapse(page, PAST_COLLAPSE)
 
     // tab 列是 fixed，固定區變矮不該把它一起帶走
     expect(new Set(tabBarTops).size).toBe(1)
@@ -369,6 +373,8 @@ test.describe('sticky 頁首', () => {
   // Then 頁首不會卡在中間狀態，最終樣態與當下的捲動位置一致
   test('快速來回翻轉門檻後，頁首不卡在中間狀態', async ({ page }) => {
     await page.goto('/')
+    // 快速翻轉要有東西可捲；展開高度同樣得等內容到齊才量得準
+    await waitForScrollableHome(page)
 
     const header = page.getByTestId('home-sticky-header')
     const expandedHeight = (await header.boundingBox())!.height
@@ -396,7 +402,7 @@ test.describe('sticky 頁首', () => {
   // When 畫面首次渲染 / Then 頁首直接以收合樣態出現，不會先展開再播一次收合動畫
   test('還原到已捲動的位置時，首幀直接是收合樣態、不補播收合動畫', async ({ page }) => {
     await page.goto('/')
-    await scrollTo(page, 1200)
+    await scrollPastCollapse(page)
 
     const header = page.getByTestId('home-sticky-header')
     await expect(header).toHaveAttribute('data-collapsed', 'true')
@@ -407,7 +413,7 @@ test.describe('sticky 頁首', () => {
     await expect(header).toHaveAttribute('data-collapsed', 'true')
 
     // 逐幀量：整段期間都是收合高度，沒有從展開演過來的那一段
-    const { headerHeights } = await sampleDuringCollapse(page, 1200)
+    const { headerHeights } = await sampleDuringCollapse(page, PAST_COLLAPSE)
     expect(Math.max(...headerHeights)).toBeLessThan(collapsedHeight + 2)
   })
 
@@ -707,7 +713,7 @@ test.describe('數據儀表板', () => {
   // 頁面捲下去、摘要列收合成單行 pill 之後，它仍然是同一個入口
   test('頁首收合狀態下點摘要列一樣展開儀表板', async ({ page }) => {
     await page.goto('/')
-    await scrollTo(page, 1200)
+    await scrollPastCollapse(page)
     await expect(page.getByTestId('home-sticky-header')).toHaveAttribute('data-collapsed', 'true')
 
     await page.getByTestId('water-summary-card').click()

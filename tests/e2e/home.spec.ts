@@ -132,6 +132,38 @@ test.describe('sticky 頁首', () => {
     await expect(firstChip).not.toBeInViewport()
   })
 
+  // issue #102 的另一半：收合層是為了讓副標收得到 0 高才補的，補完之後展開的樣子必須沒變。
+  //
+  // Given 頁首處於展開狀態 / When 畫面渲染
+  // Then 缸副標與缸名之間的間距與現在一致，副標仍為單行省略（truncate）
+  test('展開時缸副標仍是單行省略，與缸名之間的間距不變', async ({ page }) => {
+    await page.goto('/')
+
+    const subtitle = page.getByTestId('tank-subtitle')
+    await expect(subtitle).toHaveText('SPS MIXED · 420L')
+    await expect(page.getByTestId('tank-subtitle-slot')).toHaveAttribute('data-collapsed', 'false')
+
+    // 展開時整塊有高度——收合層不能連展開的那一份高度都一起裁掉
+    expect((await page.getByTestId('tank-subtitle-slot').boundingBox())!.height).toBeGreaterThan(0)
+
+    // 間距是 pt-0.5（2px），單行省略是 truncate 的三件套。兩者都得留在副標這一行上
+    expect(await subtitle.evaluate((element) => {
+      const style = getComputedStyle(element)
+
+      return {
+        paddingTop: style.paddingTop,
+        whiteSpace: style.whiteSpace,
+        textOverflow: style.textOverflow,
+        overflow: style.overflow,
+      }
+    })).toEqual({
+      paddingTop: '2px',
+      whiteSpace: 'nowrap',
+      textOverflow: 'ellipsis',
+      overflow: 'hidden',
+    })
+  })
+
   // And 頁首收合為兩層：缸副標與六格數字讓位，固定區明顯變矮
   test('向下捲動後頁首收合，固定區高度明顯縮小', async ({ page }) => {
     await page.goto('/')

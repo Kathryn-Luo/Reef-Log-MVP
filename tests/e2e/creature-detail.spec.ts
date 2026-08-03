@@ -1,14 +1,16 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './support/guestSession'
 
 // 生物詳情 · 死亡記錄（Epic #1 screen-6，issue #14）。
+//
+// 每個 test 開場先以訪客身分登入，各自拿到一份模板示範資料的複本（issue #80）。
 //
 // 前提：preview 環境需有 seed 資料（`prisma/seed.ts`）——「主缸」的魚裡有
 // 一隻跳缸死亡的「六線龍」與一隻生病（白點）的「火焰仙」。
 // E2E 不在 TDD Develop 的 job 內執行，跑在 Vercel preview URL 上。
 //
-// preview 與 production 目前共用同一個 Neon 分支（見 CLAUDE.md），
-// 所以這裡唯一會寫入的那個測試在結束前把六線龍改回原本的死亡記錄——
-// 其他 spec（tests/e2e/creatures.spec.ts）數的是同一批 seed 資料。
+// 寫入只落在自己的沙盒裡，不會弄髒模板，也不會被別的 test 看到——所以底下那個
+// 「切換狀態並儲存」的測試不再需要為了別人而復原。它仍然把六線龍原樣填回去，
+// 但那是它自己的驗收條件（「再把死亡記錄填回去 → 列表回到死亡樣式」），不是善後。
 
 /** 從庫存列表點進指定俗名的那一隻 */
 async function openCreature(page: import('@playwright/test').Page, name: string) {
@@ -121,7 +123,8 @@ test('死亡日早於入缸日會被擋下', async ({ page }) => {
 // Then 死亡相關資料被清除，返回列表後該生物顯示為存活樣式
 // 再把死亡記錄填回去 / Then 列表回到「跳缸 · MM / DD」的死亡樣式
 //
-// 這是唯一會寫入的測試，改完會把 seed 的六線龍還原成原本的死亡記錄。
+// 兩個方向都要驗，所以「填回去」那一段是斷言的一部分；它同時也讓這一輪的沙盒
+// 回到起點，不過那已經只是附帶效果——沙盒是這個 test 自己的（issue #80）。
 test('切換狀態並儲存後，列表的樣式跟著改變', async ({ page }) => {
   await openCreature(page, '六線龍')
 

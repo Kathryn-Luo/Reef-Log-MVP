@@ -1,6 +1,9 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './support/guestSession'
 
 // 建立第一個缸（issue #46）。
+//
+// 每個 test 開場先以訪客身分登入，各自拿到一份模板示範資料的複本（issue #80）——
+// 這一支每條 test 都會建缸，建在自己的沙盒裡，不會被別的 test 看到。
 //
 // 前提：preview 環境的 seed 資料已經有一個「主缸」，所以首頁的空狀態在這裡看不到——
 // 那一條由 unit 測試（tests/unit/pages/home.test.ts）覆蓋，這裡走「已有缸」的入口。

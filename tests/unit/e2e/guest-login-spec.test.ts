@@ -1,9 +1,10 @@
 // @vitest-environment node
 // 純文字比對，不需要 Nuxt 環境；理由見 test-environment.test.ts（issue #38）
 
-import { readFileSync, readdirSync } from 'node:fs'
+import { readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { blockOf, read, testBlocks } from '../support/spec-source'
 
 // issue #87：`guest-login.spec.ts`「再次進站沿用同一個沙盒」在 main 上必然失敗。
 //
@@ -20,7 +21,7 @@ import { describe, expect, it } from 'vitest'
 // 這種比對守得住「整段被拿掉或換掉」，守不住「寫錯順序」；後者由 Vercel preview 上的
 // `pnpm test:e2e` 收尾（與 auth-wiring.test.ts 同樣的分工）。
 
-const read = (file: string) => readFileSync(resolve(process.cwd(), file), 'utf8')
+// `read` / `testBlocks` / `blockOf` 抽到 ../support/spec-source（issue #95 起共用）
 
 const GUEST_SPEC = 'tests/e2e/guest-login.spec.ts'
 const AUTH_GUARD_SPEC = 'tests/e2e/auth-guard.spec.ts'
@@ -29,26 +30,6 @@ const AUTH_GUARD_SPEC = 'tests/e2e/auth-guard.spec.ts'
 const SPECS = readdirSync(resolve(process.cwd(), 'tests/e2e'))
   .filter(name => name.endsWith('.spec.ts'))
   .map(name => `tests/e2e/${name}`)
-
-/**
- * 把一支 spec 切成「一個 test 一段」。
- *
- * 切在每一行開頭的 `test(` / `test.describe(` 之前，所以 describe 的標頭與它的
- * `beforeEach` 會落在同一段——那正好是我們要的：`beforeEach` 裡的登入步驟屬於
- * 它底下每一條 test。
- */
-function testBlocks(source: string): string[] {
-  return source.split(/\n(?=[ \t]*test(?:\.\w+)?\()/)
-}
-
-/** 取出標題含 `title` 的那一段 */
-function blockOf(file: string, title: string): string {
-  const block = testBlocks(read(file)).find(candidate => candidate.includes(title))
-
-  expect(block, `${file} 找不到「${title}」這條 test`).toBeDefined()
-
-  return block!
-}
 
 // Given 我已經以訪客身分進站，沙盒裡有一份示範資料 / When 我再次走一遍「建立沙盒」那條路徑
 // Then 我看得到的缸 id 與第一次完全相同，沒有多出任何一份示範資料

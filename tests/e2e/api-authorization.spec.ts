@@ -101,6 +101,12 @@ test.describe('別人的 id', () => {
   let b: Sandbox
 
   test.beforeAll(async ({ browser }) => {
+    // 這個 hook 做的是別人兩倍的事：兩位訪客各自走一遍訪客登入（preview 上實測
+    // 一次 13.7～21.1 秒，issue #95），再各打兩支 API。hook timeout 預設等於 test
+    // timeout，全域那 90 秒雖然已經夠，但這裡的下限本來就該跟著「兩位」一起算——
+    // 所以自己再加碼一倍，讓它與全域的餘裕比例一致。
+    test.setTimeout(180_000)
+
     // 依序開，不並行：兩位訪客同時建沙盒是 #66 自己的題目，這裡要的只是「兩個不同的人」
     a = await openSandbox(browser)
     b = await openSandbox(browser)

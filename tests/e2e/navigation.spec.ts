@@ -1,4 +1,7 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './support/guestSession'
+
+// 每個 test 開場先以訪客身分登入，各自拿到一份示範資料（issue #80）。
+// 未登入時這幾頁會被帶去 /login（#67），底部 tab 列根本不會出現。
 
 const TABS = [
   { label: '首頁', path: '/' },

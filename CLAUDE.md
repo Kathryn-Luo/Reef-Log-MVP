@@ -27,6 +27,11 @@ ReefLog 是一個海水缸記錄工具，同時作為展示「AI Agent + GitHub 
     由人類維護。preview 的寫入因此碰不到 production 的資料。
     - **E2E 與 preview 的髒資料清理**：Neon console → Branches → `preview` → **Reset from parent**，
       一次還原成 `main` 的樣子（訪客帳號全消失、示範資料回到乾淨狀態）。這是人工動作，agent 不執行。
+      - **取捨**：reset 是「從 `main` 複製一份快照」，所以 production 的 `User.email` 與 Google account id
+        會一併進到 preview 分支。目前接受，理由有三：preview 走不通 Google 登入（Google 不支援萬用字元
+        redirect URI，見 `prisma/schema.prisma`），所以 preview 上沒有路徑讀到那些資料；授權一律以
+        `User.id` 為根，沒有跨使用者讀取；production 目前實質上只有維護者本人一個帳號。
+        **等到有第一位真實使用者，就要改成從 sanitized 的非 production baseline 建 `preview` 分支。**
     - 引用舊說法要小心：#52 / #62 / #70 / #80 的內文寫於「production 與 preview 共用同一個 Neon 分支」的年代，
       那個前提**已不成立**，各 issue 的留言有補充。
   - **若之後要 per-PR 隔離**（每個 Preview Deployment 自己一條 Neon 分支）：需評估 Neon 的 Vercel 整合，

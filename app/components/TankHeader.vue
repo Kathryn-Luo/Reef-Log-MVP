@@ -119,13 +119,23 @@ function select(tankId: string) {
             class="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
             :class="collapsed ? 'grid-rows-[0fr] opacity-0' : 'grid-rows-[1fr] opacity-100'"
           >
-            <!-- 上方間距給成內距，才會跟著高度一起收掉；外距不在軌道的量測範圍內 -->
-            <p
-              data-testid="tank-subtitle"
-              class="min-h-0 truncate pt-0.5 font-mono text-sm text-muted"
-            >
-              {{ subtitle }}
-            </p>
+            <!--
+              收合層自己不帶任何間距（issue #102）：`min-height: 0` 只收得掉 content box，
+              `truncate` 帶的 `overflow: hidden` 也只裁內容，padding 仍算在 border box 裡——
+              間距長在這一層身上時，0fr 的軌道會被那 2px 撐住，收不到 0。
+
+              上方間距因此移到這一層「裡面」，跟著被裁掉。這與 WaterSummaryCard 的
+              `water-readings-slot` 是同一套手法，兩者的高度也才會一起收到 0。
+              `truncate` 留在 <p> 上：要單行省略的是副標那一行，不是包裝層。
+            -->
+            <div class="min-h-0 overflow-hidden">
+              <p
+                data-testid="tank-subtitle"
+                class="truncate pt-0.5 font-mono text-sm text-muted"
+              >
+                {{ subtitle }}
+              </p>
+            </div>
           </div>
         </div>
       </div>

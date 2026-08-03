@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import type { APIRequestContext, Browser, BrowserContext } from '@playwright/test'
+import { GUEST_LOGIN_NAV_TIMEOUT_MS } from './support/guestSession'
 
 // 資料歸屬的伺服器邊界（issue #68）。E2E 不在 TDD Develop 的 job 內執行，
 // 跑在 Vercel preview URL 上。
@@ -33,7 +34,10 @@ async function openSandbox(browser: Browser): Promise<Sandbox> {
 
   await page.goto('/login')
   await page.getByTestId('login-action-guest').click()
-  await expect(page).toHaveURL('/')
+  // 等的是「訪客登入那一次導航」，不是一般的畫面更新——預算另計，理由見常數本身（#111）。
+  // 這個 beforeAll 連開兩位訪客，最容易撞上冷的 instance：三條 test 在 CI 上第一次跑
+  // 就全部倒在這一句、重試才過（run 30809735121）。
+  await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
 
   const { tanks } = await (await context.request.get('/api/tanks')).json() as { tanks: { id: string, name: string }[] }
 

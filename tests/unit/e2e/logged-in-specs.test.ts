@@ -112,7 +112,10 @@ describe('訪客登入的粒度是「每個 test 一次」', () => {
 
     expect(source).toContain('goto(\'/login\')')
     expect(source).toContain('login-action-guest')
-    expect(source).toContain('toHaveURL(\'/\')')
+    // 這一句 #111 之後多帶了一個等待預算（`toHaveURL('/', { timeout: … })`），
+    // 所以認的是「等的仍然是精確的首頁網址」而不是整串字面值。
+    // 那個預算本身由 guest-login-timeout.test.ts 顧著。
+    expect(source).toMatch(/toHaveURL\('\/'[,)]/)
   })
 
   // auto fixture：五支 spec 裡「之後才加的」test 也會自動有身分，不必記得補一行。

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { GUEST_LOGIN_NAV_TIMEOUT_MS } from './support/guestSession'
 
 // 路由保護（issue #67）。E2E 不在 TDD Develop 的 job 內執行，跑在 Vercel preview URL 上。
 //
@@ -63,7 +64,13 @@ test.describe('已登入', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/login')
     await page.getByTestId('login-action-guest').click()
-    await expect(page).toHaveURL('/')
+    // 訪客登入那一次導航的預算另計（#111）。底下每一條「已登入」的 test 都從這裡開始，
+    // 這一句擦撞的話，失敗會長成「登入頁上找不到那個元素」——最花時間查的那一種。
+    //
+    // 加碼只給這一句：底下那幾句 `toHaveURL` 等的是 route middleware 的一次判斷
+    // （身分已經在 cookie 裡了），量級與這裡差一個數量級，跟著加碼只會讓真的壞掉的
+    // 導向多等三倍才回報。
+    await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
   })
 
   // Given 我已經登入 / When 我開啟（或重新整理）受保護的頁面 / Then 頁面正常載入，不被導向

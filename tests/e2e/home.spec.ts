@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
 
+import { backgroundAlpha } from './support/css-colour'
+
 // 首頁 · 生物優先（Epic #1 screen-1）。
 //
 // 前提：preview 環境需有 seed 資料（`prisma/seed.ts`，PR #49）——一位使用者、
@@ -466,11 +468,14 @@ test.describe('數據儀表板', () => {
     const sheet = (await page.getByTestId('water-dashboard-sheet').boundingBox())!
     expect(Math.abs(sheet.y + sheet.height - page.viewportSize()!.height)).toBeLessThan(2)
 
-    // 背景變暗但仍可見：遮罩是半透明的，首頁的缸名還在畫面上
-    const alpha = await page
-      .getByTestId('water-dashboard-backdrop')
-      .evaluate(element => getComputedStyle(element).backgroundColor)
-    expect(alpha).toMatch(/rgba\(.+,\s*0?\.\d+\)$/)
+    // 背景變暗但仍可見：遮罩是半透明的，首頁的缸名還在畫面上。
+    //
+    // 驗的是解析出來的 alpha，不是顏色字串的長相：Tailwind v4 的 `bg-black/60` 走
+    // `color-mix()` 算在 oklab 色彩空間，computed value 是 `oklab(0 0 0 / 0.6)` 而不是
+    // `rgba(...)`（issue #97）。0 與 1 兩側都要——全黑不透明與整個消失都不算「變暗但仍可見」。
+    const alpha = await backgroundAlpha(page.getByTestId('water-dashboard-backdrop'))
+    expect(alpha).toBeGreaterThan(0)
+    expect(alpha).toBeLessThan(1)
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('主缸 · 4 尺')
   })
 

@@ -327,24 +327,18 @@ describe('home.spec.ts 的 9 條 test 不再卡在 helper 上', () => {
 
     expect(helper).toMatch(/waitForScrollableHome\(page\)/)
   })
-  
-  // issue #102 新增了一條「展開時缸副標仍是單行省略，與缸名之間的間距不變」，34 → 35。
-  // 這裡數的是「一條都沒少」，所以新增時要跟著加；維持精確比對，刪掉仍然會紅。
-  it('35 條 test 都還在，沒有被刪掉或跳過', () => {
+
+  // 條數是「不准變少」的錨點：#96 當時是 34 條，issue #102 加了一條
+  //（展開時缸副標仍是單行省略、與缸名之間的間距不變）→ 35，
+  // issue #103 為捲動位置還原再加兩條（重新整理後回到原位、在頂端重新整理停在頂端）→ 37。
+  // 加 test 時把這個數字一起加上去；變少則要先問為什麼。
+  it('37 條 test 都還在，沒有被刪掉或跳過', () => {
     const source = read(HOME_SPEC)
 
-    expect(source.match(/^\s*test\(/gm) ?? []).toHaveLength(35)
+    expect(source.match(/^\s*test\(/gm) ?? []).toHaveLength(37)
     expect(source).not.toContain('test.only')
     // 既有的那一條 `test.skip` 是條件式跳過（Chromium 以外沒有 CDP），不是本次新增的
     expect(source.match(/test\.skip/g) ?? []).toHaveLength(1)
   })
-  
-  // 條數是「不准變少」的錨點：#96 當時是 34 條，issue #103 為捲動位置還原
-  // 補了兩條（重新整理後回到原位、在頂端重新整理停在頂端），所以現在是 36。
-  // 加 test 時把這個數字一起加上去；變少則要先問為什麼。
-  it('36 條 test 都還在，沒有被刪掉或跳過', () => {
-    const source = read(HOME_SPEC)
 
-    expect(source.match(/^\s*test\(/gm) ?? []).toHaveLength(36)
-  })
 })

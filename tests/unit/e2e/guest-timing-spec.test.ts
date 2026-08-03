@@ -63,6 +63,16 @@ describe('計時的 spec 不順手訂效能目標', () => {
   it('沒有用 waitForTimeout 硬等', () => {
     expect(read(TIMING_SPEC)).not.toContain('waitForTimeout')
   })
+
+  // 讀的是 handler 另外發的那個自訂標頭。`Server-Timing` 到不了 preview 的客戶端——
+  // E2E 第一次在 CI 上跑時三條全部拿到 undefined，三次重試皆然（run 30809735121）。
+  // 改回去的話 unit 這一側原本一句話都不會說，要等下一次 E2E 才發現又量不到了。
+  it('讀的是 X-Guest-Timing，不是會被改寫的 Server-Timing', () => {
+    const source = read(TIMING_SPEC)
+
+    expect(source).toContain('headers()[\'x-guest-timing\']')
+    expect(source).not.toContain('headers()[\'server-timing\']')
+  })
 })
 
 // Given 這支 spec 量的就是登入那一次請求本身

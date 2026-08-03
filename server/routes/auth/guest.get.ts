@@ -66,7 +66,20 @@ export default defineEventHandler(async (event) => {
   // 數字也回到回應上（成功與失敗都是）。#95 量那五次用的是 Playwright，而 Vercel 的
   // runtime log 要進 console 才翻得到——放在標頭上，量一次的成本就跟按一次按鈕一樣低。
   // 這是診斷用的，方向 B / C / D 落地之後可以拿掉。
-  setResponseHeader(event, 'Server-Timing', formatServerTiming(timer, instance))
+  //
+  // 兩個標頭而不是一個：**`Server-Timing` 到不了 preview 的客戶端**。E2E 第一次在 CI 上
+  // 跑（run 30809735121）時，三條計時的 test 全部拿到 `undefined`，三次重試皆然。
+  // 已排除「h3 的 sendRedirect 會丟掉先設的標頭」這個可能——本機用同版 h3 重現同樣的
+  // 形狀（setResponseHeader → return sendRedirect），302 上兩個標頭都在。所以吃掉它的
+  // 是 Vercel 那一層（它自己也用 Server-Timing 回報邊緣的量測）。
+  //
+  // 因此 E2E 讀的是 `X-Guest-Timing`（自訂名稱，Vercel 沒有理由碰它），
+  // `Server-Timing` 仍然照發——它在本機與任何不改寫標頭的環境下，devtools 的 Network
+  // 面板會直接畫成時間軸，那是自訂標頭給不了的。
+  const timing = formatServerTiming(timer, instance)
+
+  setResponseHeader(event, 'Server-Timing', timing)
+  setResponseHeader(event, 'X-Guest-Timing', timing)
 
   return sendRedirect(event, destination)
 })

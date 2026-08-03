@@ -178,11 +178,19 @@ describe('訪客登入的分段計時', () => {
 
   // 數字也要回到回應上：#95 量那五次用的是 Playwright，翻 Vercel runtime log 才看得到
   // 的數據等於每量一次都要進 console 一趟。
-  it('回應帶上 Server-Timing，量測不必去翻 runtime log', () => {
+  it('回應帶上計時標頭，量測不必去翻 runtime log', () => {
     const source = read(GUEST_ROUTE)
 
     expect(source).toContain('formatServerTiming(')
     expect(source).toContain('setResponseHeader(event, \'Server-Timing\'')
+  })
+
+  // `Server-Timing` 到不了 preview 的客戶端：E2E 第一次在 CI 上跑時三條計時的 test 全部
+  // 拿到 undefined，三次重試皆然（run 30809735121），而本機用同版 h3 重現同樣的形狀時
+  // 標頭都還在——吃掉它的是 Vercel 那一層。所以量測真正依賴的是這個自訂名稱，
+  // 它一旦被拿掉，E2E 會退回「量不到」，而 unit 這一側原本一句話都不會說。
+  it('同一份數據另外發一個 Vercel 不會改寫的自訂標頭', () => {
+    expect(read(GUEST_ROUTE)).toContain('setResponseHeader(event, \'X-Guest-Timing\'')
   })
 })
 

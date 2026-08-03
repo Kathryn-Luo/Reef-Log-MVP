@@ -21,7 +21,15 @@ function durationOf(header: string, metric: string): number | undefined {
   return match ? Number(match[1]) : undefined
 }
 
-/** 走一次 /auth/guest，回傳那次回應上的 Server-Timing */
+/**
+ * 走一次 /auth/guest，回傳那次回應上的計時標頭。
+ *
+ * 讀 `X-Guest-Timing` 而不是 `Server-Timing`：**後者到不了 preview 的客戶端**。
+ * 這支 spec 第一次在 CI 上跑（run 30809735121）時三條全部拿到 `undefined`，三次重試皆然；
+ * 本機用同版 h3 重現「setResponseHeader → return sendRedirect」的形狀，302 上標頭都還在，
+ * 所以吃掉它的是 Vercel 那一層（它自己也用 Server-Timing 回報邊緣的量測）。
+ * handler 兩個都發，內容一模一樣——這裡讀不會被改寫的那一個。
+ */
 async function serverTiming(context: BrowserContext): Promise<string> {
   // maxRedirects: 0 —— 這支路由的終點是 302，跟著轉過去之後拿到的就是首頁的回應，
   // 上面沒有這次登入的計時
@@ -29,9 +37,9 @@ async function serverTiming(context: BrowserContext): Promise<string> {
 
   expect(response.status()).toBe(302)
 
-  const header = response.headers()['server-timing']
+  const header = response.headers()['x-guest-timing']
 
-  expect(header, '/auth/guest 的回應上沒有 Server-Timing').toBeTruthy()
+  expect(header, '/auth/guest 的回應上沒有 X-Guest-Timing').toBeTruthy()
 
   return header!
 }

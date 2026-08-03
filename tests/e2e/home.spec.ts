@@ -1,7 +1,9 @@
-import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
+import { expect, test } from './support/guestSession'
 
 // 首頁 · 生物優先（Epic #1 screen-1）。
+//
+// 每個 test 開場先以訪客身分登入，各自拿到一份模板示範資料的複本（issue #80）。
 //
 // 前提：preview 環境需有 seed 資料（`prisma/seed.ts`，PR #49）——一位使用者、
 // 一個名為「主缸」的缸（4 尺 / SPS MIXED / 420L）、一筆數小時前的水質記錄與 12 隻生物，

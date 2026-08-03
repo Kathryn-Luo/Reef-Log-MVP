@@ -1,6 +1,8 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './support/guestSession'
 
 // 生物庫存（Epic #1 screen-5，issue #13）。
+//
+// 每個 test 開場先以訪客身分登入，各自拿到一份模板示範資料的複本（issue #80）。
 //
 // 前提：preview 環境需有 seed 資料（`prisma/seed.ts`）——「主缸」有 12 隻生物：
 // 魚 5（含 1 隻生病的火焰仙「白點」、1 隻跳缸死亡的六線龍）、珊瑚 6（含 1 隻生病）、其他 1。

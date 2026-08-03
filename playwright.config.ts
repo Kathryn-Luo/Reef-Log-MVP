@@ -37,7 +37,9 @@ export default defineConfig({
   webServer: process.env.PLAYWRIGHT_BASE_URL
     ? undefined
     : {
-        command: 'npm run dev',
+        // 本專案用 pnpm（package.json 的 packageManager 鎖 pnpm@10）。
+        // 這條 fallback 只有本機會走到，走 preview URL 時整個 webServer 都是 undefined。
+        command: 'pnpm dev',
         url: baseURL,
         reuseExistingServer: !process.env.CI,
       },

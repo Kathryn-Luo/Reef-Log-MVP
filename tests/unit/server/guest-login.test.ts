@@ -50,9 +50,6 @@ function fakeClient() {
 
         return { id: `guest-user-${++users}` }
       }),
-      update: vi.fn(async () => {
-        calls.push('user.update')
-      }),
       findUnique: vi.fn(),
     },
     account: { create: vi.fn(), findUnique: vi.fn() },
@@ -211,19 +208,6 @@ describe('resolveGuestLogin — 已有 session', () => {
     expect(client.user.create).not.toHaveBeenCalled()
   })
 
-  // 清理腳本依 lastActiveAt 判斷是否過期。每次沿用訪客 session 時先寫入活動時間，
-  // 才不會讓帳號雖然在用、卻因最初的 createdAt 太早而被清理掉。
-  it('沿用 session 時更新使用者的最後活動時間', async () => {
-    const { client } = fakeClient()
-
-    await resolveGuestLogin(client, EXISTING)
-
-    expect(client.user.update).toHaveBeenCalledWith({
-      where: { id: EXISTING.id },
-      data: { lastActiveAt: expect.any(Date) },
-    })
-  })
-
   // And 不會再建一個沙盒，也不會重複複製示範資料
   it('不再建一個沙盒，也不重複複製示範資料', async () => {
     const { client } = fakeClient()
@@ -288,17 +272,15 @@ describe('resolveGuestLogin — 分段計時', () => {
     expect(names(timer)).toEqual(expect.arrayContaining(['connect', 'tx', 'tx.sandbox.tank1']))
   })
 
-  // Story ②：已有 session 時不連線、不開交易、不重建沙盒；只更新最後活動時間。
-  it('已有 session 時不連線、不開交易、不重建沙盒', async () => {
+  // Story ②：已經有身分時這支函式一次資料庫都不碰，所以也沒有任何段落可量。
+  // 有段落就代表它又去連了一次資料庫。
+  it('已有 session 時不連線、不留下任何段落', async () => {
     const { client } = fakeClient()
     const timer = createTimer()
 
     await resolveGuestLogin(client, { id: 'guest-user-existing' } as User, timer)
 
     expect(client.$connect).not.toHaveBeenCalled()
-    expect(client.$transaction).not.toHaveBeenCalled()
-    expect(client.tank.create).not.toHaveBeenCalled()
-    expect(client.user.update).toHaveBeenCalledTimes(1)
     expect(timer.segments()).toEqual([])
   })
 

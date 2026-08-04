@@ -79,13 +79,6 @@ export async function resolveGuestLogin(
   timer: Timer = createTimer(),
 ): Promise<GuestLoginResult> {
   if (existingUser) {
-    // 寫入放在續發 cookie 之前：兩者沒辦法包成同一個交易，失敗時寧可讓清理腳本
-    // 多保留一個沙盒，也不能留下「cookie 已有效、lastActiveAt 卻沒更新」而誤刪資料。
-    await client.user.update({
-      where: { id: existingUser.id },
-      data: { lastActiveAt: new Date() },
-    })
-
     return { userId: existingUser.id, isNewGuest: false }
   }
 

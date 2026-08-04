@@ -96,6 +96,11 @@ function recordNotFound() {
   return Object.assign(new Error('Record to update not found.'), { code: 'P2025' })
 }
 
+/** PostgreSQL serializable transaction 的可重試衝突，Prisma 以 P2034 表示。 */
+function transactionConflict() {
+  return Object.assign(new Error('Transaction failed due to a write conflict or a deadlock.'), { code: 'P2034' })
+}
+
 function fakeClient() {
   const tanks = TANKS.map(tankRow)
   const creatures = CREATURES.map(creatureRow)
@@ -405,6 +410,16 @@ describe('PATCH /api/creatures/:id/move 的歸屬檢查', () => {
       where: { id: 'creature-a1', tank: { userId: USER_A.id, archivedAt: null } },
       data: { tankId: 'tank-a2' },
     })
+  })
+
+  it('serializable transaction 第一次衝突時會重試，第二次成功後回傳成功結果', async () => {
+    const client = fakeClient()
+    client.$transaction.mockRejectedValueOnce(transactionConflict())
+
+    await expect(moveOwnedCreature(client, USER_A, 'creature-a1', bodyThunk({ tankId: 'tank-a2' })))
+      .resolves.toEqual({ ok: true, value: { creatureId: 'creature-a1', tankId: 'tank-a2' } })
+    expect(client.$transaction).toHaveBeenCalledTimes(2)
+    expect(client.creature.update).toHaveBeenCalledTimes(1)
   })
 
   it('來源與目標是同一個缸時回 400，而且不寫入', async () => {

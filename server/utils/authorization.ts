@@ -118,6 +118,14 @@ function parseMoveCreatureInput(raw: unknown): { ok: true, tankId: string } | { 
     : { ok: false, error: invalidInput('Invalid creature move input', '請選擇要移動到的缸。') }
 }
 
+/** PostgreSQL serializable transaction 的 write conflict / deadlock；這是 Prisma 的可重試錯誤碼。 */
+function isTransactionConflict(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2034'
+}
+
+/** 初次執行加兩次重試，避免碰撞時無限佔用 Vercel function。 */
+const MOVE_TRANSACTION_ATTEMPTS = 3
+
 /**
  * 兩支寫入 API 的 request body，**刻意延後到通過檢查之後才取得**。
  *
@@ -341,23 +349,34 @@ export async function moveOwnedCreature(
 
   // 目標歸屬檢查與來源寫入必須在同一個 serializable transaction：目標缸在檢查之後
   // 被封存或改變歸屬時，交易不會默默把生物移到當下不合格的目標。
-  const outcome = await client.$transaction(async (transaction) => {
-    if (!await ownsTank(transaction, user.id, parsed.tankId)) {
-      return 'target-not-found' as const
+  for (let attempt = 0; attempt < MOVE_TRANSACTION_ATTEMPTS; attempt++) {
+    try {
+      const outcome = await client.$transaction(async (transaction) => {
+        if (!await ownsTank(transaction, user.id, parsed.tankId)) {
+          return 'target-not-found' as const
+        }
+
+        return await moveCreature(transaction, source.id, user.id, parsed.tankId)
+          ? 'moved' as const
+          : 'source-not-found' as const
+      }, { isolationLevel: 'Serializable' })
+
+      if (outcome === 'target-not-found') {
+        return { ok: false, error: TANK_NOT_FOUND }
+      }
+
+      return outcome === 'moved'
+        ? { ok: true, value: { creatureId: source.id, tankId: parsed.tankId } }
+        : { ok: false, error: CREATURE_NOT_FOUND }
     }
-
-    return await moveCreature(transaction, source.id, user.id, parsed.tankId)
-      ? 'moved' as const
-      : 'source-not-found' as const
-  }, { isolationLevel: 'Serializable' })
-
-  if (outcome === 'target-not-found') {
-    return { ok: false, error: TANK_NOT_FOUND }
+    catch (error) {
+      if (!isTransactionConflict(error) || attempt === MOVE_TRANSACTION_ATTEMPTS - 1) {
+        throw error
+      }
+    }
   }
 
-  return outcome === 'moved'
-    ? { ok: true, value: { creatureId: source.id, tankId: parsed.tankId } }
-    : { ok: false, error: CREATURE_NOT_FOUND }
+  throw new Error('Move transaction retry loop exhausted')
 }
 
 /**

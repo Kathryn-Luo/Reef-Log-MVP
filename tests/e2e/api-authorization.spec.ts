@@ -172,6 +172,23 @@ test.describe('別人的 id', () => {
     expect(after).toEqual(before)
   })
 
+  // Given 我以 A 帳號登入、B 有自己的缸
+  // When  A 嘗試把自己的生物移到 B 的缸
+  // Then 404，且 B 的缸裡沒有被塞進 A 的生物
+  test('A 不能把自己的生物移進 B 的缸', async () => {
+    const before = await (await b.request.get(`/api/tanks/${b.tankId}/creatures`)).json()
+
+    const response = await a.request.patch(`/api/creatures/${a.creatureId}/move`, {
+      data: { tankId: b.tankId },
+    })
+
+    await expectNoLeak(response, '找不到這個缸。', [b.tankName, b.creatureName])
+
+    const after = await (await b.request.get(`/api/tanks/${b.tankId}/creatures`)).json()
+
+    expect(after).toEqual(before)
+  })
+
   // Given 我以 A 帳號登入
   // When  我對 GET /api/tanks 發出請求
   // Then  只回傳 A 名下未封存的缸，清單裡沒有 B 的任何缸
@@ -226,7 +243,7 @@ test.describe('別人的 id', () => {
 // Then  回傳 401，不回傳任何資料
 test.describe('未登入', () => {
   // 全新的 context，一張 cookie 都沒有——不是「過期」，是從來沒登入過
-  test('六支 API 一律回 401', async ({ browser }) => {
+  test('七支 API 一律回 401', async ({ browser }) => {
     const context = await browser.newContext()
 
     const responses = await Promise.all([
@@ -236,9 +253,10 @@ test.describe('未登入', () => {
       context.request.get('/api/tanks/any-tank-id/creatures'),
       context.request.get('/api/creatures/any-creature-id'),
       context.request.patch('/api/creatures/any-creature-id', { data: { status: 'ALIVE' } }),
+      context.request.patch('/api/creatures/any-creature-id/move', { data: { tankId: 'any-tank-id' } }),
     ])
 
-    expect(responses.map(response => response.status())).toEqual([401, 401, 401, 401, 401, 401])
+    expect(responses.map(response => response.status())).toEqual([401, 401, 401, 401, 401, 401, 401])
 
     await context.close()
   })
@@ -271,9 +289,10 @@ test.describe('未登入', () => {
     const responses = await Promise.all([
       context.request.post('/api/tanks', malformed),
       context.request.patch('/api/creatures/any-creature-id', malformed),
+      context.request.patch('/api/creatures/any-creature-id/move', malformed),
     ])
 
-    expect(responses.map(response => response.status())).toEqual([401, 401])
+    expect(responses.map(response => response.status())).toEqual([401, 401, 401])
 
     await context.close()
   })

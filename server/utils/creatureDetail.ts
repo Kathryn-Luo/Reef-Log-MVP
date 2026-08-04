@@ -109,3 +109,31 @@ export async function updateCreatureStatus(
     throw error
   }
 }
+
+/**
+ * 將生物移到另一個缸。來源歸屬放進 update 的 where，避免查到之後資料已被移走時仍寫入。
+ *
+ * 目標缸的歸屬與封存檢查由 authorization.ts 在呼叫前負責；這個函式只負責原子的來源寫入。
+ */
+export async function moveCreature(
+  client: Pick<PrismaClient, 'creature'>,
+  creatureId: string,
+  userId: string,
+  targetTankId: string,
+): Promise<boolean> {
+  try {
+    await client.creature.update({
+      where: { id: creatureId, tank: { userId, archivedAt: null } },
+      data: { tankId: targetTankId },
+    })
+
+    return true
+  }
+  catch (error) {
+    if (isRecordNotFound(error)) {
+      return false
+    }
+
+    throw error
+  }
+}

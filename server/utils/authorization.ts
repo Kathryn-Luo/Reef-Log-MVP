@@ -1,10 +1,10 @@
 import type { PrismaClient, User } from '@prisma/client'
-import type { CreatureDetailDto, CreatureDetailResponse, TankCreaturesData } from '#shared/types/creature'
+import type { CreatureDetailDto, CreatureDetailResponse, MoveCreatureResponse, TankCreaturesData } from '#shared/types/creature'
 import type { TankHomeData, TankOption } from '#shared/types/home'
 import type { CreateTankResponse } from '#shared/types/tank'
 import { parseCreatureStatusInput } from '#shared/utils/creatureDetail'
 import { parseTankInput } from '#shared/utils/tankForm'
-import { getCreatureDetail, updateCreatureStatus } from './creatureDetail'
+import { getCreatureDetail, moveCreature, updateCreatureStatus } from './creatureDetail'
 import { getTankCreatures } from './creatureList'
 import { getTankHome, listTankOptions } from './homeData'
 import { createTank } from './tankWrite'
@@ -109,6 +109,15 @@ function invalidInput(statusMessage: string, message: string): ApiErrorSpec {
   return { statusCode: 400, statusMessage, data: { message } }
 }
 
+function parseMoveCreatureInput(raw: unknown): { ok: true, tankId: string } | { ok: false, error: ApiErrorSpec } {
+  const source = typeof raw === 'object' && raw !== null ? raw as Record<string, unknown> : {}
+  const tankId = typeof source.tankId === 'string' ? source.tankId.trim() : ''
+
+  return tankId
+    ? { ok: true, tankId }
+    : { ok: false, error: invalidInput('Invalid creature move input', '請選擇要移動到的缸。') }
+}
+
 /**
  * 兩支寫入 API 的 request body，**刻意延後到通過檢查之後才取得**。
  *
@@ -131,7 +140,7 @@ type BodyReader = () => Promise<unknown>
  *
  * 只取 id：這是一次「是不是你的」的問答，缸的內容要不要讀是下一步的事。
  */
-async function ownsTank(client: PrismaClient, userId: string, tankId: string): Promise<boolean> {
+async function ownsTank(client: Pick<PrismaClient, 'tank'>, userId: string, tankId: string): Promise<boolean> {
   const tank = await client.tank.findFirst({
     where: { id: tankId, userId, archivedAt: null },
     select: { id: true },
@@ -288,6 +297,66 @@ export async function applyCreatureStatus(
   // 那正是此刻為真的事，而且與其他路徑一個字都不差（見 CREATURE_NOT_FOUND）。
   return creature
     ? { ok: true, value: { creature } }
+    : { ok: false, error: CREATURE_NOT_FOUND }
+}
+
+/**
+ * PATCH /api/creatures/:id/move —— 將生物移到同一使用者名下的另一個未封存缸。
+ *
+ * 來源與目標都先以目前 session 的 userId 驗證；目標不存在、屬於他人或已封存一律回同一個
+ * 404。真正寫入時仍將來源歸屬放在 where，防止來源在兩次查詢之間被移走。
+ */
+export async function moveOwnedCreature(
+  client: PrismaClient,
+  user: SessionUser | null,
+  creatureId: string | undefined,
+  readBody: BodyReader,
+): Promise<Authorized<MoveCreatureResponse>> {
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  if (!creatureId) {
+    return { ok: false, error: MISSING_CREATURE_ID }
+  }
+
+  const source = await client.creature.findFirst({
+    where: { id: creatureId, tank: { userId: user.id, archivedAt: null } },
+    select: { id: true, tankId: true },
+  })
+
+  if (!source) {
+    return { ok: false, error: CREATURE_NOT_FOUND }
+  }
+
+  const parsed = parseMoveCreatureInput(await readBody())
+
+  if (!parsed.ok) {
+    return parsed
+  }
+
+  if (source.tankId === parsed.tankId) {
+    return { ok: false, error: invalidInput('Same source and target tank', '來源與目標不能是同一個缸。') }
+  }
+
+  // 目標歸屬檢查與來源寫入必須在同一個 serializable transaction：目標缸在檢查之後
+  // 被封存或改變歸屬時，交易不會默默把生物移到當下不合格的目標。
+  const outcome = await client.$transaction(async (transaction) => {
+    if (!await ownsTank(transaction, user.id, parsed.tankId)) {
+      return 'target-not-found' as const
+    }
+
+    return await moveCreature(transaction, source.id, user.id, parsed.tankId)
+      ? 'moved' as const
+      : 'source-not-found' as const
+  }, { isolationLevel: 'Serializable' })
+
+  if (outcome === 'target-not-found') {
+    return { ok: false, error: TANK_NOT_FOUND }
+  }
+
+  return outcome === 'moved'
+    ? { ok: true, value: { creatureId: source.id, tankId: parsed.tankId } }
     : { ok: false, error: CREATURE_NOT_FOUND }
 }
 

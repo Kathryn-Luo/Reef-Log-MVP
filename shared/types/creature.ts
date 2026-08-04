@@ -64,3 +64,9 @@ export interface UpdateCreatureStatusInput {
 export interface CreatureDetailResponse {
   creature: CreatureDetailDto
 }
+
+/** PATCH /api/creatures/:id/move 的回應，只回傳畫面重新取資料所需的識別資訊。 */
+export interface MoveCreatureResponse {
+  creatureId: string
+  tankId: string
+}

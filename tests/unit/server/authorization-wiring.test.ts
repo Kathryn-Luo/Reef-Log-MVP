@@ -50,7 +50,7 @@ function listApiHandlers(dir: string): string[] {
     })
 }
 
-/** 六支要保護的 API，與各自該用的解析函式（server/api/health.get.ts 不涉及使用者資料，維持公開） */
+/** 七支要保護的 API，與各自該用的解析函式（server/api/health.get.ts 不涉及使用者資料，維持公開） */
 const HANDLERS = [
   { file: 'server/api/tanks/index.get.ts', resolver: 'resolveTankOptions' },
   { file: 'server/api/tanks/index.post.ts', resolver: 'createOwnedTank' },
@@ -58,6 +58,7 @@ const HANDLERS = [
   { file: 'server/api/tanks/[id]/creatures.get.ts', resolver: 'resolveTankCreatures' },
   { file: 'server/api/creatures/[id].get.ts', resolver: 'resolveCreatureDetail' },
   { file: 'server/api/creatures/[id].patch.ts', resolver: 'applyCreatureStatus' },
+  { file: 'server/api/creatures/[id]/move.patch.ts', resolver: 'moveOwnedCreature' },
 ]
 
 describe('每一支 API 都經過同一道歸屬檢查', () => {
@@ -101,6 +102,7 @@ describe('每一支 API 都經過同一道歸屬檢查', () => {
   it.each([
     'server/api/tanks/index.post.ts',
     'server/api/creatures/[id].patch.ts',
+    'server/api/creatures/[id]/move.patch.ts',
   ])('%s 把 body 延後到身分檢查之後才讀', (file) => {
     const source = readCode(file)
 
@@ -139,6 +141,7 @@ describe('未登入不再是一個看起來正常的空回應', () => {
     'server/api/tanks/[id]/creatures.get.ts',
     'server/api/creatures/[id].get.ts',
     'server/api/creatures/[id].patch.ts',
+    'server/api/creatures/[id]/move.patch.ts',
   ])('%s 不再用 `user ? ... : null` 把未登入折成 404', (file) => {
     expect(readCode(file)).not.toMatch(/user \?/)
   })

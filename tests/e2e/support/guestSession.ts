@@ -23,6 +23,27 @@ import type { Page } from '@playwright/test'
 // B 與 C 省下來的是資料庫列數，付出的是隔離。偶發、難重現的 E2E 失敗比多幾百列資料貴
 // 得多，而累積本來就是 #52 / #70 要解決的題目——真人訪客一樣會累積。
 
+/**
+ * 「按下訪客登入 → 停在首頁」這一次導航的等待預算（issue #111）。
+ *
+ * `/auth/guest` 這一次請求在 preview 上實測 9.4～14.8 秒（#98 量了 5 次）：訪客登入要建
+ * 一位 User、再把模板的示範資料整份複製一份（#66），加上 Vercel 冷啟與 Neon 建立連線。
+ * 全域的 `expect.timeout` 是 15 秒（`playwright.config.ts`，#95），只比觀測到的最慢值多
+ * 0.2 秒——冷啟那幾次必然擦撞，`api-authorization.spec.ts` 第一次在 CI 上跑就三條全倒在
+ * 這一句、重試才過。
+ *
+ * 為什麼不改全域那 15 秒：它是照「SPA 多一次 API 往返（+1.5～3 秒）」訂的，拉高的代價是
+ * 每一個**真的**壞掉的斷言都要多等三倍才回報。全站只有「等一次訪客登入」需要這個量級，
+ * 所以加碼只給那幾句，其餘照舊。
+ *
+ * 45 秒 ≈ 觀測上限的三倍：冷啟再慢一次也還有餘裕，而且遠在 test timeout（90 秒）之內，
+ * 逾時的時候仍然是這一句自己說話，不是整條 test 被砍掉。
+ *
+ * 數字集中在這裡而不是各處各寫一個：分散寫的話下次調整只會改到其中幾處，
+ * 其餘的會安靜地留在舊值上。#98 若把 `/auth/guest` 改快了，這個常數會跟著變小或消失。
+ */
+export const GUEST_LOGIN_NAV_TIMEOUT_MS = 45_000
+
 /** 走一遍登入頁上的「以訪客身分瀏覽」，回來時人已經在首頁上。 */
 export async function loginAsGuest(page: Page): Promise<void> {
   await page.goto('/login')
@@ -31,7 +52,7 @@ export async function loginAsGuest(page: Page): Promise<void> {
   // 停在首頁才算數：登入失敗時這支路由會把人留在 /login，
   // 少了這一句，後面每一條斷言都會以「登入頁上找不到那個元素」的形式失敗，
   // 看起來像是畫面壞了，而不是沒登入。
-  await expect(page).toHaveURL('/')
+  await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
 }
 
 /**

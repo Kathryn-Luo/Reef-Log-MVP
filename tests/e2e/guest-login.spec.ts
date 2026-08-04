@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import type { BrowserContext } from '@playwright/test'
+import { GUEST_LOGIN_NAV_TIMEOUT_MS } from './support/guestSession'
 
 // 訪客登入（issue #66）。E2E 不在 TDD Develop 的 job 內執行，跑在 Vercel preview URL 上。
 //
@@ -23,7 +24,10 @@ test('按下「以訪客身分瀏覽」就進得了首頁，看得到自己的�
   await page.goto('/login')
   await page.getByTestId('login-action-guest').click()
 
-  await expect(page).toHaveURL('/')
+  // 這一句等的是訪客登入那一次導航（preview 上 9.4～14.8 秒），預算另計——
+  // 本檔每一次登入都用同一個常數，理由見 support/guestSession.ts（#111）。
+  // 下一句就回到全域的 15 秒：那時人已經在首頁，等的只是畫面。
+  await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('主缸 · 4 尺')
   await expect(page.getByTestId('tank-subtitle')).toHaveText('SPS MIXED · 420L')
 })
@@ -33,7 +37,7 @@ test('按下「以訪客身分瀏覽」就進得了首頁，看得到自己的�
 test('再次進站沿用同一個沙盒，不會多長出一份示範資料', async ({ page, context }) => {
   await page.goto('/login')
   await page.getByTestId('login-action-guest').click()
-  await expect(page).toHaveURL('/')
+  await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
 
   const before = await tankIds(context)
 
@@ -66,7 +70,7 @@ test('兩位訪客拿到各自的沙盒', async ({ browser }) => {
 
     await page.goto('/login')
     await page.getByTestId('login-action-guest').click()
-    await expect(page).toHaveURL('/')
+    await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
 
     return tankIds(context)
   }))
@@ -89,7 +93,7 @@ test('訪客改動自己的沙盒之後，下一位訪客拿到的仍是乾淨�
 
   await page.goto('/login')
   await page.getByTestId('login-action-guest').click()
-  await expect(page).toHaveURL('/')
+  await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
 
   // 訪客可寫，且寫入 API 不判斷 provider（Story ⑤）——這一筆就是「A 弄髒自己的沙盒」
   const created = await first.request.post('/api/tanks', {
@@ -105,7 +109,7 @@ test('訪客改動自己的沙盒之後，下一位訪客拿到的仍是乾淨�
 
   await nextPage.goto('/login')
   await nextPage.getByTestId('login-action-guest').click()
-  await expect(nextPage).toHaveURL('/')
+  await expect(nextPage).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
 
   const clean = await tankIds(second)
 

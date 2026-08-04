@@ -149,7 +149,7 @@ enum AuthProvider {
   /// Google 使用者完全一致（不需要在每支寫入 API 上判斷 provider）。
   ///
   /// 清理靠 User → Tank → {WaterLog, Creature, MaintenanceTask} 全鏈的 onDelete: Cascade：
-  /// 刪掉 provider = GUEST 且 User.createdAt 逾期的使用者，整棵資料自動消失。
+  /// 刪掉 provider = GUEST 且 User.lastActiveAt 逾期的使用者，整棵資料自動消失。
   /// Account.@@index([userId]) 就是為這件事存在的。
   ///
   /// 另外，Vercel preview 無法逐 branch 去 Google Console 登記 redirect URI

@@ -43,6 +43,16 @@ jobs:
           --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
         ports:
           - 5432:5432
+      # migrate diff 會建立資料表但不寫 Prisma migration history；build 必須使用另一個
+      # 空資料庫，才會真的驗到 migrate deploy 在全新環境可從頭套用。
+      build-db:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+        ports:
+          - 5433:5432
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -111,13 +121,13 @@ jobs:
       # 而 Vercel 的 log 要點進 dashboard 才看得到。
       #
       # 放在最後：前面三項是秒級的快訊號，先讓它們回報完，再花 30–60 秒打包。
-      # `pnpm build` 先 migrate deploy、再 generate 與 Nuxt build。CI 以短命 service
-      # 驗證同一條指令能跑通，不連 Neon；Vercel 則由其 Production / Preview scope 的
-      # DATABASE_URL 與 DIRECT_URL 對應套用到各自的 Neon 分支。
+      # `pnpm build` 先 migrate deploy、再 generate 與 Nuxt build。CI 使用與 drift
+      # service 分離的空資料庫驗證同一條指令，不連 Neon；Vercel 則由其 Production /
+      # Preview scope 的 DATABASE_URL 與 DIRECT_URL 對應套用到各自的 Neon 分支。
       # preset 照 nuxt.config.ts 用 vercel，驗的就是實際部署的目標環境。
       - name: Build
         if: ${{ !cancelled() }}
         env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
-          DIRECT_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5433/postgres
+          DIRECT_URL: postgresql://postgres:postgres@localhost:5433/postgres
         run: pnpm build

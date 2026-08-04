@@ -202,6 +202,7 @@ describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
     const drift = steps().find(step => step.includes('Prisma migration drift'))
 
     expect(text).toMatch(/services:\s*\n\s+shadow:/)
+    expect(text).toMatch(/services:[\s\S]*\n\s+build-db:/)
     expect(text).toContain('image: postgres:16')
     expect(text).toContain('POSTGRES_PASSWORD: postgres')
     expect(drift, '找不到 Prisma migration drift 步驟').toBeDefined()
@@ -220,8 +221,8 @@ describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
   it('production build 先套用 migration，且不執行 seed', () => {
     expect(packageScripts().build).toBe('prisma migrate deploy && prisma generate && nuxt build')
     expect(packageScripts().build).not.toContain('db:seed')
-    expect(stepRunning('build')).toContain('DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres')
-    expect(stepRunning('build')).toContain('DIRECT_URL: postgresql://postgres:postgres@localhost:5432/postgres')
+    expect(stepRunning('build')).toContain('DATABASE_URL: postgresql://postgres:postgres@localhost:5433/postgres')
+    expect(stepRunning('build')).toContain('DIRECT_URL: postgresql://postgres:postgres@localhost:5433/postgres')
   })
 
   // E2E 需要 preview URL 與瀏覽器，屬於 #23 的範圍。混進來會讓這支必紅。

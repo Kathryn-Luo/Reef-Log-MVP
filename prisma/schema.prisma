@@ -80,6 +80,13 @@ model User {
   displayName String?
 
   createdAt DateTime @default(now())
+  /// 最近一次辨識出這位使用者並準備續發 session 的時間。
+  ///
+  /// 訪客沙盒清理以這個欄位而非 createdAt 判斷逾期：長期使用的訪客會持續更新，
+  /// 不會因為帳號建立超過保留期、卻仍持有有效 cookie 而被刪掉。新建帳號由資料庫
+  /// default 設為建立時間；續發 session 前更新它，寫 session 失敗時最多多保留資料，
+  /// 不會反向刪除仍可能有效的沙盒。
+  lastActiveAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   accounts Account[]

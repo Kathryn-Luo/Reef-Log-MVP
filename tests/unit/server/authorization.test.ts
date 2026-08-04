@@ -11,6 +11,7 @@ import {
   TANK_NOT_FOUND,
   applyCreatureStatus,
   createOwnedTank,
+  moveOwnedCreature,
   resolveCreatureDetail,
   resolveTankCreatures,
   resolveTankHome,
@@ -45,6 +46,7 @@ interface CreatureRow {
 /** A 有一個未封存的缸與一個已封存的缸；B 有一個未封存的缸，各自有一隻生物 */
 const TANKS: TankRow[] = [
   { id: 'tank-a1', userId: USER_A.id, archivedAt: null, displayOrder: 0 },
+  { id: 'tank-a2', userId: USER_A.id, archivedAt: null, displayOrder: 1 },
   { id: 'tank-a-archived', userId: USER_A.id, archivedAt: new Date('2026-01-01T00:00:00.000Z'), displayOrder: 1 },
   { id: 'tank-b1', userId: USER_B.id, archivedAt: null, displayOrder: 0 },
 ]
@@ -92,6 +94,11 @@ function creatureRow(row: CreatureRow) {
 /** Prisma 在 `where` 一列都沒對上時丟的錯誤 */
 function recordNotFound() {
   return Object.assign(new Error('Record to update not found.'), { code: 'P2025' })
+}
+
+/** PostgreSQL serializable transaction 的可重試衝突，Prisma 以 P2034 表示。 */
+function transactionConflict() {
+  return Object.assign(new Error('Transaction failed due to a write conflict or a deadlock.'), { code: 'P2034' })
 }
 
 function fakeClient() {
@@ -145,6 +152,10 @@ function fakeClient() {
     waterLog: { findMany: vi.fn().mockResolvedValue([]) },
     waterParameterTarget: { findMany: vi.fn().mockResolvedValue([]) },
   }
+
+  Object.assign(client, {
+    $transaction: vi.fn((operation: (transaction: typeof client) => unknown) => operation(client)),
+  })
 
   return client as unknown as PrismaClient & typeof client
 }
@@ -386,6 +397,83 @@ describe('PATCH /api/creatures/:id 的歸屬檢查', () => {
   })
 })
 
+// Given 我以 A 帳號登入，生物在 A 的 tank-a1，且 A 另有未封存的 tank-a2
+// When  我將生物移到 tank-a2
+// Then 只更新 tankId；兩端任一個不屬於 A 時都不會寫入
+describe('PATCH /api/creatures/:id/move 的歸屬檢查', () => {
+  it('A 能把自己的生物移到自己另一個未封存的缸，且只寫入 tankId', async () => {
+    const client = fakeClient()
+    const result = await moveOwnedCreature(client, USER_A, 'creature-a1', bodyThunk({ tankId: 'tank-a2' }))
+
+    expect(result).toEqual({ ok: true, value: { creatureId: 'creature-a1', tankId: 'tank-a2' } })
+    expect(client.creature.update).toHaveBeenCalledWith({
+      where: { id: 'creature-a1', tank: { userId: USER_A.id, archivedAt: null } },
+      data: { tankId: 'tank-a2' },
+    })
+  })
+
+  it('serializable transaction 第一次衝突時會重試，第二次成功後回傳成功結果', async () => {
+    const client = fakeClient()
+    client.$transaction.mockRejectedValueOnce(transactionConflict())
+
+    await expect(moveOwnedCreature(client, USER_A, 'creature-a1', bodyThunk({ tankId: 'tank-a2' })))
+      .resolves.toEqual({ ok: true, value: { creatureId: 'creature-a1', tankId: 'tank-a2' } })
+    expect(client.$transaction).toHaveBeenCalledTimes(2)
+    expect(client.creature.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('來源與目標是同一個缸時回 400，而且不寫入', async () => {
+    const client = fakeClient()
+    const result = await moveOwnedCreature(client, USER_A, 'creature-a1', bodyThunk({ tankId: 'tank-a1' }))
+
+    expect(result).toMatchObject({ ok: false, error: { statusCode: 400 } })
+    expect(client.creature.update).not.toHaveBeenCalled()
+  })
+
+  it('目標缸屬於 B 時回 404，而且不寫入', async () => {
+    const client = fakeClient()
+
+    await expect(moveOwnedCreature(client, USER_A, 'creature-a1', bodyThunk({ tankId: 'tank-b1' })))
+      .resolves.toEqual({ ok: false, error: TANK_NOT_FOUND })
+    expect(client.creature.update).not.toHaveBeenCalled()
+  })
+
+  it('目標缸不存在與屬於 B 時得到完全相同的答案', async () => {
+    const missing = await moveOwnedCreature(fakeClient(), USER_A, 'creature-a1', bodyThunk({ tankId: 'tank-does-not-exist' }))
+    const others = await moveOwnedCreature(fakeClient(), USER_A, 'creature-a1', bodyThunk({ tankId: 'tank-b1' }))
+
+    expect(missing).toEqual(others)
+  })
+
+  it('目標缸已封存時回 404，而且不寫入', async () => {
+    const client = fakeClient()
+
+    await expect(moveOwnedCreature(client, USER_A, 'creature-a1', bodyThunk({ tankId: 'tank-a-archived' })))
+      .resolves.toEqual({ ok: false, error: TANK_NOT_FOUND })
+    expect(client.creature.update).not.toHaveBeenCalled()
+  })
+
+  it('來源生物屬於 B 時回 404，而且不讀 body 或寫入', async () => {
+    const client = fakeClient()
+    const body = bodyThunk({ tankId: 'tank-a2' })
+
+    await expect(moveOwnedCreature(client, USER_A, 'creature-b1', body))
+      .resolves.toEqual({ ok: false, error: CREATURE_NOT_FOUND })
+    expect(body).not.toHaveBeenCalled()
+    expect(client.creature.update).not.toHaveBeenCalled()
+  })
+
+  it('未登入時回 401，而且不讀 body、不查詢也不寫入', async () => {
+    const client = fakeClient()
+    const body = bodyThunk({ tankId: 'tank-a2' })
+
+    await expect(moveOwnedCreature(client, null, 'creature-a1', body))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+    expect(body).not.toHaveBeenCalled()
+    expectNoQuery(client)
+  })
+})
+
 // Given 我以 A 帳號登入
 // When  我對 GET /api/tanks 發出請求
 // Then  只回傳 A 名下未封存的缸，清單裡沒有 B 的任何缸
@@ -393,7 +481,10 @@ describe('GET /api/tanks 的歸屬檢查', () => {
   it('只回傳 A 名下未封存的缸', async () => {
     const result = await resolveTankOptions(fakeClient(), USER_A)
 
-    expect(result).toEqual({ ok: true, value: { tanks: [expect.objectContaining({ id: 'tank-a1' })] } })
+    expect(result).toEqual({ ok: true, value: { tanks: [
+      expect.objectContaining({ id: 'tank-a1' }),
+      expect.objectContaining({ id: 'tank-a2' }),
+    ] } })
   })
 
   // Given 我沒有登入 / Then 回傳 401，不回傳任何資料

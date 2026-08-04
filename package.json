@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "nuxt dev",
-    "build": "prisma generate && nuxt build",
+    "build": "prisma migrate deploy && prisma generate && nuxt build",
     "generate": "prisma generate && nuxt generate",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare",

@@ -211,6 +211,8 @@ describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
     expect(runOf(drift!)).toContain('--shadow-database-url')
     expect(runOf(drift!)).toContain('--exit-code')
     expect(runOf(drift!)).toContain('SHADOW_DATABASE_URL')
+    expect(drift).toContain('SHADOW_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres')
+    expect(drift).not.toContain('schema=')
   })
 
   // migration 檔進版控卻沒套到 Vercel 的資料庫，是 #62 的另一半。migrate deploy

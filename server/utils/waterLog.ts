@@ -33,7 +33,10 @@ export function parseWaterLogInput(raw: unknown): { ok: true, value: CreateWater
   for (const parameter of WATER_PARAMETER_ORDER) {
     const rawValue = submitted[parameter]
     if (rawValue === null || rawValue === undefined || rawValue === '') continue
-    const value = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+    if (typeof rawValue !== 'number' && typeof rawValue !== 'string') {
+      return { ok: false, message: '讀值必須是大於或等於零的數字。' }
+    }
+    const value = typeof rawValue === 'string' && rawValue.trim() === '' ? Number.NaN : Number(rawValue)
     if (!Number.isFinite(value) || value < 0) return { ok: false, message: '讀值必須是大於或等於零的數字。' }
     readings.push({ parameter, value })
   }

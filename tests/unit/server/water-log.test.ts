@@ -36,6 +36,9 @@ describe('parseWaterLogInput', () => {
     expect(parseWaterLogInput({ measuredAt: '2026-08-05T21:30:00+08:00', readings: { KH: -1 } }).ok).toBe(false)
     expect(parseWaterLogInput({ measuredAt: '2026-08-05T21:30:00+08:00', readings: { KH: 'NaN' } }).ok).toBe(false)
     expect(parseWaterLogInput({ measuredAt: '2026-02-31T21:30:00+08:00', readings: { KH: 7.8 } }).ok).toBe(false)
+    expect(parseWaterLogInput({ measuredAt: '2026-08-05T21:30:00+08:00', readings: { KH: false } }).ok).toBe(false)
+    expect(parseWaterLogInput({ measuredAt: '2026-08-05T21:30:00+08:00', readings: { KH: [] } }).ok).toBe(false)
+    expect(parseWaterLogInput({ measuredAt: '2026-08-05T21:30:00+08:00', readings: { KH: '   ' } }).ok).toBe(false)
   })
 })
 

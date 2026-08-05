@@ -3,6 +3,8 @@ import type { CreateWaterLogInput, WaterLogPageData, WaterLogRequest } from '#sh
 import type { WaterParameterKey, WaterReadingDto } from '#shared/types/home'
 import { WATER_PARAMETER_ORDER } from '#shared/utils/waterQuality'
 
+const MAX_WATER_READING = 999999.9999
+
 function toNumber(value: number | { toString: () => string }): number {
   return typeof value === 'number' ? value : Number(value.toString())
 }
@@ -22,9 +24,13 @@ export function parseWaterLogInput(raw: unknown): { ok: true, value: CreateWater
   const measuredAt = new Date(measuredAtSource)
   const calendarDate = new Date(`${date}T00:00:00.000Z`)
 
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/.test(measuredAtSource)
+  const timestamp = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/.exec(measuredAtSource)
+  if (!timestamp
     || Number.isNaN(measuredAt.getTime())
-    || calendarDate.toISOString().slice(0, 10) !== date) {
+    || calendarDate.toISOString().slice(0, 10) !== date
+    || Number(timestamp[2]) > 23
+    || Number(timestamp[3]) > 59
+    || Number(timestamp[4]) > 59) {
     return { ok: false, message: '量測日期或時間不正確。' }
   }
 
@@ -36,8 +42,11 @@ export function parseWaterLogInput(raw: unknown): { ok: true, value: CreateWater
     if (typeof rawValue !== 'number' && typeof rawValue !== 'string') {
       return { ok: false, message: '讀值必須是大於或等於零的數字。' }
     }
-    const value = typeof rawValue === 'string' && rawValue.trim() === '' ? Number.NaN : Number(rawValue)
-    if (!Number.isFinite(value) || value < 0) return { ok: false, message: '讀值必須是大於或等於零的數字。' }
+    const normalized = typeof rawValue === 'string' ? rawValue.trim() : String(rawValue)
+    const value = Number(normalized)
+    if (!/^\d+(?:\.\d{1,4})?$/.test(normalized) || !Number.isFinite(value) || value > MAX_WATER_READING) {
+      return { ok: false, message: '讀值必須是介於 0 和 999999.9999 的數字，且最多四位小數。' }
+    }
     readings.push({ parameter, value })
   }
 

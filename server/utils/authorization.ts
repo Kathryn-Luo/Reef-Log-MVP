@@ -2,12 +2,14 @@ import type { PrismaClient, User } from '@prisma/client'
 import type { CreatureDetailDto, CreatureDetailResponse, MoveCreatureResponse, TankCreaturesData } from '#shared/types/creature'
 import type { TankHomeData, TankOption } from '#shared/types/home'
 import type { CreateTankResponse } from '#shared/types/tank'
+import type { WaterLogPageData } from '#shared/types/waterLog'
 import { parseCreatureStatusInput } from '#shared/utils/creatureDetail'
 import { parseTankInput } from '#shared/utils/tankForm'
 import { getCreatureDetail, moveCreature, updateCreatureStatus } from './creatureDetail'
 import { getTankCreatures } from './creatureList'
 import { getTankHome, listTankOptions } from './homeData'
 import { createTank } from './tankWrite'
+import { createWaterLog, getWaterLogPage, parseWaterLogInput } from './waterLog'
 
 // 資料歸屬的伺服器邊界（issue #68）。
 //
@@ -234,6 +236,31 @@ export async function resolveTankHome(
   }
 
   return { ok: true, value: await getTankHome(client, owned.value) }
+}
+
+export async function resolveWaterLogPage(
+  client: PrismaClient,
+  user: SessionUser | null,
+  tankId: string | undefined,
+): Promise<Authorized<WaterLogPageData>> {
+  const owned = await requireOwnedTank(client, user, tankId)
+  return owned.ok
+    ? { ok: true, value: await getWaterLogPage(client, owned.value) }
+    : owned
+}
+
+export async function createOwnedWaterLog(
+  client: PrismaClient,
+  user: SessionUser | null,
+  tankId: string | undefined,
+  readBody: BodyReader,
+): Promise<Authorized<Record<string, never>>> {
+  const owned = await requireOwnedTank(client, user, tankId)
+  if (!owned.ok) return owned
+  const parsed = parseWaterLogInput(await readBody())
+  if (!parsed.ok) return { ok: false, error: invalidInput('Invalid water log input', parsed.message) }
+  await createWaterLog(client, owned.value, parsed.value)
+  return { ok: true, value: {} }
 }
 
 /** GET /api/tanks/:id/creatures —— screen-5 生物庫存 */

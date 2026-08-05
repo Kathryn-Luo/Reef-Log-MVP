@@ -11,11 +11,13 @@ import {
   TANK_NOT_FOUND,
   applyCreatureStatus,
   createOwnedTank,
+  createOwnedWaterLog,
   moveOwnedCreature,
   resolveCreatureDetail,
   resolveTankCreatures,
   resolveTankHome,
   resolveTankOptions,
+  resolveWaterLogPage,
 } from '../../../server/utils/authorization'
 
 // 資料歸屬的伺服器邊界（issue #68）。
@@ -70,6 +72,35 @@ function tankRow(row: TankRow) {
     colorHex: null,
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
   }
+}
+
+/**
+ * A 與 B 各有一筆水質記錄。
+ *
+ * 讀值用 `{ toString }` 而不是 number：Prisma 回的是 `Decimal`，DTO 那一層要把它轉成
+ * number（`WaterReading.value` 是 `Decimal(10, 4)`）。給 number 的話那段轉換永遠不會執行。
+ */
+const WATER_LOGS = [
+  {
+    id: 'water-log-a1',
+    tankId: 'tank-a1',
+    measuredAt: new Date('2026-08-04T12:00:00.000Z'),
+    note: null,
+    readings: [{ parameter: 'KH', value: { toString: () => '7.8000' } }],
+  },
+  {
+    id: 'water-log-b1',
+    tankId: 'tank-b1',
+    measuredAt: new Date('2026-08-04T13:00:00.000Z'),
+    note: null,
+    readings: [{ parameter: 'KH', value: { toString: () => '9.9000' } }],
+  },
+]
+
+/** 合法的 POST body，用來確認「被擋下來時連解析都不會生效」 */
+const WATER_LOG_BODY = {
+  measuredAt: '2026-08-05T21:30:00+08:00',
+  readings: { KH: 7.8 },
 }
 
 /** 生物的其餘欄位；@db.Date 都給實際的 Date，轉換才走得完 */
@@ -149,7 +180,15 @@ function fakeClient() {
           : Promise.reject(recordNotFound())
       }),
     },
-    waterLog: { findMany: vi.fn().mockResolvedValue([]) },
+    waterLog: {
+      // 依 where.tankId 過濾，與其他 model 同一個原則：A 拿不到 B 的水質記錄要是被
+      // 查詢條件擋下來的，不是被夾具安排好的（findMany 一律回 [] 的話，
+      // 「A 打 B 的缸拿不到資料」在替身上永遠成立，測到的只有 mock 自己）
+      findMany: vi.fn(({ where }: { where: { tankId: string } }) => Promise.resolve(
+        WATER_LOGS.filter(log => log.tankId === where.tankId),
+      )),
+      create: vi.fn(({ data }: { data: Record<string, unknown> }) => Promise.resolve({ id: 'water-log-new', ...data })),
+    },
     waterParameterTarget: { findMany: vi.fn().mockResolvedValue([]) },
   }
 
@@ -175,6 +214,7 @@ function expectNoQuery(client: ReturnType<typeof fakeClient>) {
   expect(client.tank.create).not.toHaveBeenCalled()
   expect(client.creature.findFirst).not.toHaveBeenCalled()
   expect(client.creature.update).not.toHaveBeenCalled()
+  expect(client.waterLog.create).not.toHaveBeenCalled()
   expectNoTankContentRead(client)
 }
 
@@ -267,6 +307,143 @@ describe('GET /api/tanks/:id/creatures 的歸屬檢查', () => {
     await expect(resolveTankCreatures(client, null, 'tank-a1'))
       .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
     expectNoQuery(client)
+  })
+})
+
+// issue #121：「僅能讀寫目前使用者名下、未封存的缸；他人或不存在的缸一律不洩漏資料」。
+//
+// 水質是這道邊界底下的第二種缸內容（第一種是生物），而且是**第一支會寫入缸內容**的
+// API——POST 那一半因此比 GET 多兩件要驗的事：拒絕時一列都不能建，以及 body 要排在
+// 身分／歸屬之後才讀。
+describe('GET /api/tanks/:id/water-logs 的歸屬檢查', () => {
+  it('A 打 B 的 tankId 回 404', async () => {
+    const client = fakeClient()
+
+    await expect(resolveWaterLogPage(client, USER_A, 'tank-b1'))
+      .resolves.toEqual({ ok: false, error: TANK_NOT_FOUND })
+  })
+
+  // 「回 404」與「沒讀到資料」是兩件事：先查完再決定要不要回答，B 的讀值就已經
+  // 離開資料庫了。水質是使用者親手記錄的數值，比生物清單更沒有理由先撈出來。
+  it('被擋下來時完全沒有讀取 B 缸的水質記錄', async () => {
+    const client = fakeClient()
+
+    await resolveWaterLogPage(client, USER_A, 'tank-b1')
+
+    expectNoTankContentRead(client)
+  })
+
+  it('A 打自己的 tankId 拿到自己的歷史與前次讀值', async () => {
+    const client = fakeClient()
+    const result = await resolveWaterLogPage(client, USER_A, 'tank-a1')
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        previousReadings: [{ parameter: 'KH', value: 7.8 }],
+        waterLogs: [expect.objectContaining({ id: 'water-log-a1' })],
+      },
+    })
+    // 查詢條件本身也釘住：少了 tankId 就會把所有人的水質記錄一起撈出來
+    expect(client.waterLog.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { tankId: 'tank-a1' } }),
+    )
+  })
+
+  it('自己已封存的缸同樣回 404', async () => {
+    await expect(resolveWaterLogPage(fakeClient(), USER_A, 'tank-a-archived'))
+      .resolves.toEqual({ ok: false, error: TANK_NOT_FOUND })
+  })
+
+  it('未登入時回 401，而且一次查詢都不發出', async () => {
+    const client = fakeClient()
+
+    await expect(resolveWaterLogPage(client, null, 'tank-a1'))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+    expectNoQuery(client)
+  })
+
+  it('已登入時，缺少 tankId 回 400', async () => {
+    await expect(resolveWaterLogPage(fakeClient(), USER_A, undefined))
+      .resolves.toEqual({ ok: false, error: MISSING_TANK_ID })
+  })
+})
+
+describe('POST /api/tanks/:id/water-logs 的歸屬與驗證', () => {
+  it('A 記錄到自己的缸，新的 WaterLog 掛在那個缸上', async () => {
+    const client = fakeClient()
+    const result = await createOwnedWaterLog(client, USER_A, 'tank-a1', bodyThunk(WATER_LOG_BODY))
+
+    expect(result.ok).toBe(true)
+    expect(client.waterLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ tankId: 'tank-a1' }) }),
+    )
+  })
+
+  // Given 我以 A 帳號登入、B 有一個缸 / When 我往 B 的缸寫一筆水質
+  // Then 回 404，而且 B 的缸裡不會多出任何東西
+  it('A 寫到 B 的 tankId 回 404，而且一列都沒建', async () => {
+    const client = fakeClient()
+
+    await expect(createOwnedWaterLog(client, USER_A, 'tank-b1', bodyThunk(WATER_LOG_BODY)))
+      .resolves.toEqual({ ok: false, error: TANK_NOT_FOUND })
+    expect(client.waterLog.create).not.toHaveBeenCalled()
+  })
+
+  // 真正的 readBody 對畸形 JSON 會直接 throw 400，所以「什麼時候呼叫它」決定了
+  // 打別人缸的人拿到 404 還是 400——後者等於承認這個網址願意跟他對話。
+  it('歸屬不成立時連 body 都不會讀取', async () => {
+    const body = bodyThunk(WATER_LOG_BODY)
+
+    await createOwnedWaterLog(fakeClient(), USER_A, 'tank-b1', body)
+
+    expect(body).not.toHaveBeenCalled()
+  })
+
+  it('自己已封存的缸同樣回 404，也沒建任何一列', async () => {
+    const client = fakeClient()
+
+    await expect(createOwnedWaterLog(client, USER_A, 'tank-a-archived', bodyThunk(WATER_LOG_BODY)))
+      .resolves.toEqual({ ok: false, error: TANK_NOT_FOUND })
+    expect(client.waterLog.create).not.toHaveBeenCalled()
+  })
+
+  it('未登入時回 401，一次查詢都不發出，body 也不讀', async () => {
+    const client = fakeClient()
+    const body = bodyThunk(WATER_LOG_BODY)
+
+    await expect(createOwnedWaterLog(client, null, 'tank-a1', body))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+    expect(body).not.toHaveBeenCalled()
+    expectNoQuery(client)
+  })
+
+  // 身分先於內容，與 POST /api/tanks 對稱：未登入的人不該先收到一份驗證報告，
+  // 那等於告訴他這支 API 願意跟他對話。
+  it('未登入且內容也不合法時仍然回 401，不是 400', async () => {
+    await expect(createOwnedWaterLog(fakeClient(), null, 'tank-a1', bodyThunk({ measuredAt: '', readings: {} })))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+  })
+
+  // issue #121：「六項皆未填、非數字、非有限值或負數時，拒絕請求且不建立任何資料」。
+  // parseWaterLogInput 自己的分支由 water-log.test.ts 逐條驗；這裡要釘住的是
+  // 「解析失敗時這一層真的止步」——回 400，而且 create 一次都不呼叫。
+  it.each([
+    ['六項皆未填', { measuredAt: '2026-08-05T21:30:00+08:00', readings: {} }],
+    ['負數', { measuredAt: '2026-08-05T21:30:00+08:00', readings: { KH: -1 } }],
+    ['非有限值', { measuredAt: '2026-08-05T21:30:00+08:00', readings: { KH: 'NaN' } }],
+    ['不存在的日期', { measuredAt: '2026-02-31T21:30:00+08:00', readings: { KH: 7.8 } }],
+  ])('已登入但內容不合法（%s）時回 400，且不建立任何資料', async (_label, body) => {
+    const client = fakeClient()
+    const result = await createOwnedWaterLog(client, USER_A, 'tank-a1', bodyThunk(body))
+
+    expect(result).toMatchObject({ ok: false, error: { statusCode: 400 } })
+    expect(client.waterLog.create).not.toHaveBeenCalled()
+  })
+
+  it('已登入時，缺少 tankId 回 400', async () => {
+    await expect(createOwnedWaterLog(fakeClient(), USER_A, undefined, bodyThunk(WATER_LOG_BODY)))
+      .resolves.toEqual({ ok: false, error: MISSING_TANK_ID })
   })
 })
 
@@ -578,6 +755,20 @@ describe('不存在的 id 與別人的 id 得到同一個答案', () => {
   it('生物：不存在的 creatureId 與 B 的 creatureId 回傳完全相同的錯誤', async () => {
     const missing = await resolveCreatureDetail(fakeClient(), USER_A, 'creature-does-not-exist')
     const others = await resolveCreatureDetail(fakeClient(), USER_A, 'creature-b1')
+
+    expect(missing).toEqual(others)
+  })
+
+  it('水質歷史：不存在的 tankId 與 B 的 tankId 回傳完全相同的錯誤', async () => {
+    const missing = await resolveWaterLogPage(fakeClient(), USER_A, 'tank-does-not-exist')
+    const others = await resolveWaterLogPage(fakeClient(), USER_A, 'tank-b1')
+
+    expect(missing).toEqual(others)
+  })
+
+  it('水質寫入：不存在的 tankId 與 B 的 tankId 回傳完全相同的錯誤', async () => {
+    const missing = await createOwnedWaterLog(fakeClient(), USER_A, 'tank-does-not-exist', bodyThunk(WATER_LOG_BODY))
+    const others = await createOwnedWaterLog(fakeClient(), USER_A, 'tank-b1', bodyThunk(WATER_LOG_BODY))
 
     expect(missing).toEqual(others)
   })

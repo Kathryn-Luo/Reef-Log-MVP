@@ -50,12 +50,14 @@ function listApiHandlers(dir: string): string[] {
     })
 }
 
-/** 七支要保護的 API，與各自該用的解析函式（server/api/health.get.ts 不涉及使用者資料，維持公開） */
+/** 所有資料 API 與各自該用的解析函式（server/api/health.get.ts 不涉及使用者資料，維持公開） */
 const HANDLERS = [
   { file: 'server/api/tanks/index.get.ts', resolver: 'resolveTankOptions' },
   { file: 'server/api/tanks/index.post.ts', resolver: 'createOwnedTank' },
   { file: 'server/api/tanks/[id]/home.get.ts', resolver: 'resolveTankHome' },
   { file: 'server/api/tanks/[id]/creatures.get.ts', resolver: 'resolveTankCreatures' },
+  { file: 'server/api/tanks/[id]/water-logs.get.ts', resolver: 'resolveWaterLogPage' },
+  { file: 'server/api/tanks/[id]/water-logs.post.ts', resolver: 'createOwnedWaterLog' },
   { file: 'server/api/creatures/[id].get.ts', resolver: 'resolveCreatureDetail' },
   { file: 'server/api/creatures/[id].patch.ts', resolver: 'applyCreatureStatus' },
   { file: 'server/api/creatures/[id]/move.patch.ts', resolver: 'moveOwnedCreature' },
@@ -103,6 +105,7 @@ describe('每一支 API 都經過同一道歸屬檢查', () => {
     'server/api/tanks/index.post.ts',
     'server/api/creatures/[id].patch.ts',
     'server/api/creatures/[id]/move.patch.ts',
+    'server/api/tanks/[id]/water-logs.post.ts',
   ])('%s 把 body 延後到身分檢查之後才讀', (file) => {
     const source = readCode(file)
 

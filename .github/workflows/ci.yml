@@ -32,6 +32,27 @@ jobs:
   lint-typecheck-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # issue #62：只給 migration diff 與 CI build 用的短命資料庫，不連 Neon。
+    # service container 每個 run 都是新的，結束後由 GitHub Actions 一併銷毀。
+    services:
+      shadow:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+        ports:
+          - 5432:5432
+      # migrate diff 會建立資料表但不寫 Prisma migration history；build 必須使用另一個
+      # 空資料庫，才會真的驗到 migrate deploy 在全新環境可從頭套用。
+      build-db:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+        ports:
+          - 5433:5432
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,6 +78,20 @@ jobs:
       # 少了這步 typecheck 會以「找不到型別」這種無關的理由紅。
       - name: Prisma generate
         run: pnpm prisma generate
+
+      # schema.prisma 與 migrations 任一邊漏進版控時，prisma generate 仍會正常通過。
+      # migrate diff 將 migrations 疊到 shadow DB 後與 datamodel 比對，--exit-code 讓
+      # 有差異時 CI 失敗。這個 URL 只指向上方 service，不是 Neon 的環境設定。
+      - name: Prisma migration drift
+        if: ${{ !cancelled() }}
+        env:
+          SHADOW_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: |
+          pnpm prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema-datamodel prisma/schema.prisma \
+            --shadow-database-url "$SHADOW_DATABASE_URL" \
+            --exit-code
 
       # 四項檢查各自一個步驟，且都掛 !cancelled()：
       # 前一項失敗時後面的照跑，一輪就把四個訊號都看齊。
@@ -86,9 +121,13 @@ jobs:
       # 而 Vercel 的 log 要點進 dashboard 才看得到。
       #
       # 放在最後：前面三項是秒級的快訊號，先讓它們回報完，再花 30–60 秒打包。
-      # `pnpm build` 是 `prisma generate && nuxt build`——上面那步 generate 重跑是冪等的，
-      # 也一樣不需要 DATABASE_URL（prisma generate 只讀 schema）。
+      # `pnpm build` 先 migrate deploy、再 generate 與 Nuxt build。CI 使用與 drift
+      # service 分離的空資料庫驗證同一條指令，不連 Neon；Vercel 則由其 Production /
+      # Preview scope 的 DATABASE_URL 與 DIRECT_URL 對應套用到各自的 Neon 分支。
       # preset 照 nuxt.config.ts 用 vercel，驗的就是實際部署的目標環境。
       - name: Build
         if: ${{ !cancelled() }}
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5433/postgres
+          DIRECT_URL: postgresql://postgres:postgres@localhost:5433/postgres
         run: pnpm build

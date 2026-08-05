@@ -13,8 +13,10 @@ import { describe, expect, it } from 'vitest'
 // 結構性不變量——尤其是那些一旦被悄悄放寬，CI 就會變成「永遠綠燈」的地方。
 
 const workflowPath = resolve(process.cwd(), '.github/workflows/ci.yml')
+const packagePath = resolve(process.cwd(), 'package.json')
 
 const raw = () => readFileSync(workflowPath, 'utf8')
+const packageScripts = () => JSON.parse(readFileSync(packagePath, 'utf8')).scripts as Record<string, unknown>
 
 /** 剝掉整行註解：註解裡會引述指令本身（例如「不要 `|| true`」），純文字比對會誤中散文。 */
 const code = (text: string) =>
@@ -190,6 +192,37 @@ describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
   // 沒有 prisma generate，@prisma/client 的型別不存在，typecheck 會以無關的理由紅。
   it('跑 prisma generate（不需要 DATABASE_URL）', () => {
     expect(code(raw())).toMatch(/pnpm (prisma generate|prisma:generate)/)
+  })
+
+  // issue #62：prisma generate 不會比對 schema 與 migrations；兩者任一邊漏掉，
+  // Client 型別照樣產得出來、CI 會假綠。用短命 Postgres 當 shadow DB 做全域 diff，
+  // 不讀 Neon URL，也不會碰到 production 或 preview 的資料。
+  it('以 Postgres shadow service 執行 migration drift 檢查', () => {
+    const text = code(raw())
+    const drift = steps().find(step => step.includes('Prisma migration drift'))
+
+    expect(text).toMatch(/services:\s*\n\s+shadow:/)
+    expect(text).toMatch(/services:[\s\S]*\n\s+build-db:/)
+    expect(text).toContain('image: postgres:16')
+    expect(text).toContain('POSTGRES_PASSWORD: postgres')
+    expect(drift, '找不到 Prisma migration drift 步驟').toBeDefined()
+    expect(runOf(drift!)).toContain('pnpm prisma migrate diff')
+    expect(runOf(drift!)).toContain('--from-migrations prisma/migrations')
+    expect(runOf(drift!)).toContain('--to-schema-datamodel prisma/schema.prisma')
+    expect(runOf(drift!)).toContain('--shadow-database-url')
+    expect(runOf(drift!)).toContain('--exit-code')
+    expect(runOf(drift!)).toContain('SHADOW_DATABASE_URL')
+    expect(drift).toContain('SHADOW_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres')
+    expect(drift).not.toContain('schema=')
+  })
+
+  // migration 檔進版控卻沒套到 Vercel 的資料庫，是 #62 的另一半。migrate deploy
+  // 必須在 generate 與 Nuxt build 之前；seed 是獨立決策，刻意不在這裡執行。
+  it('production build 先套用 migration，且不執行 seed', () => {
+    expect(packageScripts().build).toBe('prisma migrate deploy && prisma generate && nuxt build')
+    expect(packageScripts().build).not.toContain('db:seed')
+    expect(stepRunning('build')).toContain('DATABASE_URL: postgresql://postgres:postgres@localhost:5433/postgres')
+    expect(stepRunning('build')).toContain('DIRECT_URL: postgresql://postgres:postgres@localhost:5433/postgres')
   })
 
   // E2E 需要 preview URL 與瀏覽器，屬於 #23 的範圍。混進來會讓這支必紅。

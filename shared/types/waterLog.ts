@@ -17,7 +17,7 @@ export interface WaterLogPageData {
 }
 
 export interface WaterLogRequest {
-  date: string
-  time: string
+  /** ISO 8601 timestamp with the recorder's UTC offset, e.g. 2026-07-08T21:30:00+08:00 */
+  measuredAt: string
   readings: Partial<Record<WaterParameterKey, number | string | null>>
 }

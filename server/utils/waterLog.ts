@@ -17,11 +17,14 @@ function toDto(log: WaterLog & { readings: WaterReading[] }) {
 
 export function parseWaterLogInput(raw: unknown): { ok: true, value: CreateWaterLogInput } | { ok: false, message: string } {
   const source = typeof raw === 'object' && raw !== null ? raw as Partial<WaterLogRequest> : {}
-  const date = typeof source.date === 'string' ? source.date : ''
-  const time = typeof source.time === 'string' ? source.time : ''
-  const measuredAt = new Date(`${date}T${time}:00.000Z`)
+  const measuredAtSource = typeof source.measuredAt === 'string' ? source.measuredAt : ''
+  const date = measuredAtSource.slice(0, 10)
+  const measuredAt = new Date(measuredAtSource)
+  const calendarDate = new Date(`${date}T00:00:00.000Z`)
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time) || Number.isNaN(measuredAt.getTime())) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/.test(measuredAtSource)
+    || Number.isNaN(measuredAt.getTime())
+    || calendarDate.toISOString().slice(0, 10) !== date) {
     return { ok: false, message: '量測日期或時間不正確。' }
   }
 

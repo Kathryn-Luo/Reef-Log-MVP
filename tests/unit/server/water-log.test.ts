@@ -19,22 +19,23 @@ function fakeClient(rows: unknown[] = []) {
 }
 
 describe('parseWaterLogInput', () => {
-  it('接受部分 readings，並將日期與時間合成 UTC measuredAt', () => {
+  it('接受部分 readings，並保留帶 offset 的量測瞬間', () => {
     expect(parseWaterLogInput({
-      date: '2026-08-05', time: '21:30', readings: { KH: 7.8, CA: 420, MG: null, NO3: '', PO4: 0.04 },
+      measuredAt: '2026-08-05T21:30:00+08:00', readings: { KH: 7.8, CA: 420, MG: null, NO3: '', PO4: 0.04 },
     })).toEqual({
       ok: true,
       value: {
-        measuredAt: new Date('2026-08-05T21:30:00.000Z'),
+        measuredAt: new Date('2026-08-05T13:30:00.000Z'),
         readings: [{ parameter: 'KH', value: 7.8 }, { parameter: 'CA', value: 420 }, { parameter: 'PO4', value: 0.04 }],
       },
     })
   })
 
   it('拒絕空 readings、負數與非有限數值', () => {
-    expect(parseWaterLogInput({ date: '2026-08-05', time: '21:30', readings: {} }).ok).toBe(false)
-    expect(parseWaterLogInput({ date: '2026-08-05', time: '21:30', readings: { KH: -1 } }).ok).toBe(false)
-    expect(parseWaterLogInput({ date: '2026-08-05', time: '21:30', readings: { KH: 'NaN' } }).ok).toBe(false)
+    expect(parseWaterLogInput({ measuredAt: '2026-08-05T21:30:00+08:00', readings: {} }).ok).toBe(false)
+    expect(parseWaterLogInput({ measuredAt: '2026-08-05T21:30:00+08:00', readings: { KH: -1 } }).ok).toBe(false)
+    expect(parseWaterLogInput({ measuredAt: '2026-08-05T21:30:00+08:00', readings: { KH: 'NaN' } }).ok).toBe(false)
+    expect(parseWaterLogInput({ measuredAt: '2026-02-31T21:30:00+08:00', readings: { KH: 7.8 } }).ok).toBe(false)
   })
 })
 
@@ -55,13 +56,13 @@ describe('water log data', () => {
 
   it('只建立填寫的 readings', async () => {
     const client = fakeClient()
-    const input = parseWaterLogInput({ date: '2026-08-05', time: '21:30', readings: { KH: 7.8, PO4: 0.04 } })
+    const input = parseWaterLogInput({ measuredAt: '2026-08-05T21:30:00+08:00', readings: { KH: 7.8, PO4: 0.04 } })
     if (!input.ok) throw new Error('fixture must be valid')
 
     await createWaterLog(client, 'tank-1', input.value)
 
     expect(client.waterLog.create).toHaveBeenCalledWith({ data: {
-      tankId: 'tank-1', measuredAt: new Date('2026-08-05T21:30:00.000Z'),
+      tankId: 'tank-1', measuredAt: new Date('2026-08-05T13:30:00.000Z'),
       readings: { create: [{ parameter: 'KH', value: 7.8 }, { parameter: 'PO4', value: 0.04 }] },
     } })
   })

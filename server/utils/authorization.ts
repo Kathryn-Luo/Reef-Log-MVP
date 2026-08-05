@@ -2,7 +2,7 @@ import type { PrismaClient, User } from '@prisma/client'
 import type { CreatureDetailDto, CreatureDetailResponse, MoveCreatureResponse, TankCreaturesData } from '#shared/types/creature'
 import type { TankHomeData, TankOption } from '#shared/types/home'
 import type { CreateTankResponse } from '#shared/types/tank'
-import type { WaterLogPageData } from '#shared/types/waterLog'
+import type { CreateWaterLogResponse, WaterLogPageData } from '#shared/types/waterLog'
 import { parseCreatureStatusInput } from '#shared/utils/creatureDetail'
 import { parseTankInput } from '#shared/utils/tankForm'
 import { getCreatureDetail, moveCreature, updateCreatureStatus } from './creatureDetail'
@@ -238,29 +238,48 @@ export async function resolveTankHome(
   return { ok: true, value: await getTankHome(client, owned.value) }
 }
 
+/** GET /api/tanks/:id/water-logs —— screen-3 水質記錄的歷史與前次讀值 */
 export async function resolveWaterLogPage(
   client: PrismaClient,
   user: SessionUser | null,
   tankId: string | undefined,
 ): Promise<Authorized<WaterLogPageData>> {
   const owned = await requireOwnedTank(client, user, tankId)
-  return owned.ok
-    ? { ok: true, value: await getWaterLogPage(client, owned.value) }
-    : owned
+
+  if (!owned.ok) {
+    return owned
+  }
+
+  return { ok: true, value: await getWaterLogPage(client, owned.value) }
 }
 
+/**
+ * POST /api/tanks/:id/water-logs —— screen-3 儲存一筆量測。
+ *
+ * 這是第一支會**寫入缸內容**的 API，所以順序特別要緊：歸屬先於內容。
+ * `readBody` 是個函式而不是值，被擋下來的請求因此連 body 都不會讀——
+ * 打別人缸的人拿到的是 404，不是一份「你的表單哪裡填錯了」的檢查報告
+ * （與 createOwnedTank 同一個作法，authorization-wiring.test.ts 看原始碼守著）。
+ */
 export async function createOwnedWaterLog(
   client: PrismaClient,
   user: SessionUser | null,
   tankId: string | undefined,
   readBody: BodyReader,
-): Promise<Authorized<Record<string, never>>> {
+): Promise<Authorized<CreateWaterLogResponse>> {
   const owned = await requireOwnedTank(client, user, tankId)
-  if (!owned.ok) return owned
+
+  if (!owned.ok) {
+    return owned
+  }
+
   const parsed = parseWaterLogInput(await readBody())
-  if (!parsed.ok) return { ok: false, error: invalidInput('Invalid water log input', parsed.message) }
-  await createWaterLog(client, owned.value, parsed.value)
-  return { ok: true, value: {} }
+
+  if (!parsed.ok) {
+    return { ok: false, error: invalidInput('Invalid water log input', parsed.message) }
+  }
+
+  return { ok: true, value: { waterLog: await createWaterLog(client, owned.value, parsed.value) } }
 }
 
 /** GET /api/tanks/:id/creatures —— screen-5 生物庫存 */

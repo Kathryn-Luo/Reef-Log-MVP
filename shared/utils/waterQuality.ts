@@ -58,6 +58,19 @@ export const WATER_PARAMETER_UNITS: Record<WaterParameterKey, string> = {
  */
 export const WATER_TREND_POINTS = 8
 
+/**
+ * 水質記錄頁（screen-3）的「歷史記錄」一次取幾筆。
+ *
+ * 同樣走 WaterLog 的 @@index([tankId, measuredAt])。取 100 是照上面那句
+ * 「單缸一年約 50–100 筆 log」——大致是一年份，捲得完，payload 也還不算胖。
+ *
+ * 有上限就代表「歷史」看不到全部，所以**「上次 8.0」不能從這份清單推**：
+ * 某個測項上一次量測若落在截斷之外，那一格會憑空消失，而 #11 要的是
+ * 「該缸該測項最近一筆已存在的讀值」。前次讀值因此各自獨立查
+ * （server/utils/waterLog.ts 的 getPreviousReadings）。
+ */
+export const WATER_LOG_HISTORY_LIMIT = 100
+
 /** 該測項這次沒量到時，儀表板那一格顯示的字 */
 export const MISSING_READING_TEXT = '—'
 

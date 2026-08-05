@@ -187,7 +187,24 @@ function fakeClient() {
       findMany: vi.fn(({ where }: { where: { tankId: string } }) => Promise.resolve(
         WATER_LOGS.filter(log => log.tankId === where.tankId),
       )),
-      create: vi.fn(({ data }: { data: Record<string, unknown> }) => Promise.resolve({ id: 'water-log-new', ...data })),
+      // nested create 的回傳照 Prisma 的樣子攤平：`readings: { create: [...] }` 進去，
+      // 出來的是實際的列。少了這一步，DTO 那一層就沒有東西可轉。
+      create: vi.fn(({ data }: { data: { readings?: { create: unknown[] } } & Record<string, unknown> }) => Promise.resolve({
+        ...data,
+        id: 'water-log-new',
+        readings: data.readings?.create ?? [],
+      })),
+    },
+    // 前次讀值各測項各查一次 LIMIT 1（見 getPreviousReadings）。這裡照著它的
+    // where / orderBy 在記憶體裡找，A 的缸才真的看不到 B 的讀值。
+    waterReading: {
+      findFirst: vi.fn(({ where }: { where: { parameter: string, waterLog: { tankId: string } } }) => Promise.resolve(
+        WATER_LOGS
+          .filter(log => log.tankId === where.waterLog.tankId)
+          .sort((left, right) => right.measuredAt.getTime() - left.measuredAt.getTime())
+          .flatMap(log => log.readings)
+          .find(reading => reading.parameter === where.parameter) ?? null,
+      )),
     },
     waterParameterTarget: { findMany: vi.fn().mockResolvedValue([]) },
   }
@@ -202,6 +219,7 @@ function fakeClient() {
 /** 「這次請求完全沒有碰到缸底下的任何內容」——擋下來之後不該有任何資料被讀出來 */
 function expectNoTankContentRead(client: ReturnType<typeof fakeClient>) {
   expect(client.waterLog.findMany).not.toHaveBeenCalled()
+  expect(client.waterReading.findFirst).not.toHaveBeenCalled()
   expect(client.waterParameterTarget.findMany).not.toHaveBeenCalled()
   expect(client.creature.findMany).not.toHaveBeenCalled()
 }

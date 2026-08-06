@@ -22,10 +22,15 @@ interface Sandbox {
   request: APIRequestContext
   tankId: string
   creatureId: string
+  /** 這個沙盒裡第一個啟用中的保養任務（issue #122 的兩支寫入 API 掛在任務底下） */
+  taskId: string
   /** 缸名與生物名——用來確認「被拒絕的回應裡沒有這個人的資料」，見下方 expectNoLeak */
   tankName: string
   creatureName: string
 }
+
+/** server 的今天（UTC）。completedOn 的容忍度是一天，所以這個值一定在範圍內 */
+const today = () => new Date().toISOString().slice(0, 10)
 
 /** 開一個新的瀏覽器 context，走一遍訪客登入，回傳它自己那份沙盒裡的第一個缸與第一隻生物 */
 async function openSandbox(browser: Browser): Promise<Sandbox> {
@@ -51,11 +56,17 @@ async function openSandbox(browser: Browser): Promise<Sandbox> {
 
   const creature = creatures[0]!
 
+  const { tasks } = await (await context.request.get(`/api/tanks/${tank.id}/maintenance`))
+    .json() as { tasks: { id: string }[] }
+
+  expect(tasks.length, '訪客沙盒的缸裡沒有任何保養任務——preview 的示範資料可能不完整').toBeGreaterThan(0)
+
   return {
     context,
     request: context.request,
     tankId: tank.id,
     creatureId: creature.id,
+    taskId: tasks[0]!.id,
     tankName: tank.name,
     creatureName: creature.name,
   }
@@ -93,7 +104,7 @@ async function expectNoLeak(
 
   const parsed = JSON.parse(body) as Record<string, unknown> & { data?: { message?: string } }
 
-  for (const field of ['tank', 'tanks', 'creature', 'creatures', 'waterLogs', 'name']) {
+  for (const field of ['tank', 'tanks', 'creature', 'creatures', 'waterLogs', 'task', 'tasks', 'name']) {
     expect(parsed, `404 的回應體不該帶著 ${field} 欄位`).not.toHaveProperty(field)
   }
 
@@ -189,6 +200,38 @@ test.describe('別人的 id', () => {
     expect(after).toEqual(before)
   })
 
+  // Given 我以 A 帳號登入、B 有自己的保養任務（issue #122）
+  // When  A 對 B 的任務送出「今天完成」
+  // Then  404，且事後由 B 自己確認沒有多出任何完成紀錄
+  //
+  // 與上面那條 move 同一個寫法：狀態碼對了但東西已經寫進去了，是這條路徑最糟的失敗方式。
+  test('A 勾不動 B 的保養任務，B 那邊沒有多出完成紀錄', async () => {
+    const before = await (await b.request.get(`/api/tanks/${b.tankId}/maintenance`)).json()
+
+    const response = await a.request.post(`/api/maintenance-tasks/${b.taskId}/completions`, {
+      data: { completedOn: today() },
+    })
+
+    await expectNoLeak(response, '找不到這個保養任務。', [b.tankName, b.creatureName])
+
+    const after = await (await b.request.get(`/api/tanks/${b.tankId}/maintenance`)).json()
+
+    expect(after).toEqual(before)
+  })
+
+  // 取消勾選那一支同樣不能碰到別人的任務——它刪的是資料，比寫入更不可逆
+  test('A 刪不掉 B 的完成紀錄', async () => {
+    const before = await (await b.request.get(`/api/tanks/${b.tankId}/maintenance`)).json()
+
+    const response = await a.request.delete(`/api/maintenance-tasks/${b.taskId}/completions/${today()}`)
+
+    expect(response.status()).toBe(404)
+
+    const after = await (await b.request.get(`/api/tanks/${b.tankId}/maintenance`)).json()
+
+    expect(after).toEqual(before)
+  })
+
   // Given 我以 A 帳號登入
   // When  我對 GET /api/tanks 發出請求
   // Then  只回傳 A 名下未封存的缸，清單裡沒有 B 的任何缸
@@ -243,7 +286,7 @@ test.describe('別人的 id', () => {
 // Then  回傳 401，不回傳任何資料
 test.describe('未登入', () => {
   // 全新的 context，一張 cookie 都沒有——不是「過期」，是從來沒登入過
-  test('七支 API 一律回 401', async ({ browser }) => {
+  test('十支 API 一律回 401', async ({ browser }) => {
     const context = await browser.newContext()
 
     const responses = await Promise.all([
@@ -254,9 +297,13 @@ test.describe('未登入', () => {
       context.request.get('/api/creatures/any-creature-id'),
       context.request.patch('/api/creatures/any-creature-id', { data: { status: 'ALIVE' } }),
       context.request.patch('/api/creatures/any-creature-id/move', { data: { tankId: 'any-tank-id' } }),
+      // 保養提醒（issue #122）
+      context.request.get('/api/tanks/any-tank-id/maintenance'),
+      context.request.post('/api/maintenance-tasks/any-task-id/completions', { data: { completedOn: today() } }),
+      context.request.delete(`/api/maintenance-tasks/any-task-id/completions/${today()}`),
     ])
 
-    expect(responses.map(response => response.status())).toEqual([401, 401, 401, 401, 401, 401, 401])
+    expect(responses.map(response => response.status())).toEqual(Array.from({ length: 10 }, () => 401))
 
     await context.close()
   })
@@ -290,9 +337,10 @@ test.describe('未登入', () => {
       context.request.post('/api/tanks', malformed),
       context.request.patch('/api/creatures/any-creature-id', malformed),
       context.request.patch('/api/creatures/any-creature-id/move', malformed),
+      context.request.post('/api/maintenance-tasks/any-task-id/completions', malformed),
     ])
 
-    expect(responses.map(response => response.status())).toEqual([401, 401, 401])
+    expect(responses.map(response => response.status())).toEqual([401, 401, 401, 401])
 
     await context.close()
   })

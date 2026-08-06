@@ -1,15 +1,19 @@
 import type { PrismaClient, User } from '@prisma/client'
 import type { CreatureDetailDto, CreatureDetailResponse, MoveCreatureResponse, TankCreaturesData } from '#shared/types/creature'
 import type { TankHomeData, TankOption } from '#shared/types/home'
+import type { MaintenancePageData, MaintenanceTaskDto, MaintenanceTaskResponse } from '#shared/types/maintenance'
 import type { CreateTankResponse } from '#shared/types/tank'
 import type { CreateWaterLogResponse, WaterLogPageData } from '#shared/types/waterLog'
 import { parseCreatureStatusInput } from '#shared/utils/creatureDetail'
+// completedOn 的規則與保養頁共用同一份（issue #122，與 parseWaterLogInput 同一個作法）
+import { parseCompletedOn, parseCompletedOnInput } from '#shared/utils/maintenance'
 import { parseTankInput } from '#shared/utils/tankForm'
 // parseWaterLogInput 與記錄水質的表單共用同一份規則，所以它住在 shared（issue #124）
 import { parseWaterLogInput } from '#shared/utils/waterLog'
 import { getCreatureDetail, moveCreature, updateCreatureStatus } from './creatureDetail'
 import { getTankCreatures } from './creatureList'
 import { getTankHome, listTankOptions } from './homeData'
+import { clearCompletion, completeTask, findOwnedMaintenanceTask, getMaintenancePage } from './maintenance'
 import { createTank } from './tankWrite'
 import { createWaterLog, getWaterLogPage } from './waterLog'
 
@@ -101,11 +105,30 @@ export const MISSING_TANK_ID: ApiErrorSpec = {
   data: { message: '網址少了缸的 id。' },
 }
 
+/**
+ * 保養任務版本的同一個決定，外加一種本 issue 特有的情況：**已停用的任務也回這一句**。
+ *
+ * 停用的任務本來就不出現在畫面上，能打到它只有舊分頁或手動打 API 兩種可能，
+ * 兩種都不需要一份更詳細的說明——而分開回答同樣會洩漏「這個 id 是存在的」。
+ */
+export const MAINTENANCE_TASK_NOT_FOUND: ApiErrorSpec = {
+  statusCode: 404,
+  statusMessage: 'Maintenance task not found',
+  data: { message: '找不到這個保養任務。' },
+}
+
 /** 同上，生物版本 */
 export const MISSING_CREATURE_ID: ApiErrorSpec = {
   statusCode: 400,
   statusMessage: 'Missing creature id',
   data: { message: '網址少了生物的 id。' },
+}
+
+/** 同上，保養任務版本 */
+export const MISSING_TASK_ID: ApiErrorSpec = {
+  statusCode: 400,
+  statusMessage: 'Missing maintenance task id',
+  data: { message: '網址少了保養任務的 id。' },
 }
 
 /** 表單／請求內容不合法。訊息由 shared/ 的 parse 函式給，兩邊（頁面與 API）同一份規則 */
@@ -209,6 +232,33 @@ async function requireOwnedCreature(
 }
 
 /**
+ * 保養任務的同三道關卡。歸屬一樣透過缸反查，另外多一條「還啟用著」
+ * （見 findOwnedMaintenanceTask），三種查不到的情況因此收斂成同一個 404。
+ *
+ * 回傳的是查到的那一個任務，不是布林值：POST / DELETE 被擋下來時要的就是這個判斷，
+ * 通過時則接著寫入，沒有理由再查第二次。
+ */
+async function requireOwnedMaintenanceTask(
+  client: PrismaClient,
+  user: SessionUser | null,
+  taskId: string | undefined,
+): Promise<Authorized<MaintenanceTaskDto>> {
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  if (!taskId) {
+    return { ok: false, error: MISSING_TASK_ID }
+  }
+
+  const task = await findOwnedMaintenanceTask(client, taskId, user.id)
+
+  return task
+    ? { ok: true, value: task }
+    : { ok: false, error: MAINTENANCE_TASK_NOT_FOUND }
+}
+
+/**
  * GET /api/tanks —— 缸切換選單。
  *
  * 未登入回 401，不是 200 加一個空清單。空清單與「這個帳號還沒有缸」在前端無法區分，
@@ -282,6 +332,105 @@ export async function createOwnedWaterLog(
   }
 
   return { ok: true, value: { waterLog: await createWaterLog(client, owned.value, parsed.value) } }
+}
+
+/** GET /api/tanks/:id/maintenance —— screen-7 這個缸啟用中的保養任務與各自的最後一筆完成紀錄 */
+export async function resolveMaintenancePage(
+  client: PrismaClient,
+  user: SessionUser | null,
+  tankId: string | undefined,
+): Promise<Authorized<MaintenancePageData>> {
+  const owned = await requireOwnedTank(client, user, tankId)
+
+  if (!owned.ok) {
+    return owned
+  }
+
+  return { ok: true, value: await getMaintenancePage(client, owned.value) }
+}
+
+/**
+ * POST /api/maintenance-tasks/:id/completions —— screen-7 勾選今天的保養。
+ *
+ * 寫入掛在任務底下（與 /api/creatures/:id/... 一致），缸的歸屬由 task → tank 反查。
+ * 順序與其他兩支寫入 API 相同：身分 → 歸屬 → 內容，`readBody` 是個函式而不是值，
+ * 被擋下來的請求因此連 body 都不會讀。
+ *
+ * `now` 由呼叫端傳入，預設走真實時鐘：completedOn 的容忍度因此測得到邊界值，
+ * 測試也不必動系統時鐘（與 parseWaterLogInput 同一個作法）。
+ */
+export async function resolveCompleteTask(
+  client: PrismaClient,
+  user: SessionUser | null,
+  taskId: string | undefined,
+  readBody: BodyReader,
+  now: Date = new Date(),
+): Promise<Authorized<MaintenanceTaskResponse>> {
+  // 這一條與 requireOwnedMaintenanceTask 裡的那條重複，但它讓下面用得到 user.id
+  // ——寫入之後的重新查詢自己也要帶歸屬條件，不能只依賴「呼叫之前已經檢查過了」
+  // （與 applyCreatureStatus 同一個作法）
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  const owned = await requireOwnedMaintenanceTask(client, user, taskId)
+
+  if (!owned.ok) {
+    return owned
+  }
+
+  const parsed = parseCompletedOnInput(await readBody(), now)
+
+  if (!parsed.ok) {
+    return { ok: false, error: invalidInput('Invalid completion input', parsed.message) }
+  }
+
+  const task = await completeTask(client, owned.value.id, parsed.value, user.id)
+
+  // null＝查到之後、寫入之後歸屬變了（例如缸剛被封存）。回與「查不到」完全相同的 404，
+  // 與 applyCreatureStatus 同一個決定：那正是此刻為真的事。
+  return task
+    ? { ok: true, value: { task } }
+    : { ok: false, error: MAINTENANCE_TASK_NOT_FOUND }
+}
+
+/**
+ * DELETE /api/maintenance-tasks/:id/completions/:completedOn —— 取消今天的勾選。
+ *
+ * completedOn 從網址那一段來，規則與 POST 的 body 同一份（parseCompletedOn）——
+ * 否則同一個日期會出現「POST 收得下、DELETE 卻刪不掉」這種歪掉的組合。
+ *
+ * 沒有東西可刪不是錯誤：連點兩下的第二次、或在別的裝置上已經取消過，都回現況。
+ */
+export async function resolveClearCompletion(
+  client: PrismaClient,
+  user: SessionUser | null,
+  taskId: string | undefined,
+  completedOn: string | undefined,
+  now: Date = new Date(),
+): Promise<Authorized<MaintenanceTaskResponse>> {
+  // 與上面同一個理由：重新查詢那一步要用得到 user.id
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  const owned = await requireOwnedMaintenanceTask(client, user, taskId)
+
+  if (!owned.ok) {
+    return owned
+  }
+
+  const parsed = parseCompletedOn(completedOn, now)
+
+  if (!parsed.ok) {
+    return { ok: false, error: invalidInput('Invalid completion date', parsed.message) }
+  }
+
+  const task = await clearCompletion(client, owned.value.id, parsed.value, user.id)
+
+  return task
+    ? { ok: true, value: { task } }
+    : { ok: false, error: MAINTENANCE_TASK_NOT_FOUND }
 }
 
 /** GET /api/tanks/:id/creatures —— screen-5 生物庫存 */

@@ -5,15 +5,20 @@ import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient } from '@prisma/client'
 import {
   CREATURE_NOT_FOUND,
+  MAINTENANCE_TASK_NOT_FOUND,
   MISSING_CREATURE_ID,
   MISSING_TANK_ID,
+  MISSING_TASK_ID,
   NOT_SIGNED_IN,
   TANK_NOT_FOUND,
   applyCreatureStatus,
   createOwnedTank,
   createOwnedWaterLog,
   moveOwnedCreature,
+  resolveClearCompletion,
+  resolveCompleteTask,
   resolveCreatureDetail,
+  resolveMaintenancePage,
   resolveTankCreatures,
   resolveTankHome,
   resolveTankOptions,
@@ -103,6 +108,32 @@ const WATER_LOG_BODY = {
   readings: { KH: 7.8 },
 }
 
+interface TaskRow {
+  id: string
+  tankId: string
+  isActive: boolean
+  displayOrder: number
+}
+
+/**
+ * A 的缸有一個啟用中與一個停用的任務、已封存的缸底下也有一個；B 的缸有一個。
+ *
+ * 停用的那一個是本 issue 特有的一條：它本來就不出現在畫面上，能打到它只有舊分頁或
+ * 手動打 API 兩種可能，所以與「不是你的」「不存在」收斂成同一個 404。
+ */
+const MAINTENANCE_TASKS: TaskRow[] = [
+  { id: 'task-a1', tankId: 'tank-a1', isActive: true, displayOrder: 0 },
+  { id: 'task-a-inactive', tankId: 'tank-a1', isActive: false, displayOrder: 1 },
+  { id: 'task-a-archived', tankId: 'tank-a-archived', isActive: true, displayOrder: 0 },
+  { id: 'task-b1', tankId: 'tank-b1', isActive: true, displayOrder: 0 },
+]
+
+/** server 的「現在」。completedOn 的容忍度以它為準，測試因此不必動系統時鐘 */
+const NOW = new Date('2026-08-06T09:00:00.000Z')
+
+/** 合法的 completedOn（就是 NOW 的那一天） */
+const TODAY = '2026-08-06'
+
 /** 生物的其餘欄位；@db.Date 都給實際的 Date，轉換才走得完 */
 function creatureRow(row: CreatureRow) {
   return {
@@ -119,6 +150,18 @@ function creatureRow(row: CreatureRow) {
     diedOn: null,
     causeOfDeath: null,
     deathNote: null,
+  }
+}
+
+/** 任務的其餘欄位；nested read 的 completions 一律給空陣列（歸屬檢查用不到履歷） */
+function maintenanceTaskRow(row: TaskRow) {
+  return {
+    ...row,
+    name: `任務 ${row.id}`,
+    intervalDays: 7,
+    startOn: null,
+    createdAt: new Date('2026-05-01T00:00:00.000Z'),
+    completions: [],
   }
 }
 
@@ -209,6 +252,32 @@ function fakeClient() {
       )),
     },
     waterParameterTarget: { findMany: vi.fn().mockResolvedValue([]) },
+    // 保養任務的歸屬同樣透過缸反查（見 findOwnedMaintenanceTask）：
+    // where: { id, isActive: true, tank: { userId, archivedAt: null } }。
+    // 替身照著這組條件過濾，A 打不到 B 的任務才是被查詢條件擋下來的。
+    maintenanceTask: {
+      findMany: vi.fn(({ where }: { where: { tankId: string, isActive: boolean } }) => Promise.resolve(
+        MAINTENANCE_TASKS
+          .filter(task => task.tankId === where.tankId && task.isActive === where.isActive)
+          .map(task => maintenanceTaskRow(task)),
+      )),
+      findFirst: vi.fn(({ where }: { where: { id: string, isActive?: boolean, tank?: { userId: string, archivedAt: null } } }) => {
+        const task = MAINTENANCE_TASKS.find(candidate => candidate.id === where.id)
+        const tank = task ? ownedTank({ id: task.tankId, ...where.tank }) : null
+
+        return Promise.resolve(
+          task && tank && (where.isActive === undefined || task.isActive === where.isActive)
+            ? maintenanceTaskRow(task)
+            : null,
+        )
+      }),
+    },
+    maintenanceCompletion: {
+      upsert: vi.fn(({ create }: { create: { taskId: string, completedOn: Date } }) => Promise.resolve({
+        ...create, completedAt: new Date('2026-08-06T09:00:00.000Z'),
+      })),
+      deleteMany: vi.fn(() => Promise.resolve({ count: 0 })),
+    },
   }
 
   Object.assign(client, {
@@ -224,6 +293,7 @@ function expectNoTankContentRead(client: ReturnType<typeof fakeClient>) {
   expect(client.waterReading.findFirst).not.toHaveBeenCalled()
   expect(client.waterParameterTarget.findMany).not.toHaveBeenCalled()
   expect(client.creature.findMany).not.toHaveBeenCalled()
+  expect(client.maintenanceTask.findMany).not.toHaveBeenCalled()
 }
 
 /** 「未登入的判定沒有對資料庫發出任何查詢」——與 #64 的密封 cookie 取捨一致 */
@@ -235,7 +305,15 @@ function expectNoQuery(client: ReturnType<typeof fakeClient>) {
   expect(client.creature.findFirst).not.toHaveBeenCalled()
   expect(client.creature.update).not.toHaveBeenCalled()
   expect(client.waterLog.create).not.toHaveBeenCalled()
+  expect(client.maintenanceTask.findFirst).not.toHaveBeenCalled()
+  expectNoWrite(client)
   expectNoTankContentRead(client)
+}
+
+/** 「這次請求沒有寫進任何一筆完成紀錄」——被拒絕的勾選不能留下履歷 */
+function expectNoWrite(client: ReturnType<typeof fakeClient>) {
+  expect(client.maintenanceCompletion.upsert).not.toHaveBeenCalled()
+  expect(client.maintenanceCompletion.deleteMany).not.toHaveBeenCalled()
 }
 
 /** 存活狀態的合法 PATCH 內容，用來確認「被擋下來時連解析都不會生效」 */
@@ -831,7 +909,7 @@ describe('網址少了 id 時仍是既有的 400，但排在身分檢查之後',
 // 就等於把答案從 body 送了出去。
 describe('錯誤內容不洩漏任何線索', () => {
   it('401 與 404 的訊息裡沒有 id、使用者或「屬於別人」這類線索', () => {
-    for (const spec of [NOT_SIGNED_IN, TANK_NOT_FOUND, CREATURE_NOT_FOUND]) {
+    for (const spec of [NOT_SIGNED_IN, TANK_NOT_FOUND, CREATURE_NOT_FOUND, MAINTENANCE_TASK_NOT_FOUND]) {
       expect(spec.data.message).not.toMatch(/user-|tank-|creature-|別人|他人/)
     }
   })
@@ -840,12 +918,246 @@ describe('錯誤內容不洩漏任何線索', () => {
     expect(NOT_SIGNED_IN.statusCode).toBe(401)
     expect(TANK_NOT_FOUND.statusCode).toBe(404)
     expect(CREATURE_NOT_FOUND.statusCode).toBe(404)
+    expect(MAINTENANCE_TASK_NOT_FOUND.statusCode).toBe(404)
   })
 
   // statusMessage 過不了 h3 的 ASCII 過濾，中文一律放 data.message（shared/utils/apiError.ts）
   it('statusMessage 只有 ASCII', () => {
-    for (const spec of [NOT_SIGNED_IN, TANK_NOT_FOUND, CREATURE_NOT_FOUND]) {
+    for (const spec of [NOT_SIGNED_IN, TANK_NOT_FOUND, CREATURE_NOT_FOUND, MAINTENANCE_TASK_NOT_FOUND]) {
       expect(spec.statusMessage).toMatch(/^[\x20-\x7E]+$/)
     }
+  })
+})
+
+// ─────────────────────────────────────────────
+// 保養提醒（issue #122，畫面是 #15 的 screen-7）
+// ─────────────────────────────────────────────
+//
+// 讀取掛在缸底下（與 /home、/creatures、/water-logs 一致），寫入掛在任務底下
+// （與 /api/creatures/:id/... 一致，缸的歸屬由 task → tank 反查）。
+//
+// 「未登入 / 任務屬於別人的缸 / 任務不存在 / 任務所屬的缸已封存 / 任務已停用」
+// 分別是 401 與 404，而那四種 404 的訊息一律相同——分開回答等於告訴對方
+// 「這個 id 是存在的」，一支猜 id 的腳本就能把別人的任務列舉出來。
+
+describe('GET /api/tanks/:id/maintenance 的歸屬檢查', () => {
+  it('A 打自己的 tankId 拿到自己的任務', async () => {
+    const client = fakeClient()
+    const result = await resolveMaintenancePage(client, USER_A, 'tank-a1')
+
+    expect(result).toEqual({ ok: true, value: { tasks: [expect.objectContaining({ id: 'task-a1' })] } })
+    // 查詢條件本身也釘住：少了 tankId 就會把所有人的保養任務一起撈出來
+    expect(client.maintenanceTask.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { tankId: 'tank-a1', isActive: true } }),
+    )
+  })
+
+  it('A 打 B 的 tankId 回 404，而且完全沒有讀取 B 缸底下的內容', async () => {
+    const client = fakeClient()
+
+    await expect(resolveMaintenancePage(client, USER_A, 'tank-b1'))
+      .resolves.toEqual({ ok: false, error: TANK_NOT_FOUND })
+    expectNoTankContentRead(client)
+  })
+
+  it('自己已封存的缸同樣回 404', async () => {
+    await expect(resolveMaintenancePage(fakeClient(), USER_A, 'tank-a-archived'))
+      .resolves.toEqual({ ok: false, error: TANK_NOT_FOUND })
+  })
+
+  it('未登入時回 401，而且一次查詢都不發出', async () => {
+    const client = fakeClient()
+
+    await expect(resolveMaintenancePage(client, null, 'tank-a1'))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+    expectNoQuery(client)
+  })
+
+  it('已登入時，缺少 tankId 回 400', async () => {
+    await expect(resolveMaintenancePage(fakeClient(), USER_A, undefined))
+      .resolves.toEqual({ ok: false, error: MISSING_TANK_ID })
+  })
+
+  it('不存在的 tankId 與 B 的 tankId 回傳完全相同的錯誤', async () => {
+    const missing = await resolveMaintenancePage(fakeClient(), USER_A, 'tank-does-not-exist')
+    const others = await resolveMaintenancePage(fakeClient(), USER_A, 'tank-b1')
+
+    expect(missing).toEqual(others)
+  })
+})
+
+describe('POST /api/maintenance-tasks/:id/completions 的歸屬與驗證', () => {
+  // Given 「換水 10%」今天尚未完成 / When 送出 { completedOn: 今天 }
+  // Then  建立一筆完成紀錄 / And 回傳更新後的該任務，讓畫面不必重抓整頁
+  it('A 勾自己的任務，寫入掛在那個任務上，並回傳更新後的任務', async () => {
+    const client = fakeClient()
+    const result = await resolveCompleteTask(client, USER_A, 'task-a1', bodyThunk({ completedOn: TODAY }), NOW)
+
+    expect(result).toEqual({ ok: true, value: { task: expect.objectContaining({ id: 'task-a1' }) } })
+    expect(client.maintenanceCompletion.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { taskId_completedOn: { taskId: 'task-a1', completedOn: new Date(`${TODAY}T00:00:00.000Z`) } },
+        update: {},
+      }),
+    )
+  })
+
+  // Given 任務屬於別人的缸 / Then 404，而且 B 的任務底下不會多出完成紀錄
+  it('A 勾 B 的任務回 404，而且一列都沒寫', async () => {
+    const client = fakeClient()
+
+    await expect(resolveCompleteTask(client, USER_A, 'task-b1', bodyThunk({ completedOn: TODAY }), NOW))
+      .resolves.toEqual({ ok: false, error: MAINTENANCE_TASK_NOT_FOUND })
+    expectNoWrite(client)
+  })
+
+  // 停用的任務回 404 而不是另一種錯誤：它本來就不出現在畫面上，
+  // 能打到它只有舊分頁或手動打 API 兩種可能，兩種都不需要一份更詳細的說明
+  it.each([
+    ['已停用的任務', 'task-a-inactive'],
+    ['已封存的缸底下的任務', 'task-a-archived'],
+    ['不存在的任務', 'task-does-not-exist'],
+  ])('%s 回同一個 404，而且一列都沒寫', async (_label, taskId) => {
+    const client = fakeClient()
+
+    await expect(resolveCompleteTask(client, USER_A, taskId, bodyThunk({ completedOn: TODAY }), NOW))
+      .resolves.toEqual({ ok: false, error: MAINTENANCE_TASK_NOT_FOUND })
+    expectNoWrite(client)
+  })
+
+  // 真正的 readBody 對畸形 JSON 會直接 throw 400，所以「什麼時候呼叫它」決定了
+  // 打別人任務的人拿到 404 還是 400——後者等於承認這個網址願意跟他對話
+  it('歸屬不成立時連 body 都不會讀取', async () => {
+    const body = bodyThunk({ completedOn: TODAY })
+
+    await resolveCompleteTask(fakeClient(), USER_A, 'task-b1', body, NOW)
+
+    expect(body).not.toHaveBeenCalled()
+  })
+
+  it('未登入時回 401，一次查詢都不發出，body 也不讀', async () => {
+    const client = fakeClient()
+    const body = bodyThunk({ completedOn: TODAY })
+
+    await expect(resolveCompleteTask(client, null, 'task-a1', body, NOW))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+    expect(body).not.toHaveBeenCalled()
+    expectNoQuery(client)
+  })
+
+  // 身分先於內容，與其他兩支寫入 API 對稱
+  it('未登入且內容也不合法時仍然回 401，不是 400', async () => {
+    await expect(resolveCompleteTask(fakeClient(), null, 'task-a1', bodyThunk({ completedOn: '' }), NOW))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+  })
+
+  // Given completedOn 不是合法日期 / Then 回 400「完成日期不正確。」，不建立任何資料
+  it.each([
+    ['不存在的日期', '2026-02-30'],
+    ['空字串', ''],
+    ['格式不對', '2026/08/06'],
+  ])('completedOn 不合法（%s）時回 400，且不建立任何資料', async (_label, completedOn) => {
+    const client = fakeClient()
+    const result = await resolveCompleteTask(client, USER_A, 'task-a1', bodyThunk({ completedOn }), NOW)
+
+    expect(result).toMatchObject({ ok: false, error: { statusCode: 400, data: { message: '完成日期不正確。' } } })
+    expectNoWrite(client)
+  })
+
+  // Given completedOn 距離 server 的現在超過一天 / Then 回 400「只能勾選今天的保養。」
+  it('completedOn 超出容忍度時回 400，且不建立任何資料', async () => {
+    const client = fakeClient()
+    const result = await resolveCompleteTask(client, USER_A, 'task-a1', bodyThunk({ completedOn: '2026-07-01' }), NOW)
+
+    expect(result).toMatchObject({ ok: false, error: { statusCode: 400, data: { message: '只能勾選今天的保養。' } } })
+    expectNoWrite(client)
+  })
+
+  // 時區的容差：使用者的「今天」與 server 的 UTC 今天最多差一天
+  it.each([['前一天', '2026-08-05'], ['後一天', '2026-08-07']])('與 server 今天相差一天的 completedOn（%s）照樣收下', async (_label, completedOn) => {
+    const client = fakeClient()
+
+    expect((await resolveCompleteTask(client, USER_A, 'task-a1', bodyThunk({ completedOn }), NOW)).ok).toBe(true)
+  })
+
+  it('已登入時，缺少 taskId 回 400', async () => {
+    await expect(resolveCompleteTask(fakeClient(), USER_A, undefined, bodyThunk({ completedOn: TODAY }), NOW))
+      .resolves.toEqual({ ok: false, error: MISSING_TASK_ID })
+  })
+
+  it('不存在的 taskId 與 B 的 taskId 回傳完全相同的錯誤', async () => {
+    const missing = await resolveCompleteTask(fakeClient(), USER_A, 'task-does-not-exist', bodyThunk({ completedOn: TODAY }), NOW)
+    const others = await resolveCompleteTask(fakeClient(), USER_A, 'task-b1', bodyThunk({ completedOn: TODAY }), NOW)
+
+    expect(missing).toEqual(others)
+  })
+})
+
+describe('DELETE /api/maintenance-tasks/:id/completions/:completedOn 的歸屬與驗證', () => {
+  // Given 「餵食」今天已完成 / Then 刪除今天那一筆，回傳更新後的該任務
+  it('A 取消自己任務的勾選，只刪當天那一筆', async () => {
+    const client = fakeClient()
+    const result = await resolveClearCompletion(client, USER_A, 'task-a1', TODAY, NOW)
+
+    expect(result).toEqual({ ok: true, value: { task: expect.objectContaining({ id: 'task-a1' }) } })
+    expect(client.maintenanceCompletion.deleteMany).toHaveBeenCalledWith({
+      where: { taskId: 'task-a1', completedOn: new Date(`${TODAY}T00:00:00.000Z`) },
+    })
+  })
+
+  // Given 今天本來就沒有完成紀錄 / Then 回 200 與現況（沒有東西可刪不是錯誤），不回 404
+  it('沒有東西可刪時回的是現況，不是 404', async () => {
+    const client = fakeClient()
+
+    await expect(resolveClearCompletion(client, USER_A, 'task-a1', TODAY, NOW))
+      .resolves.toMatchObject({ ok: true })
+    expect(client.maintenanceCompletion.deleteMany).toHaveBeenCalled()
+  })
+
+  it.each([
+    ['B 的任務', 'task-b1'],
+    ['已停用的任務', 'task-a-inactive'],
+    ['已封存的缸底下的任務', 'task-a-archived'],
+    ['不存在的任務', 'task-does-not-exist'],
+  ])('%s 回同一個 404，而且一列都沒刪', async (_label, taskId) => {
+    const client = fakeClient()
+
+    await expect(resolveClearCompletion(client, USER_A, taskId, TODAY, NOW))
+      .resolves.toEqual({ ok: false, error: MAINTENANCE_TASK_NOT_FOUND })
+    expectNoWrite(client)
+  })
+
+  it('未登入時回 401，而且一次查詢都不發出', async () => {
+    const client = fakeClient()
+
+    await expect(resolveClearCompletion(client, null, 'task-a1', TODAY, NOW))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+    expectNoQuery(client)
+  })
+
+  // 網址那一段與 body 那一個值走同一份規則（parseCompletedOn），
+  // 否則同一個日期在 POST 收得下、DELETE 卻刪不掉
+  it.each([
+    ['不存在的日期', '2026-02-30', '完成日期不正確。'],
+    ['格式不對', 'today', '完成日期不正確。'],
+    ['超出容忍度', '2026-07-01', '只能勾選今天的保養。'],
+  ])('網址上的 completedOn 不合法（%s）時回 400，且一列都沒刪', async (_label, completedOn, message) => {
+    const client = fakeClient()
+    const result = await resolveClearCompletion(client, USER_A, 'task-a1', completedOn, NOW)
+
+    expect(result).toMatchObject({ ok: false, error: { statusCode: 400, data: { message } } })
+    expectNoWrite(client)
+  })
+
+  it('已登入時，缺少 taskId 回 400', async () => {
+    await expect(resolveClearCompletion(fakeClient(), USER_A, undefined, TODAY, NOW))
+      .resolves.toEqual({ ok: false, error: MISSING_TASK_ID })
+  })
+
+  it('不存在的 taskId 與 B 的 taskId 回傳完全相同的錯誤', async () => {
+    const missing = await resolveClearCompletion(fakeClient(), USER_A, 'task-does-not-exist', TODAY, NOW)
+    const others = await resolveClearCompletion(fakeClient(), USER_A, 'task-b1', TODAY, NOW)
+
+    expect(missing).toEqual(others)
   })
 })

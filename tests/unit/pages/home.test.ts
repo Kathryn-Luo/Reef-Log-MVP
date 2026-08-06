@@ -109,15 +109,41 @@ const SECOND_TANK_HOME: TankHomeData = {
 const state = {
   tanks: [] as TankOption[],
   home: {} as Record<string, TankHomeData>,
+  // issue #132：兩支請求各自可以被打成 500，用來分辨「拿不到資料」與「你沒有資料」
+  failTanks: false,
+  failHome: false,
+}
+
+/** 說不出原因的失敗（500 / 離線 / function 掛掉），沒有可以直接顯示給使用者的訊息 */
+function serverError() {
+  return createError({ statusCode: 500, statusMessage: 'Internal Server Error' })
 }
 
 // 首頁要登入才進得去（#67 的全域路由保護）。少了這張 session，mountSuspended
 // 的導覽會先被導去 /login，頁面就讀不到網址上的 ?tank=<id>。
 mockNuxtImport('useUserSession', () => () => signedInUserSession())
 
-registerEndpoint('/api/tanks', () => ({ tanks: state.tanks }))
-registerEndpoint('/api/tanks/tank-1/home', () => state.home['tank-1'] ?? { water: null, creatures: [] })
-registerEndpoint('/api/tanks/tank-2/home', () => state.home['tank-2'] ?? { water: null, creatures: [] })
+registerEndpoint('/api/tanks', () => {
+  if (state.failTanks) {
+    throw serverError()
+  }
+
+  return { tanks: state.tanks }
+})
+registerEndpoint('/api/tanks/tank-1/home', () => {
+  if (state.failHome) {
+    throw serverError()
+  }
+
+  return state.home['tank-1'] ?? { water: null, creatures: [] }
+})
+registerEndpoint('/api/tanks/tank-2/home', () => {
+  if (state.failHome) {
+    throw serverError()
+  }
+
+  return state.home['tank-2'] ?? { water: null, creatures: [] }
+})
 
 // 上一題掛著沒拆的頁面會共用同一組 useAsyncData key，
 // clearNuxtData() 讓它的 watcher 跟著醒過來去搶同一份資料。每題結束就拆掉。
@@ -132,6 +158,8 @@ beforeEach(() => {
 
   state.tanks = [MAIN_TANK]
   state.home = { 'tank-1': MAIN_TANK_HOME, 'tank-2': SECOND_TANK_HOME }
+  state.failTanks = false
+  state.failHome = false
 })
 
 function chipTexts(page: Awaited<ReturnType<typeof mountSuspended>>) {
@@ -993,6 +1021,123 @@ describe('首頁 — 捲動位置還原', () => {
 
     expect(window.sessionStorage.getItem(scrollRestoreKey('/'))).toContain('1200')
     expect(page.vm.$route.fullPath).toBe('/')
+  })
+})
+
+// issue #132：請求失敗時 useAsyncData 的 data 是 null，而畫面只分「載入中」與
+// 「載入完」兩態，於是一律落到空狀態——「拿不到資料」被講成「你沒有資料」。
+// 最糟的一條路徑是照著空狀態按下去，多一個其實不需要的缸。
+describe('首頁 — 取資料失敗', () => {
+  // Given 我有一個缸 / When 我進入首頁而 API 回 500
+  // Then 畫面顯示「載入失敗」與重試的入口，不是空狀態
+  it('缸清單回 500 時顯示載入失敗與重試，而不是空狀態', async () => {
+    state.failTanks = true
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    expect(page.get('[data-testid="load-error"]').text()).toContain('載入失敗')
+    expect(page.get('[data-testid="load-error-retry"]').exists()).toBe(true)
+    expect(page.find('[data-testid="tank-empty"]').exists()).toBe(false)
+  })
+
+  // And 我不會被引導去建立第二個缸
+  it('載入失敗時沒有任何前往建立缸的入口', async () => {
+    state.failTanks = true
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    expect(page.text()).not.toContain('還沒有任何缸')
+    expect(page.find('[data-testid="tank-empty-action"]').exists()).toBe(false)
+    expect(page.findAll('a').map(link => link.attributes('href'))).not.toContain('/tanks/new')
+  })
+
+  // 缸清單成功、缸資料失敗是同一件事：畫面同樣不能假裝這個缸裡什麼都沒有
+  it('缸資料回 500 時同樣顯示載入失敗，不顯示生物空狀態', async () => {
+    state.failHome = true
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    expect(page.get('[data-testid="load-error"]').exists()).toBe(true)
+    expect(page.find('[data-testid="creature-empty"]').exists()).toBe(false)
+  })
+
+  // Given 我真的沒有任何缸 / Then 畫面仍然顯示「還沒有任何缸／建立我的第一個缸」
+  // （成功但空，與失敗，必須分得出來）
+  it('成功但沒有缸時仍是空狀態，不是載入失敗', async () => {
+    state.tanks = []
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    expect(page.find('[data-testid="load-error"]').exists()).toBe(false)
+    expect(page.get('[data-testid="tank-empty"]').text()).toContain('還沒有任何缸')
+    expect(page.get('[data-testid="tank-empty-action"]').attributes('href')).toBe('/tanks/new')
+  })
+
+  // Given 畫面顯示載入失敗 / When 我點「重試」
+  // Then 重新發出同一個請求，成功後正常顯示
+  it('點「重試」重新發出請求，成功後正常顯示', async () => {
+    state.failTanks = true
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    expect(page.get('[data-testid="load-error"]').exists()).toBe(true)
+
+    state.failTanks = false
+
+    await page.get('[data-testid="load-error-retry"]').trigger('click')
+    await flushPromises()
+
+    // 重試是兩支請求接力，資料到齊會晚於「錯誤區塊消失」——等的是最終樣態
+    await vi.waitFor(() => {
+      expect(page.find('[data-testid="load-error"]').exists()).toBe(false)
+      expect(page.get('[data-testid="creature-total"]').text()).toBe('12 隻')
+    })
+
+    expect(page.get('h1').text()).toBe('主缸 · 4 尺')
+    expect(page.findAll('[data-testid="creature-card"]')).toHaveLength(11)
+  })
+
+  // 重試期間 status 會從 'error' 翻成 'pending'，「只看 error」的寫法會在那一段
+  // 把錯誤區塊拆掉——畫面於是閃過一次「還沒有任何缸」，正是本 issue 要根除的那一幕
+  it('重試進行中畫面停在載入失敗，不閃過空狀態', async () => {
+    state.failTanks = true
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    state.failTanks = false
+
+    // 刻意不 await：要看的正是「請求還在路上」的那一段
+    void page.get('[data-testid="load-error-retry"]').trigger('click')
+    await nextTick()
+
+    expect(page.get('[data-testid="load-error"]').exists()).toBe(true)
+    expect(page.find('[data-testid="tank-empty"]').exists()).toBe(false)
+    expect(page.get('[data-testid="load-error-retry"]').attributes('disabled')).toBeDefined()
+
+    // 收尾：這一輪本來就會成功，等它落地免得殘留到下一題
+    await vi.waitFor(() => {
+      expect(page.find('[data-testid="load-error"]').exists()).toBe(false)
+    })
+  })
+
+  // 第二支請求失敗時按重試，重打的必須包含它——只重打缸清單的話，
+  // 缸資料那一格會永遠停在失敗狀態，按幾次都一樣
+  it('缸資料失敗時按重試也會重新取回缸資料', async () => {
+    state.failHome = true
+
+    const page = await mountSuspended(HomePage, { route: '/' })
+
+    expect(page.get('[data-testid="load-error"]').exists()).toBe(true)
+
+    state.failHome = false
+
+    await page.get('[data-testid="load-error-retry"]').trigger('click')
+    await flushPromises()
+
+    await vi.waitFor(() => {
+      expect(page.find('[data-testid="load-error"]').exists()).toBe(false)
+      expect(page.get('[data-testid="creature-total"]').text()).toBe('12 隻')
+    })
   })
 })
 

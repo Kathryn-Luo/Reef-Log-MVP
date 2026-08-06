@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mockNuxtImport, mountSuspended, registerEndpoint } from '@nuxt/test-utils/runtime'
 import { enableAutoUnmount, flushPromises } from '@vue/test-utils'
 import CreatureDetailPage from '../../../app/pages/creatures/[id].vue'
@@ -37,6 +37,11 @@ function daysAgo(days: number): string {
 
 const state = {
   creature: creature() as CreatureDetailDto | null,
+  /**
+   * GET 這一支要以哪個狀態碼失敗（issue #132）。
+   * null 代表照常回應——「這一隻不存在」仍然是把 state.creature 設成 null。
+   */
+  getFailure: null as number | null,
   /** 這一輪 PATCH 收到的 body */
   body: null as Record<string, unknown> | null,
   patchCalls: 0,
@@ -54,6 +59,10 @@ interface MockNodeEvent {
 registerEndpoint('/api/creatures/f5', {
   method: 'GET',
   handler: () => {
+    if (state.getFailure !== null) {
+      throw createError({ statusCode: state.getFailure, statusMessage: 'Internal Server Error' })
+    }
+
     if (!state.creature) {
       throw createError({ statusCode: 404, statusMessage: 'Creature not found' })
     }
@@ -89,6 +98,7 @@ beforeEach(() => {
   clearNuxtData()
 
   state.creature = creature()
+  state.getFailure = null
   state.body = null
   state.patchCalls = 0
   state.fail = false
@@ -504,5 +514,78 @@ describe('生物詳情 — 找不到這隻生物', () => {
     expect(page.get('[data-testid="creature-missing"]').text()).not.toBe('')
     expect(page.get('[data-testid="creature-back"]').attributes('href')).toBe('/creatures')
     expect(page.findAll('[data-testid="status-option"]')).toHaveLength(0)
+  })
+})
+
+// issue #132：這一頁原本把所有失敗都吞成 null，於是 500 也被講成「找不到這隻生物」。
+// 「這一隻不存在」與「拿不到資料」是兩件事，畫面必須分得出來。
+describe('生物詳情 — 取資料失敗', () => {
+  // Given 這隻生物存在 / When 我進入詳情頁而 API 回 500
+  // Then 畫面顯示「載入失敗」與重試的入口，不是「找不到這隻生物」
+  it('回 500 時顯示載入失敗與重試，而不是「找不到這隻生物」', async () => {
+    state.getFailure = 500
+
+    const page = await open()
+
+    expect(page.get('[data-testid="load-error"]').text()).toContain('載入失敗')
+    expect(page.get('[data-testid="load-error-retry"]').exists()).toBe(true)
+    expect(page.find('[data-testid="creature-missing"]').exists()).toBe(false)
+  })
+
+  // 404 是「真的沒有這一隻」，那一句話仍然要說得出口
+  it('回 404 時仍然顯示「找不到這隻生物」，不是載入失敗', async () => {
+    state.creature = null
+
+    const page = await open()
+
+    expect(page.find('[data-testid="load-error"]').exists()).toBe(false)
+    expect(page.get('[data-testid="creature-missing"]').text()).toContain('找不到這隻生物')
+  })
+
+  // Given 畫面顯示載入失敗 / When 我點「重試」/ Then 重新發出同一個請求，成功後正常顯示
+  it('點「重試」重新發出請求，成功後正常顯示', async () => {
+    state.getFailure = 500
+
+    const page = await open()
+
+    expect(page.get('[data-testid="load-error"]').exists()).toBe(true)
+
+    state.getFailure = null
+
+    await page.get('[data-testid="load-error-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(page.find('[data-testid="load-error"]').exists()).toBe(false)
+    expect(page.get('[data-testid="creature-name"]').text()).toBe('火焰仙')
+  })
+
+  // 重試期間 status 會從 'error' 翻成 'pending'，「只看 error」的寫法會在那一段
+  // 把錯誤區塊拆掉——畫面於是閃過一次「找不到這隻生物」
+  it('重試進行中畫面停在載入失敗，不閃過「找不到這隻生物」', async () => {
+    state.getFailure = 500
+
+    const page = await open()
+
+    state.getFailure = null
+
+    // 刻意不 await：要看的正是「請求還在路上」的那一段
+    void page.get('[data-testid="load-error-retry"]').trigger('click')
+    await nextTick()
+
+    expect(page.get('[data-testid="load-error"]').exists()).toBe(true)
+    expect(page.find('[data-testid="creature-missing"]').exists()).toBe(false)
+
+    await vi.waitFor(() => {
+      expect(page.find('[data-testid="load-error"]').exists()).toBe(false)
+    })
+  })
+
+  // 失敗的是「這一頁的資料」，不是整個 App——底部返回的入口要留著，人才走得回去
+  it('載入失敗時頁首的返回入口仍在', async () => {
+    state.getFailure = 500
+
+    const page = await open()
+
+    expect(page.get('[data-testid="creature-back"]').attributes('href')).toBe('/creatures')
   })
 })

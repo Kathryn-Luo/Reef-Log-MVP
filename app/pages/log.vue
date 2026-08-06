@@ -41,7 +41,7 @@ const { $api } = useNuxtApp()
  *
  * lazy：這一頁自己畫得出載入樣態，所以不在 setup 階段擋著整頁不渲染。
  */
-const { data, status } = useAsyncData('water-log', async () => {
+const { data, status, refresh: reload } = useAsyncData('water-log', async () => {
   const { tanks } = await $api<{ tanks: TankOption[] }>('/api/tanks')
 
   // 未指定時看的是清單第一個，也就是 schema 定義的「預設缸」（與生物庫存頁一致）
@@ -53,7 +53,23 @@ const { data, status } = useAsyncData('water-log', async () => {
   }
 }, { lazy: true })
 
-const loading = computed(() => status.value === 'idle' || status.value === 'pending')
+/**
+ * issue #132：請求失敗時 data 是 null，與「成功但沒有缸」長得一模一樣。
+ * 少了這一態，「拿不到資料」會被畫成「你沒有資料」，而這一頁的空狀態唯一的出口
+ * 是「建立我的第一個缸」——照著按下去就多一個不需要的缸，三頁裡最糟的一條。
+ *
+ * 401 不在此列：那條路由由 $api 的攔截器帶去登入頁（#67），比這裡更早。
+ *
+ * 只有一支 status：缸與水質記錄本來就串成同一個請求鏈（見上方），
+ * 所以重試也只有一個 reload，兩段一起重打。
+ */
+const { failed: loadFailed, retrying, retry: retryLoad } = useLoadFailure([status], reload)
+
+// 失敗（含重試進行中）不算載入中：骨架排在錯誤區塊之後的話，重試的那一段會把
+// 錯誤區塊換成骨架，再次失敗時中間那一拍就成了「什麼都沒說」。
+const loading = computed(() =>
+  !loadFailed.value && (status.value === 'idle' || status.value === 'pending'),
+)
 const tank = computed(() => data.value?.tank ?? null)
 
 const subtitle = computed(() =>
@@ -226,11 +242,22 @@ async function submit() {
     </header>
 
     <!--
+      拿不到資料。要排在骨架與空狀態之前：三者的 tank 都是 null，先問的那一個說了算。
+      上方的返回入口在三態下都留著，人走得回去。
+    -->
+    <LoadErrorState
+      v-if="loadFailed"
+      :retrying="retrying"
+      title-tag="p"
+      @retry="retryLoad"
+    />
+
+    <!--
       資料還在路上時的骨架。#84 之後是 SPA，首屏沒有伺服器算好的畫面，
       直接判斷「清單是不是空的」會先閃一次「還沒有任何記錄」。
     -->
     <div
-      v-if="loading"
+      v-else-if="loading"
       data-testid="water-log-loading"
       class="space-y-2.5 px-4 pt-2"
     >

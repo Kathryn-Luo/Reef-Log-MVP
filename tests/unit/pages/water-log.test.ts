@@ -64,6 +64,8 @@ const state = {
   previousReadings: [] as WaterReadingDto[],
   waterLogs: [] as WaterLogDto[],
   hold: { get: null as ReturnType<typeof gate> | null, post: null as ReturnType<typeof gate> | null },
+  // issue #132：兩支 GET 各自可以被打成 500，用來分辨「拿不到資料」與「你沒有資料」
+  fail: { tanks: false, get: false },
   post: {
     calls: 0,
     body: null as { measuredAt?: string, readings?: Record<string, unknown> } | null,
@@ -80,12 +82,27 @@ interface MockNodeEvent {
   node: { req: { body?: string } }
 }
 
-registerEndpoint('/api/tanks', () => ({ tanks: state.tanks }))
+/** 說不出原因的失敗（500 / 離線 / function 掛掉），沒有可以直接顯示給使用者的訊息 */
+function serverError() {
+  return createError({ statusCode: 500, statusMessage: 'Internal Server Error' })
+}
+
+registerEndpoint('/api/tanks', () => {
+  if (state.fail.tanks) {
+    throw serverError()
+  }
+
+  return { tanks: state.tanks }
+})
 
 registerEndpoint('/api/tanks/tank-1/water-logs', {
   method: 'GET',
   handler: async () => {
     await state.hold.get?.promise
+
+    if (state.fail.get) {
+      throw serverError()
+    }
 
     return { previousReadings: state.previousReadings, waterLogs: state.waterLogs }
   },
@@ -134,6 +151,7 @@ beforeEach(() => {
   state.previousReadings = PREVIOUS_READINGS
   state.waterLogs = WATER_LOGS
   state.hold = { get: null, post: null }
+  state.fail = { tanks: false, get: false }
   state.post.calls = 0
   state.post.body = null
   state.post.fail = false
@@ -535,5 +553,147 @@ describe('記錄水質 — 尚未建立任何缸', () => {
     expect(page.get('[data-testid="tank-empty"]').exists()).toBe(true)
     expect(page.get('[data-testid="tank-empty-action"]').attributes('href')).toBe('/tanks/new')
     expect(page.findAll('[data-testid="reading-field"]')).toHaveLength(0)
+  })
+})
+
+// issue #132：請求失敗時 useAsyncData 的 data 是 null，而這一頁只分「載入中」與
+// 「載入完」兩態，於是 `v-else-if="!tank"` 一律接住——「拿不到資料」被講成
+// 「你沒有資料」。/log 是三頁裡最糟的一條：使用者照著「建立我的第一個缸」按下去，
+// 就多了一個他其實不需要的缸。
+describe('記錄水質 — 取資料失敗', () => {
+  // Given 我有一個缸 / When 我進入 /log 而 API 回 500
+  // Then 畫面顯示「載入失敗」與重試的入口，不是空狀態
+  it('缸清單回 500 時顯示載入失敗與重試，而不是「還沒有任何缸」', async () => {
+    state.fail.tanks = true
+
+    const page = await open()
+
+    expect(page.get('[data-testid="load-error"]').text()).toContain('載入失敗')
+    expect(page.get('[data-testid="load-error-retry"]').exists()).toBe(true)
+    expect(page.find('[data-testid="tank-empty"]').exists()).toBe(false)
+  })
+
+  // And 我不會被引導去建立第二個缸——這一頁的空狀態唯一的出口正是那顆按鈕
+  it('載入失敗時沒有任何前往建立缸的入口', async () => {
+    state.fail.tanks = true
+
+    const page = await open()
+
+    expect(page.text()).not.toContain('還沒有任何缸')
+    expect(page.find('[data-testid="tank-empty-action"]').exists()).toBe(false)
+    expect(page.findAll('a').map(link => link.attributes('href'))).not.toContain('/tanks/new')
+  })
+
+  // 缸清單成功、水質記錄失敗是同一件事：畫面同樣不能假裝這個缸還沒量過水，
+  // 也不能擺出一張存得下去的表單——送出的目的地本來就拿不到
+  it('水質記錄回 500 時同樣顯示載入失敗，不顯示「還沒有任何記錄」與輸入欄', async () => {
+    state.fail.get = true
+
+    const page = await open()
+
+    expect(page.get('[data-testid="load-error"]').exists()).toBe(true)
+    expect(page.find('[data-testid="history-empty"]').exists()).toBe(false)
+    expect(page.findAll('[data-testid="reading-field"]')).toHaveLength(0)
+  })
+
+  // Given 我真的沒有任何缸 / When 我進入 /log
+  // Then 畫面仍然顯示「還沒有任何缸／建立我的第一個缸」
+  // （成功但空，與失敗，必須分得出來）
+  it('成功但沒有缸時仍是空狀態，不是載入失敗', async () => {
+    state.tanks = []
+
+    const page = await open()
+
+    expect(page.find('[data-testid="load-error"]').exists()).toBe(false)
+    expect(page.get('[data-testid="tank-empty"]').text()).toContain('還沒有任何缸')
+    expect(page.get('[data-testid="tank-empty-action"]').attributes('href')).toBe('/tanks/new')
+  })
+
+  // Given 畫面顯示載入失敗 / When 我點「重試」
+  // Then 重新發出同一個請求，成功後正常顯示
+  it('點「重試」重新發出請求，成功後正常顯示', async () => {
+    state.fail.tanks = true
+
+    const page = await open()
+
+    expect(page.get('[data-testid="load-error"]').exists()).toBe(true)
+
+    state.fail.tanks = false
+
+    await page.get('[data-testid="load-error-retry"]').trigger('click')
+    await settle()
+
+    // 重試是兩支請求接力（先問有哪些缸，再問那個缸的記錄），資料到齊會晚於
+    // 「錯誤區塊消失」——等的是最終樣態
+    await vi.waitFor(() => {
+      expect(page.find('[data-testid="load-error"]').exists()).toBe(false)
+      expect(historyIds(page)).toEqual(['log-1', 'log-2', 'log-3'])
+    })
+
+    expect(page.get('[data-testid="water-log-subtitle"]').text()).toBe('主缸 · 4 尺')
+    expect(page.findAll('[data-testid="reading-field"]')).toHaveLength(6)
+  })
+
+  // 第二支請求失敗時按重試，重打的必須包含它——只重打缸清單的話，
+  // 水質記錄那一半會永遠停在失敗狀態，按幾次都一樣
+  it('水質記錄失敗時按重試也會重新取回水質記錄', async () => {
+    state.fail.get = true
+
+    const page = await open()
+
+    expect(page.get('[data-testid="load-error"]').exists()).toBe(true)
+
+    state.fail.get = false
+
+    await page.get('[data-testid="load-error-retry"]').trigger('click')
+    await settle()
+
+    await vi.waitFor(() => {
+      expect(page.find('[data-testid="load-error"]').exists()).toBe(false)
+      expect(historyIds(page)).toEqual(['log-1', 'log-2', 'log-3'])
+    })
+  })
+
+  // 這一頁的頁首「記錄水質」是常駐的 h1（錯誤時也留著，人才走得回去），
+  // 所以錯誤區塊的標題不能也是 h1——同一頁兩個 h1。該頁自己的空狀態早就是這樣做的。
+  it('載入失敗時整頁仍然只有一個 h1', async () => {
+    state.fail.tanks = true
+
+    const page = await open()
+
+    const headings = page.findAll('h1')
+
+    expect(headings).toHaveLength(1)
+    expect(headings[0]!.text()).toBe('記錄水質')
+    expect(page.get('[data-testid="load-error-title"]').text()).toBe('載入失敗')
+  })
+
+  // 重試期間 status 會從 'error' 翻成 'pending'，「只看 error」的寫法會在那一段
+  // 把錯誤區塊拆掉。這一頁還多一層：pending 會落到骨架，而骨架之後若請求再次失敗，
+  // 中間那一拍就成了「什麼都沒說」。要嘛換成資料，要嘛留在錯誤畫面上。
+  it('重試進行中畫面停在載入失敗，不閃過空狀態或骨架', async () => {
+    state.fail.tanks = true
+
+    const page = await open()
+
+    state.fail.tanks = false
+    // 把重試那一輪的第二支請求停在半路，才看得到「請求還在路上」的那一段
+    state.hold.get = gate()
+
+    // 刻意不 await：要看的正是中間那一拍
+    void page.get('[data-testid="load-error-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(page.get('[data-testid="load-error"]').exists()).toBe(true)
+    expect(page.find('[data-testid="tank-empty"]').exists()).toBe(false)
+    expect(page.find('[data-testid="water-log-loading"]').exists()).toBe(false)
+    expect(page.get('[data-testid="load-error-retry"]').attributes('disabled')).toBeDefined()
+
+    // 收尾：這一輪本來就會成功，等它落地免得殘留到下一題
+    state.hold.get.open()
+
+    await vi.waitFor(() => {
+      expect(page.find('[data-testid="load-error"]').exists()).toBe(false)
+    })
   })
 })

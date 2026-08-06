@@ -44,6 +44,10 @@ blob-report
 .agent-issue.md
 .agent-review.md
 
+# agent 寫 PR 內文／留言時的暫存檔（gh --body-file 要一個檔案，同樣不進版控）
+.agent-pr-body.md
+.agent-pr-comment.md
+
 # Editor / OS
 .DS_Store
 .idea

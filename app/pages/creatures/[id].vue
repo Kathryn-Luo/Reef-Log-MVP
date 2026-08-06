@@ -9,7 +9,7 @@ import {
   formatTaxonomy,
   parseCreatureStatusInput,
 } from '#shared/utils/creatureDetail'
-import { apiErrorMessage } from '#shared/utils/apiError'
+import { apiErrorMessage, apiErrorStatus } from '#shared/utils/apiError'
 
 // 生物詳情 · 死亡記錄（Epic #1 screen-6，issue #14）。
 //
@@ -32,14 +32,33 @@ const now = new Date()
 // 下面那個 .catch 不會把 401 一起吞掉——導向發生在 $api 自己的攔截器裡，比這裡早。
 const { $api } = useNuxtApp()
 
-const { data } = await useAsyncData<CreatureDetailResponse | null>(
+const {
+  data,
+  status: loadStatus,
+  refresh: reload,
+} = await useAsyncData<CreatureDetailResponse | null>(
   () => `creature:${creatureId.value}`,
   () =>
-    // 找不到（或不屬於自己）時不炸掉整頁：這一頁自己畫得出「找不到這隻生物」，
-    // 而且底部的 tab 列要留著，人才走得回去。
-    $api<CreatureDetailResponse>(`/api/creatures/${creatureId.value}`).catch(() => null),
+    $api<CreatureDetailResponse>(`/api/creatures/${creatureId.value}`).catch((cause) => {
+      // 找不到（或不屬於自己）時不炸掉整頁：這一頁自己畫得出「找不到這隻生物」，
+      // 而且底部的 tab 列要留著，人才走得回去。
+      if (apiErrorStatus(cause) === 404) {
+        return null
+      }
+
+      // 其餘的（500 / 離線 / function 掛掉）要讓 useAsyncData 進入 error 狀態。
+      // 原本這裡是 `.catch(() => null)` 一律吞掉，於是「拿不到資料」被講成
+      // 「找不到這隻生物」——兩件完全不同的事講成同一句（issue #132）。
+      throw cause
+    }),
   { watch: [creatureId] },
 )
+
+const {
+  failed: loadFailed,
+  retrying,
+  retry: retryLoad,
+} = useLoadFailure([loadStatus], reload)
 
 const creature = computed<CreatureDetailDto | null>(() => data.value?.creature ?? null)
 
@@ -202,8 +221,18 @@ async function save() {
       </NuxtLink>
     </header>
 
+    <!--
+      拿不到資料。要排在「找不到」之前：兩者的 creature 都是 null，
+      先問的那一個說了算。上方的返回入口在兩態下都留著，人走得回去。
+    -->
+    <LoadErrorState
+      v-if="loadFailed"
+      :retrying="retrying"
+      @retry="retryLoad"
+    />
+
     <p
-      v-if="!creature"
+      v-else-if="!creature"
       data-testid="creature-missing"
       class="mt-10 px-4 text-center text-muted"
     >

@@ -179,7 +179,8 @@ async function submit() {
       data.value = {
         tank: current.tank,
         page: {
-          // 連同目前的歷史一起交出去：補記舊資料時，「上次」不該被較舊的讀值蓋掉（#131）
+          // 補記舊資料時，「上次」不該被較舊的讀值蓋掉（#131）——
+          // 新舊由前次讀值自己帶的 measuredAt 決定，不必再交出一份歷史
           previousReadings: mergePreviousReadings(current.page.previousReadings, waterLog),
           waterLogs: [waterLog, ...current.page.waterLogs],
         },

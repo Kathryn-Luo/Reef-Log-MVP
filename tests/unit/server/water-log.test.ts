@@ -3,16 +3,17 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient } from '@prisma/client'
 import { WATER_LOG_HISTORY_LIMIT, WATER_PARAMETER_ORDER } from '../../../shared/utils/waterQuality'
+// parseWaterLogInput 與它的四個常數搬到了 shared（issue #124：記錄水質的表單要用
+// 同一份規則）。這些斷言一個字都沒改——它們就是「只搬移、不改行為」的證據。
 import {
   EXACT_ROUND_TRIP_DIGITS,
   MAX_WATER_READING,
   MEASURED_AT_EARLIEST_MS,
   MEASURED_AT_FUTURE_TOLERANCE_MS,
   WATER_READING_DECIMALS,
-  createWaterLog,
-  getWaterLogPage,
   parseWaterLogInput,
-} from '../../../server/utils/waterLog'
+} from '../../../shared/utils/waterLog'
+import { createWaterLog, getWaterLogPage } from '../../../server/utils/waterLog'
 
 function decimal(value: string) {
   return { toString: () => value }

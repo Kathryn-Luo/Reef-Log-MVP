@@ -5,11 +5,13 @@ import type { CreateTankResponse } from '#shared/types/tank'
 import type { CreateWaterLogResponse, WaterLogPageData } from '#shared/types/waterLog'
 import { parseCreatureStatusInput } from '#shared/utils/creatureDetail'
 import { parseTankInput } from '#shared/utils/tankForm'
+// parseWaterLogInput 與記錄水質的表單共用同一份規則，所以它住在 shared（issue #124）
+import { parseWaterLogInput } from '#shared/utils/waterLog'
 import { getCreatureDetail, moveCreature, updateCreatureStatus } from './creatureDetail'
 import { getTankCreatures } from './creatureList'
 import { getTankHome, listTankOptions } from './homeData'
 import { createTank } from './tankWrite'
-import { createWaterLog, getWaterLogPage, parseWaterLogInput } from './waterLog'
+import { createWaterLog, getWaterLogPage } from './waterLog'
 
 // 資料歸屬的伺服器邊界（issue #68）。
 //

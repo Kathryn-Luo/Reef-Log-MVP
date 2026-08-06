@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatRelativeTime, formatUpdatedAgo } from '#shared/utils/relativeTime'
+import { formatRelativeTime, formatTimeAgo, formatUpdatedAgo } from '#shared/utils/relativeTime'
 
 const NOW = new Date('2026-07-28T12:00:00.000Z')
 
@@ -50,5 +50,32 @@ describe('formatUpdatedAgo', () => {
 
   it('吃得下 Date 物件，結果與 ISO 字串相同', () => {
     expect(formatUpdatedAgo(new Date('2026-07-28T08:00:00.000Z'), NOW)).toBe('更新於 4 小時前')
+  })
+})
+
+// screen-3 歷史記錄每一列右側的「4 天前」。
+// 與 formatUpdatedAgo 的差別只有前綴：那一句在講「這份資料多新」，
+// 這一句貼在某一筆記錄旁邊，主詞已經在左邊了。
+describe('formatTimeAgo', () => {
+  // Then 每列顯示……相對時間（如「4 天前」）
+  it('4 天前顯示「4 天前」', () => {
+    expect(formatTimeAgo('2026-07-24T12:00:00.000Z', NOW)).toBe('4 天前')
+  })
+
+  it('未滿一天以小時計', () => {
+    expect(formatTimeAgo('2026-07-28T08:00:00.000Z', NOW)).toBe('4 小時前')
+  })
+
+  it('未滿一小時以分鐘計', () => {
+    expect(formatTimeAgo('2026-07-28T11:15:00.000Z', NOW)).toBe('45 分鐘前')
+  })
+
+  // 「0 分鐘前」不成話
+  it('未滿一分鐘顯示「剛剛」', () => {
+    expect(formatTimeAgo('2026-07-28T11:59:30.000Z', NOW)).toBe('剛剛')
+  })
+
+  it('吃得下 Date 物件，結果與 ISO 字串相同', () => {
+    expect(formatTimeAgo(new Date('2026-07-24T12:00:00.000Z'), NOW)).toBe('4 天前')
   })
 })

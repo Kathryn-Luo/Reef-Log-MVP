@@ -451,6 +451,9 @@ describe('POST /api/tanks/:id/water-logs 的歸屬與驗證', () => {
     ['負數', { measuredAt: '2026-08-05T21:30:00+08:00', readings: { KH: -1 } }],
     ['非有限值', { measuredAt: '2026-08-05T21:30:00+08:00', readings: { KH: 'NaN' } }],
     ['不存在的日期', { measuredAt: '2026-02-31T21:30:00+08:00', readings: { KH: 7.8 } }],
+    // issue #128：量測時間在未來（年份打錯成 2199）同樣止步於此。歷史依 measuredAt desc
+    // 排序，收下它就會有一筆永遠置頂、而且把趨勢圖 X 軸拉爛的記錄。
+    ['量測時間在未來', { measuredAt: '2199-01-01T00:00:00+08:00', readings: { KH: 7.8 } }],
   ])('已登入但內容不合法（%s）時回 400，且不建立任何資料', async (_label, body) => {
     const client = fakeClient()
     const result = await createOwnedWaterLog(client, USER_A, 'tank-a1', bodyThunk(body))

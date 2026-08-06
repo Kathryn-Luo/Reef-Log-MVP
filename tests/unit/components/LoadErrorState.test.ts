@@ -54,4 +54,20 @@ describe('LoadErrorState', () => {
 
     expect(state.get('[data-testid="load-error"]').attributes('role')).toBe('alert')
   })
+
+  // 錯誤區塊整頁取代掉內容的那幾頁（首頁、生物庫存、生物詳情），
+  // 這一刻它是頁面上唯一的標題
+  it('預設用 h1 當標題', async () => {
+    const state = await mountSuspended(LoadErrorState)
+
+    expect(state.get('[data-testid="load-error-title"]').element.tagName).toBe('H1')
+  })
+
+  // /log 的頁首「記錄水質」是常駐的 h1，這裡再給一個就是同一頁兩個 h1
+  it('titleTag 傳 p 時不再多產生一個 h1', async () => {
+    const state = await mountSuspended(LoadErrorState, { props: { titleTag: 'p' } })
+
+    expect(state.get('[data-testid="load-error-title"]').element.tagName).toBe('P')
+    expect(state.findAll('h1')).toHaveLength(0)
+  })
 })

@@ -654,6 +654,20 @@ describe('記錄水質 — 取資料失敗', () => {
     })
   })
 
+  // 這一頁的頁首「記錄水質」是常駐的 h1（錯誤時也留著，人才走得回去），
+  // 所以錯誤區塊的標題不能也是 h1——同一頁兩個 h1。該頁自己的空狀態早就是這樣做的。
+  it('載入失敗時整頁仍然只有一個 h1', async () => {
+    state.fail.tanks = true
+
+    const page = await open()
+
+    const headings = page.findAll('h1')
+
+    expect(headings).toHaveLength(1)
+    expect(headings[0]!.text()).toBe('記錄水質')
+    expect(page.get('[data-testid="load-error-title"]').text()).toBe('載入失敗')
+  })
+
   // 重試期間 status 會從 'error' 翻成 'pending'，「只看 error」的寫法會在那一段
   // 把錯誤區塊拆掉。這一頁還多一層：pending 會落到骨架，而骨架之後若請求再次失敗，
   // 中間那一拍就成了「什麼都沒說」。要嘛換成資料，要嘛留在錯誤畫面上。

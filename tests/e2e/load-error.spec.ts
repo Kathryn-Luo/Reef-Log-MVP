@@ -147,6 +147,9 @@ test('記錄水質的缸清單回 500 時顯示載入失敗，不是「還沒有
   await expect(page.getByTestId('tank-empty')).toHaveCount(0)
   await expect(page.getByTestId('tank-empty-action')).toHaveCount(0)
   await expect(page.locator('a[href="/tanks/new"]')).toHaveCount(0)
+
+  // 這一頁的頁首是常駐的 h1，錯誤區塊不能再多給一個（toHaveText 是嚴格單一比對）
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('記錄水質')
 })
 
 // 缸拿得到、記錄拿不到也一樣：不能假裝這個缸還沒量過水，

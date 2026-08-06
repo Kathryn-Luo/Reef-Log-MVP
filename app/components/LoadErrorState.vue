@@ -12,7 +12,15 @@
 withDefaults(defineProps<{
   /** 重試進行中。按鈕轉圈並按不下去，連按不會疊出好幾輪同樣的請求 */
   retrying?: boolean
-}>(), { retrying: false })
+  /**
+   * 「載入失敗」這行字要用哪個標籤。
+   *
+   * 預設 h1：首頁與生物庫存頁的錯誤區塊會整頁取代掉內容，那一刻它是頁面上唯一的標題。
+   * 但 /log 的頁首「記錄水質」是常駐的 h1，錯誤區塊再給一個就變成同一頁兩個 h1，
+   * 所以那一頁傳 'p'——那也正是該頁自己的空狀態早就在做的事。
+   */
+  titleTag?: 'h1' | 'p'
+}>(), { retrying: false, titleTag: 'h1' })
 
 defineEmits<{ retry: [] }>()
 </script>
@@ -33,12 +41,13 @@ defineEmits<{ retry: [] }>()
       />
     </div>
 
-    <h1
+    <component
+      :is="titleTag"
       data-testid="load-error-title"
       class="mt-6 text-2xl font-semibold"
     >
       載入失敗
-    </h1>
+    </component>
 
     <!--
       這段話要同時說兩件事：拿不到的是「這一次的連線」，以及「你的記錄還在」。

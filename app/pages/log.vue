@@ -247,6 +247,7 @@ async function submit() {
     <LoadErrorState
       v-if="loadFailed"
       :retrying="retrying"
+      title-tag="p"
       @retry="retryLoad"
     />
 

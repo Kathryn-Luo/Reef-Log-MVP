@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
-import LogPage from '../../../app/pages/log.vue'
 import TrendsPage from '../../../app/pages/trends.vue'
 import CreatureDetailPage from '../../../app/pages/creatures/[id].vue'
 import MaintenancePage from '../../../app/pages/maintenance.vue'
@@ -9,10 +8,11 @@ import MaintenancePage from '../../../app/pages/maintenance.vue'
 // Then 路由切換到該頁面 —— 五個 tab 的目的地都要有頁面可落地。
 //
 // 「生物」的目的地已由 issue #13 實作成生物庫存頁（標題「生物庫存」，需要 API 夾具），
-// 它的落地由 tests/unit/pages/creatures.test.ts 覆蓋，這裡只留下仍是骨架的三頁。
+// 它的落地由 tests/unit/pages/creatures.test.ts 覆蓋。「記錄」同樣已由 issue #124
+// 實作成記錄水質頁（標題「記錄水質」），由 tests/unit/pages/water-log.test.ts 覆蓋。
+// 這裡只留下仍是骨架的兩頁。
 describe('tab 目的地頁面', () => {
   it.each([
-    ['記錄', LogPage, '/log'],
     ['趨勢', TrendsPage, '/trends'],
     ['保養', MaintenancePage, '/maintenance'],
   ])('%s 頁面渲染同名標題', async (title, component, route) => {

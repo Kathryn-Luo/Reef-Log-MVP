@@ -245,18 +245,55 @@ export function buildReadingFields(previousReadings: WaterReadingDto[]): WaterRe
 }
 
 /**
+ * 該測項「最近一筆已存在的讀值」是什麼時候量的，取自本地那份歷史。
+ *
+ * 找不到就退回歷史裡最舊的那一刻：歷史有筆數上限（`WATER_LOG_HISTORY_LIMIT`），
+ * 前次讀值可能落在截斷之外。那時唯一確定的是「它比看得到的每一筆都舊」，
+ * 拿最舊的那一刻當界線因此不會把較新的讀值誤判成較舊的。
+ *
+ * 歷史整個是空的則回 -Infinity——一筆記錄都沒有的缸，剛存下的那一筆必然是最近的。
+ */
+function previousMeasuredAt(parameter: WaterParameterKey, logs: WaterLogDto[]): number {
+  const times = logs
+    .filter(log => log.readings.some(reading => reading.parameter === parameter))
+    .map(log => new Date(log.measuredAt).getTime())
+
+  if (times.length) {
+    return Math.max(...times)
+  }
+
+  const all = logs.map(log => new Date(log.measuredAt).getTime())
+
+  return all.length ? Math.min(...all) : Number.NEGATIVE_INFINITY
+}
+
+/**
  * 剛存下的那一筆成為下一次的「上次」。
  *
  * 這次沒填的測項維持原本的前次讀值——它們的「最近一筆已存在的讀值」沒有改變。
  * 不重抓一次 API 是同一個理由：POST 已經回傳了剛寫進去的內容（issue #124 第 3 節）。
+ *
+ * 「有填就覆蓋」則不夠（issue #131）：日期與時間欄可以自由填，補記上週的量測是這一頁
+ * 明確支援的用法，無條件覆蓋會讓那一欄的「上次」被較舊的讀值蓋掉。驗收條件要的是
+ * 該測項**最近一筆已存在**的讀值（#11 / #124），server 的 `getPreviousReadings` 也是
+ * 照 `measuredAt desc` 取第一筆，所以這裡覆蓋前先確認新記錄不早於既有的最新一筆。
+ *
+ * 「不早於」而不是「晚於」：同一刻的兩筆，後寫進去的那筆在 server 那側同樣會排到前面。
+ *
+ * 從未量過的測項沒有可比的對象，補記的那一筆就是它最近一筆已存在的讀值，照樣顯示。
  */
 export function mergePreviousReadings(
   previousReadings: WaterReadingDto[],
-  created: WaterReadingDto[],
+  created: WaterLogDto,
+  existingLogs: WaterLogDto[],
 ): WaterReadingDto[] {
+  const createdAt = new Date(created.measuredAt).getTime()
+
   return WATER_PARAMETER_ORDER.flatMap((parameter) => {
-    const reading = created.find(candidate => candidate.parameter === parameter)
-      ?? previousReadings.find(candidate => candidate.parameter === parameter)
+    const previous = previousReadings.find(candidate => candidate.parameter === parameter)
+    const fresh = created.readings.find(candidate => candidate.parameter === parameter)
+    const supersedes = fresh && (!previous || createdAt >= previousMeasuredAt(parameter, existingLogs))
+    const reading = supersedes ? fresh : previous
 
     return reading ? [{ parameter, value: reading.value }] : []
   })

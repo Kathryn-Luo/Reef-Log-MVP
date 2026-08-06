@@ -5,7 +5,7 @@ import LogPage from '../../../app/pages/log.vue'
 import { signedInUserSession } from '../support/session'
 import type { TankOption, WaterParameterKey, WaterReadingDto } from '#shared/types/home'
 import type { WaterLogDto } from '#shared/types/waterLog'
-import { parseWaterLogInput } from '#shared/utils/waterLog'
+import { defaultMeasuredAtInput, parseWaterLogInput } from '#shared/utils/waterLog'
 
 // 記錄水質頁（screen-3，issue #124 ＝ #11 的畫面那一半）。
 //
@@ -167,6 +167,11 @@ async function fill(page: Page, values: Partial<Record<WaterParameterKey, string
   for (const [parameter, value] of Object.entries(values)) {
     await page.get(`input[name="${parameter}"]`).setValue(value)
   }
+}
+
+/** 把日期欄改成某一天（時間欄維持預設的「現在」），用來模擬補記舊資料 */
+async function setMeasuredDate(page: Page, at: Date) {
+  await page.get('input[name="measuredDate"]').setValue(defaultMeasuredAtInput(at).date)
 }
 
 async function submit(page: Page) {
@@ -378,6 +383,57 @@ describe('記錄水質 — 儲存', () => {
     expect(state.post.calls).toBe(0)
     expect(page.get('[data-testid="water-log-error"]').text()).toContain('至少填寫一項讀值')
     expect(historyIds(page)).toEqual(['log-1', 'log-2', 'log-3'])
+  })
+})
+
+// 日期與時間欄可以自由填，所以「補記上週的量測」是這一頁明確支援的用法（issue #131）。
+// 「上次」要的是該測項**最近一筆已存在**的讀值——補記的那一筆比較舊時不該蓋掉它。
+describe('記錄水質 — 補記舊資料', () => {
+  beforeEach(() => {
+    // 昨天量的 KH 8.2 是目前的「上次」；Mg 從未量過
+    state.previousReadings = [{ parameter: 'KH', value: 8.2 }]
+    state.waterLogs = [log('log-1', 1, [{ parameter: 'KH', value: 8.2 }])]
+  })
+
+  // Given KH 欄顯示「上次 8.2」（來自昨天的量測）
+  // When  我把日期改成上週，KH 填 7.0，按下儲存
+  // Then  KH 欄的「上次」仍然是 8.2，不是 7.0
+  it('補記上週的量測後，「上次」仍是昨天那筆較新的讀值', async () => {
+    const page = await open()
+
+    await setMeasuredDate(page, new Date(Date.now() - 7 * DAY))
+    await fill(page, { KH: '7.0' })
+    await submit(page)
+
+    expect(state.post.calls).toBe(1)
+    expect(reading(page, 'KH').get('[data-testid="reading-previous"]').text()).toBe('上次 8.2')
+    // 記錄本身照樣存下來，只是依量測時間排在昨天那一筆下面
+    expect(historyIds(page)).toEqual(['log-1', 'log-new'])
+  })
+
+  // Given KH 欄顯示「上次 8.2」（來自昨天的量測）
+  // When  我用預設的今天，KH 填 7.0，按下儲存
+  // Then  KH 欄的「上次」變成 7.0
+  it('用預設的今天記錄時，「上次」換成剛存下的值', async () => {
+    const page = await open()
+
+    await fill(page, { KH: '7.0' })
+    await submit(page)
+
+    expect(reading(page, 'KH').get('[data-testid="reading-previous"]').text()).toBe('上次 7.0')
+  })
+
+  // Given Mg 欄沒有「上次」（該缸從未量過 Mg）
+  // When  我把日期改成上週，Mg 填 1300，按下儲存
+  // Then  Mg 欄出現「上次 1300」
+  it('從未量過的測項，補記的那一筆就是「上次」', async () => {
+    const page = await open()
+
+    await setMeasuredDate(page, new Date(Date.now() - 7 * DAY))
+    await fill(page, { MG: '1300' })
+    await submit(page)
+
+    expect(reading(page, 'MG').get('[data-testid="reading-previous"]').text()).toBe('上次 1300')
   })
 })
 

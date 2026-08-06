@@ -51,6 +51,11 @@ test('填寫三項後儲存，新記錄出現在歷史最上方', async ({ page 
 test('六項全空時擋下儲存', async ({ page }) => {
   await page.goto('/log')
 
+  // count() 只看當下、不會自動等待。載入樣態還在時歷史一列都還沒渲染，
+  // 這時取到的 before 會是 0，而稍後點擊儲存時 Playwright 會等到表單出現——
+  // 那一刻歷史已經到齊，比對就變成拿「載入中」的數字對「載入完」的畫面。
+  await expect(page.getByTestId('water-log-loading')).toHaveCount(0)
+
   const rows = page.getByTestId('history-row')
   const before = await rows.count()
 
@@ -63,6 +68,9 @@ test('六項全空時擋下儲存', async ({ page }) => {
 // Given 我在 KH 欄輸入非數字或負數 / When 欄位失焦 / Then 顯示該欄的驗證錯誤，且儲存被阻擋
 test('非法讀值在失焦時就標示出來，並擋下儲存', async ({ page }) => {
   await page.goto('/log')
+
+  // 同上：before 要在載入樣態消失之後才取，否則量到的是還沒渲染的 0
+  await expect(page.getByTestId('water-log-loading')).toHaveCount(0)
 
   const rows = page.getByTestId('history-row')
   const before = await rows.count()

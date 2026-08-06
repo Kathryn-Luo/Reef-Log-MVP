@@ -17,8 +17,11 @@ import {
   resolveTankCreatures,
   resolveTankHome,
   resolveTankOptions,
+  resolveTrendPage,
   resolveWaterLogPage,
 } from '../../../server/utils/authorization'
+import { INVALID_TREND_RANGE_MESSAGE } from '../../../shared/utils/trend'
+import { WATER_PARAMETER_ORDER } from '../../../shared/utils/waterQuality'
 
 // 資料歸屬的伺服器邊界（issue #68）。
 //
@@ -472,6 +475,99 @@ describe('POST /api/tanks/:id/water-logs 的歸屬與驗證', () => {
   })
 })
 
+// issue #126：趨勢圖的資料（screen-4）是這道邊界底下的第三種缸內容。
+//
+// 它比前兩支多一個東西要驗——查詢字串。`range` 不合法時回 400，但那一關要排在
+// 身分與歸屬**之後**：未登入的人拿到的答案該是 401，打別人缸的人拿到的該是 404，
+// 而不是一份「你的時間範圍寫錯了」的檢查報告（與 createOwnedWaterLog 同一個順序）。
+describe('GET /api/tanks/:id/trends 的歸屬檢查', () => {
+  /** 時間由呼叫端傳入，測試因此不必假時鐘（與 parseWaterLogInput 同一個作法） */
+  const NOW = new Date('2026-08-06T09:00:00.000Z')
+
+  it('A 打 B 的 tankId 回 404', async () => {
+    await expect(resolveTrendPage(fakeClient(), USER_A, 'tank-b1', '30d', NOW))
+      .resolves.toEqual({ ok: false, error: TANK_NOT_FOUND })
+  })
+
+  // 「回 404」與「沒讀到資料」是兩件事：先查完再決定要不要回答，B 的讀值就已經
+  // 離開資料庫了
+  it('被擋下來時完全沒有讀取 B 缸的水質記錄', async () => {
+    const client = fakeClient()
+
+    await resolveTrendPage(client, USER_A, 'tank-b1', '30d', NOW)
+
+    expectNoTankContentRead(client)
+  })
+
+  it('A 打自己的 tankId 拿到六組序列，資料取自自己的缸', async () => {
+    const client = fakeClient()
+    const result = await resolveTrendPage(client, USER_A, 'tank-a1', '30d', NOW)
+
+    expect(result).toMatchObject({ ok: true, value: { range: '30d' } })
+    expect(result.ok && result.value.series.map(series => series.parameter))
+      .toEqual([...WATER_PARAMETER_ORDER])
+    // 寫死 7.8 而不是 expect.any(Number)：A 缸的 KH 是 7.8、B 缸是 9.9（見 WATER_LOGS），
+    // 所以這一格同時釘住「取自 A 自己那筆 log」與「沒有拿到 B 的」
+    expect(result.ok && result.value.series[0]).toMatchObject({ parameter: 'KH', latest: 7.8 })
+    expect(client.waterLog.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ tankId: 'tank-a1' }) }),
+    )
+  })
+
+  it('自己已封存的缸同樣回 404', async () => {
+    await expect(resolveTrendPage(fakeClient(), USER_A, 'tank-a-archived', '30d', NOW))
+      .resolves.toEqual({ ok: false, error: TANK_NOT_FOUND })
+  })
+
+  it('未登入時回 401，而且一次查詢都不發出', async () => {
+    const client = fakeClient()
+
+    await expect(resolveTrendPage(client, null, 'tank-a1', '30d', NOW))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+    expectNoQuery(client)
+  })
+
+  it('已登入時，缺少 tankId 回 400', async () => {
+    await expect(resolveTrendPage(fakeClient(), USER_A, undefined, '30d', NOW))
+      .resolves.toEqual({ ok: false, error: MISSING_TANK_ID })
+  })
+
+  // Given range 沒有帶 / Then 視同 30d（畫面的預設值就是 30 天）
+  it('沒有帶 range 時採用 30d', async () => {
+    const result = await resolveTrendPage(fakeClient(), USER_A, 'tank-a1', undefined, NOW)
+
+    expect(result).toMatchObject({ ok: true, value: { range: '30d' } })
+  })
+
+  // Given range 是無法辨識的值 / Then 回 400「時間範圍不正確。」，不回半套資料，
+  // 也不默默退回 30d
+  it.each([
+    ['year', 'year'],
+    ['30', '30'],
+    ['空字串', ''],
+  ])('range 是 %s 時回 400「時間範圍不正確。」', async (_label, range) => {
+    const client = fakeClient()
+
+    await expect(resolveTrendPage(client, USER_A, 'tank-a1', range, NOW)).resolves.toEqual({
+      ok: false,
+      error: { statusCode: 400, statusMessage: expect.any(String), data: { message: INVALID_TREND_RANGE_MESSAGE } },
+    })
+    // 「不回半套資料」也包含不去讀它：range 檢查沒過就不該有任何一筆量測離開資料庫
+    expect(client.waterLog.findMany).not.toHaveBeenCalled()
+  })
+
+  // 身分與歸屬先於內容，與 createOwnedWaterLog 對稱
+  it('未登入且 range 也不合法時仍然回 401，不是 400', async () => {
+    await expect(resolveTrendPage(fakeClient(), null, 'tank-a1', 'year', NOW))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+  })
+
+  it('打別人的缸且 range 也不合法時回 404，不是 400', async () => {
+    await expect(resolveTrendPage(fakeClient(), USER_A, 'tank-b1', 'year', NOW))
+      .resolves.toEqual({ ok: false, error: TANK_NOT_FOUND })
+  })
+})
+
 // Given 我以 A 帳號登入
 // When  我對 GET /api/creatures/<B 的 creatureId> 發出請求
 // Then  回傳 404
@@ -787,6 +883,14 @@ describe('不存在的 id 與別人的 id 得到同一個答案', () => {
   it('水質歷史：不存在的 tankId 與 B 的 tankId 回傳完全相同的錯誤', async () => {
     const missing = await resolveWaterLogPage(fakeClient(), USER_A, 'tank-does-not-exist')
     const others = await resolveWaterLogPage(fakeClient(), USER_A, 'tank-b1')
+
+    expect(missing).toEqual(others)
+  })
+
+  it('趨勢：不存在的 tankId 與 B 的 tankId 回傳完全相同的錯誤', async () => {
+    const now = new Date('2026-08-06T09:00:00.000Z')
+    const missing = await resolveTrendPage(fakeClient(), USER_A, 'tank-does-not-exist', '30d', now)
+    const others = await resolveTrendPage(fakeClient(), USER_A, 'tank-b1', '30d', now)
 
     expect(missing).toEqual(others)
   })

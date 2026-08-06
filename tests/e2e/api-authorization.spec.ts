@@ -93,7 +93,9 @@ async function expectNoLeak(
 
   const parsed = JSON.parse(body) as Record<string, unknown> & { data?: { message?: string } }
 
-  for (const field of ['tank', 'tanks', 'creature', 'creatures', 'waterLogs', 'name']) {
+  // `series` 是趨勢圖那一支的承載欄位（#126）：六組序列連同區間一起回去，
+  // 被拒絕的回應裡出現它就代表整段資料已經被算出來並送了出來
+  for (const field of ['tank', 'tanks', 'creature', 'creatures', 'waterLogs', 'series', 'name']) {
     expect(parsed, `404 的回應體不該帶著 ${field} 欄位`).not.toHaveProperty(field)
   }
 
@@ -138,6 +140,26 @@ test.describe('別人的 id', () => {
     const response = await a.request.get(`/api/tanks/${b.tankId}/creatures`)
 
     await expectNoLeak(response, '找不到這個缸。', [b.tankName, b.creatureName])
+  })
+
+  // Given 我以 A 帳號登入、B 有一個缸
+  // When  我對 GET /api/tanks/<B 的 tankId>/trends 發出請求
+  // Then  回傳 404，且回應裡沒有 B 的缸名，也沒有任何一組序列
+  //
+  // 趨勢圖回的是 B 親手記錄的數值序列（#126）。狀態碼對了但 series 已經算出來送了出去，
+  // 是這條路徑最糟的失敗方式，所以走一遍真的 HTTP 把回應體整個看過。
+  test('A 打 B 的 tankId /trends 得到 404，回應裡沒有 B 的資料', async () => {
+    const response = await a.request.get(`/api/tanks/${b.tankId}/trends?range=30d`)
+
+    await expectNoLeak(response, '找不到這個缸。', [b.tankName, b.creatureName])
+  })
+
+  // range 不合法時仍然是 404，不是 400：先回 400 等於承認「這個缸是存在的、
+  // 只是你參數寫錯了」，歸屬因此要排在內容檢查之前
+  test('A 打 B 的 tankId /trends 時，連 range 寫錯也還是 404', async () => {
+    const response = await a.request.get(`/api/tanks/${b.tankId}/trends?range=year`)
+
+    expect(response.status()).toBe(404)
   })
 
   // Given 我以 A 帳號登入
@@ -226,6 +248,7 @@ test.describe('別人的 id', () => {
     const pairs = [
       [`/api/tanks/${b.tankId}/home`, '/api/tanks/tank-does-not-exist/home'],
       [`/api/tanks/${b.tankId}/creatures`, '/api/tanks/tank-does-not-exist/creatures'],
+      [`/api/tanks/${b.tankId}/trends`, '/api/tanks/tank-does-not-exist/trends'],
       [`/api/creatures/${b.creatureId}`, '/api/creatures/creature-does-not-exist'],
     ]
 
@@ -243,7 +266,7 @@ test.describe('別人的 id', () => {
 // Then  回傳 401，不回傳任何資料
 test.describe('未登入', () => {
   // 全新的 context，一張 cookie 都沒有——不是「過期」，是從來沒登入過
-  test('七支 API 一律回 401', async ({ browser }) => {
+  test('八支 API 一律回 401', async ({ browser }) => {
     const context = await browser.newContext()
 
     const responses = await Promise.all([
@@ -251,12 +274,14 @@ test.describe('未登入', () => {
       context.request.post('/api/tanks', { data: { name: '沒登入也想建缸' } }),
       context.request.get('/api/tanks/any-tank-id/home'),
       context.request.get('/api/tanks/any-tank-id/creatures'),
+      // range 刻意寫錯：未登入的答案是 401，不能被一個前置的參數檢查蓋成 400（#126）
+      context.request.get('/api/tanks/any-tank-id/trends?range=year'),
       context.request.get('/api/creatures/any-creature-id'),
       context.request.patch('/api/creatures/any-creature-id', { data: { status: 'ALIVE' } }),
       context.request.patch('/api/creatures/any-creature-id/move', { data: { tankId: 'any-tank-id' } }),
     ])
 
-    expect(responses.map(response => response.status())).toEqual([401, 401, 401, 401, 401, 401, 401])
+    expect(responses.map(response => response.status())).toEqual([401, 401, 401, 401, 401, 401, 401, 401])
 
     await context.close()
   })

@@ -53,7 +53,11 @@ const PHOTO_PLACEHOLDER = 'repeating-linear-gradient(135deg, rgba(148,163,184,0.
 // $api 而不是裸 $fetch：session 過期時要被帶去登入頁，而不是停在一頁空資料上（#67）
 const { $api } = useNuxtApp()
 
-const { data: tankList } = await useAsyncData('creatures:tanks', () =>
+const {
+  data: tankList,
+  status: tanksStatus,
+  refresh: refreshTanks,
+} = await useAsyncData('creatures:tanks', () =>
   $api<{ tanks: TankOption[] }>('/api/tanks'),
 )
 
@@ -62,7 +66,11 @@ const tanks = computed(() => tankList.value?.tanks ?? [])
 // 未指定時看的是清單第一個，也就是 schema 定義的「預設缸」
 const currentTank = computed(() => tanks.value[0] ?? null)
 
-const { data: inventory } = await useAsyncData<TankCreaturesData | null>(
+const {
+  data: inventory,
+  status: inventoryStatus,
+  refresh: refreshInventory,
+} = await useAsyncData<TankCreaturesData | null>(
   'creatures:list',
   () => {
     const tankId = currentTank.value?.id
@@ -71,6 +79,20 @@ const { data: inventory } = await useAsyncData<TankCreaturesData | null>(
   },
   { watch: [currentTank] },
 )
+
+// issue #132：請求失敗時 data 是 null，與「成功但沒有缸」長得一模一樣。
+// 少了這一態，「拿不到資料」會被畫成「你沒有資料」，而那個空狀態的唯一出口
+// 是「建立我的第一個缸」。401 不在此列——那由 $api 的攔截器帶去登入頁（#67）。
+//
+// 先缸清單、後生物清單：缸清單重打成功時 currentTank 才定案（理由同首頁）。
+const {
+  failed: loadFailed,
+  retrying,
+  retry: retryLoad,
+} = useLoadFailure([tanksStatus, inventoryStatus], async () => {
+  await refreshTanks()
+  await refreshInventory()
+})
 
 const creatures = computed(() => inventory.value?.creatures ?? [])
 
@@ -96,8 +118,15 @@ const rows = computed(() =>
 
 <template>
   <div class="mx-auto max-w-2xl">
+    <!-- 拿不到資料。要排在空狀態之前：兩者的 data 都是 null，先問的那一個說了算 -->
+    <LoadErrorState
+      v-if="loadFailed"
+      :retrying="retrying"
+      @retry="retryLoad"
+    />
+
     <div
-      v-if="!currentTank"
+      v-else-if="!currentTank"
       data-testid="tank-empty"
       class="px-4 py-12 text-center"
     >

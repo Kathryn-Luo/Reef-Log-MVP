@@ -15,3 +15,24 @@ export function apiErrorMessage(cause: unknown, fallback: string): string {
 
   return typeof message === 'string' && message.trim() ? message : fallback
 }
+
+/**
+ * 這次失敗的 HTTP 狀態碼，取不到時回 null（issue #132）。
+ *
+ * 「這一筆不存在」（404）與「拿不到資料」（500 / 離線 / function 掛掉）要分開處理，
+ * 而分得開的前提是看得到狀態碼。ofetch 把它掛在 FetchError 的 `statusCode` 上，
+ * 同一個值也在 `response.status`；連線根本沒送出去時兩者都沒有，那就是 null——
+ * 而 null 屬於「說不出原因的失敗」那一邊，不是 404。
+ */
+export function apiErrorStatus(cause: unknown): number | null {
+  const { statusCode, response } = (cause ?? {}) as {
+    statusCode?: unknown
+    response?: { status?: unknown }
+  }
+
+  if (typeof statusCode === 'number') {
+    return statusCode
+  }
+
+  return typeof response?.status === 'number' ? response.status : null
+}

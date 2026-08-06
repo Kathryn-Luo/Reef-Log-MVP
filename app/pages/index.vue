@@ -25,7 +25,11 @@ const now = new Date()
 // $api 而不是裸 $fetch：session 過期時要被帶去登入頁，而不是停在一頁空資料上（#67）
 const { $api } = useNuxtApp()
 
-const { data: tankList } = await useAsyncData('home:tanks', () =>
+const {
+  data: tankList,
+  status: tanksStatus,
+  refresh: refreshTanks,
+} = await useAsyncData('home:tanks', () =>
   $api<{ tanks: TankOption[] }>('/api/tanks'),
 )
 
@@ -43,7 +47,11 @@ const currentTankId = computed(() =>
 )
 const currentTank = computed(() => tanks.value.find(tank => tank.id === currentTankId.value) ?? null)
 
-const { data: home } = await useAsyncData<TankHomeData | null>(
+const {
+  data: home,
+  status: homeStatus,
+  refresh: refreshHome,
+} = await useAsyncData<TankHomeData | null>(
   'home:tank-data',
   () => {
     const tankId = currentTankId.value
@@ -52,6 +60,23 @@ const { data: home } = await useAsyncData<TankHomeData | null>(
   },
   { watch: [currentTankId] },
 )
+
+// issue #132：請求失敗時 data 是 null，與「成功但沒有缸」長得一模一樣。
+// 少了這一態，「拿不到資料」會被畫成「你沒有資料」，而那個空狀態的唯一出口
+// 是「建立我的第一個缸」——照著按下去就多一個不需要的缸。
+//
+// 401 不在此列：那條路由由 $api 的攔截器帶去登入頁（#67），比這裡更早。
+//
+// 先缸清單、後缸資料而不是並行：缸清單重打成功時 currentTankId 才定案，
+// 並行的話缸資料那一支會拿著舊的（失敗時是 null）id 出發。
+const {
+  failed: loadFailed,
+  retrying,
+  retry: retryLoad,
+} = useLoadFailure([tanksStatus, homeStatus], async () => {
+  await refreshTanks()
+  await refreshHome()
+})
 
 const creatures = computed(() => home.value?.creatures ?? [])
 const counts = computed(() => countCreaturesByCategory(creatures.value))
@@ -98,8 +123,15 @@ const cards = computed(() =>
 
 <template>
   <div class="mx-auto max-w-2xl">
+    <!-- 拿不到資料。要排在空狀態之前：兩者的 data 都是 null，先問的那一個說了算 -->
+    <LoadErrorState
+      v-if="loadFailed"
+      :retrying="retrying"
+      @retry="retryLoad"
+    />
+
     <div
-      v-if="!currentTank"
+      v-else-if="!currentTank"
       data-testid="tank-empty"
       class="px-4 py-12 text-center"
     >

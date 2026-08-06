@@ -1,6 +1,6 @@
 import type { PrismaClient, WaterLog, WaterReading } from '@prisma/client'
-import type { CreateWaterLogInput, WaterLogDto, WaterLogPageData } from '#shared/types/waterLog'
-import type { WaterParameterKey, WaterReadingDto } from '#shared/types/home'
+import type { CreateWaterLogInput, PreviousReadingDto, WaterLogDto, WaterLogPageData } from '#shared/types/waterLog'
+import type { WaterParameterKey } from '#shared/types/home'
 import { WATER_LOG_HISTORY_LIMIT, WATER_PARAMETER_ORDER } from '#shared/utils/waterQuality'
 
 // 水質記錄的資料層（issue #121，畫面是 #11 的 screen-3）。
@@ -43,16 +43,31 @@ function toDto(log: WaterLog & { readings: WaterReading[] }): WaterLogDto {
  *
  * 從未量測過的測項不會出現在回傳值裡：畫面因此分得出「還沒量過」（不顯示「上次」）
  * 與「量過但這次沒填」。
+ *
+ * `include: { waterLog: true }` 是為了把**量測時間**一起帶回去：畫面在儲存成功後要判斷
+ * 剛存下的那一筆是不是比這一筆更近（補記舊資料時不該覆蓋較新的「上次」，issue #131）。
+ * 少了它，前端只能從 `waterLogs` 反推，而那份清單有筆數上限——正好就是這支函式獨立查
+ * 的原因，反推回去等於把同一個坑再踩一次。
+ *
+ * `createdAt` 是次要排序鍵。時間欄是分鐘精度，同一分鐘內連存兩筆做得到，而只排
+ * `measuredAt` 的話相同時間的兩列由資料庫決定回哪一個，沒有保證。畫面那側拿
+ * 「不早於就覆蓋」當界線（`mergePreviousReadings`），所以這裡要明確地讓後寫進去的
+ * 那筆排在前面——否則樂觀更新顯示新值，重新整理後可能翻回舊值。
  */
-async function getPreviousReadings(client: PrismaClient, tankId: string): Promise<WaterReadingDto[]> {
+async function getPreviousReadings(client: PrismaClient, tankId: string): Promise<PreviousReadingDto[]> {
   const latest = await Promise.all(WATER_PARAMETER_ORDER.map(parameter =>
     client.waterReading.findFirst({
       where: { parameter, waterLog: { tankId } },
-      orderBy: { waterLog: { measuredAt: 'desc' } },
+      orderBy: [{ waterLog: { measuredAt: 'desc' } }, { waterLog: { createdAt: 'desc' } }],
+      include: { waterLog: true },
     })))
 
   return latest.flatMap((reading, index) => reading
-    ? [{ parameter: WATER_PARAMETER_ORDER[index]!, value: toNumber(reading.value) }]
+    ? [{
+        parameter: WATER_PARAMETER_ORDER[index]!,
+        value: toNumber(reading.value),
+        measuredAt: reading.waterLog.measuredAt.toISOString(),
+      }]
     : [])
 }
 
@@ -61,7 +76,9 @@ export async function getWaterLogPage(client: PrismaClient, tankId: string): Pro
   const [logs, previousReadings] = await Promise.all([
     client.waterLog.findMany({
       where: { tankId },
-      orderBy: { measuredAt: 'desc' },
+      // 次要鍵與前次讀值那邊同一個規則：同一刻的兩筆由 createdAt 決定先後。
+      // 畫面把剛存下的那一筆插到歷史最上方，重新整理後的順序要跟它一致。
+      orderBy: [{ measuredAt: 'desc' }, { createdAt: 'desc' }],
       // 上限的理由與「為什麼前次讀值要獨立查」寫在 WATER_LOG_HISTORY_LIMIT 上
       take: WATER_LOG_HISTORY_LIMIT,
       include: { readings: true },

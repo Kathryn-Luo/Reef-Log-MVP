@@ -61,6 +61,41 @@ test('填寫三項後儲存，新記錄出現在歷史最上方', async ({ page 
     .getByTestId('reading-previous')).toHaveText('上次 7.8')
 })
 
+const DAY = 24 * 60 * 60 * 1000
+
+/** `<input type="date">` 吃的 `YYYY-MM-DD`，取當地的牆上日期 */
+function dateInputValue(at: Date) {
+  const pad = (value: number) => String(value).padStart(2, '0')
+
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`
+}
+
+// Given KH 欄顯示「上次 <值>」（來自最近一次量測）
+// When  我把日期改成上週，KH 填一個不同的值，按下儲存
+// Then  KH 欄的「上次」不變——補記的那一筆不是「最近一筆已存在的讀值」（issue #131）
+//
+// 只影響尚未重新整理的畫面，unit 覆蓋得完整（issue #131 的判斷），這裡補一條主線：
+// 樂觀更新用的是本地那份歷史，真的走一次「填 → 存 → 回寫」才看得到它串對了沒有。
+test('補記上週的量測，不會把 KH 的「上次」蓋成較舊的讀值', async ({ page }) => {
+  await page.goto('/log')
+
+  await expectLoaded(page)
+
+  const rows = page.getByTestId('history-row')
+  const before = await rows.count()
+
+  const kh = page.getByTestId('reading-field').filter({ hasText: 'KH' }).first()
+  const previous = await kh.getByTestId('reading-previous').textContent()
+
+  await page.locator('input[name="measuredDate"]').fill(dateInputValue(new Date(Date.now() - 7 * DAY)))
+  await page.locator('input[name="KH"]').fill('6.5')
+  await page.getByTestId('water-log-submit').click()
+
+  // 記錄本身存下來了（歷史多一列），但「上次」仍然是那筆較新的量測
+  await expect(rows).toHaveCount(before + 1)
+  await expect(kh.getByTestId('reading-previous')).toHaveText(previous!)
+})
+
 // Given 我六項全部留空 / When 我點擊「儲存這筆記錄」
 // Then 顯示錯誤提示「至少填寫一項讀值」，不建立任何記錄
 test('六項全空時擋下儲存', async ({ page }) => {

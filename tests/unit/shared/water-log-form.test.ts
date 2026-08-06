@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { WaterLogDto } from '#shared/types/waterLog'
-import type { WaterReadingDto } from '#shared/types/home'
+import type { PreviousReadingDto, WaterLogDto } from '#shared/types/waterLog'
+import type { WaterParameterKey, WaterReadingDto } from '#shared/types/home'
 import {
   buildReadingFields,
   buildWaterLogRows,
@@ -141,15 +141,124 @@ describe('buildReadingFields — 六個元素輸入欄', () => {
 })
 
 describe('mergePreviousReadings — 剛存下的那一筆成為下一次的「上次」', () => {
+  const DEC_1 = new Date(2025, 11, 1, 21, 0)
+  const DEC_15 = new Date(2025, 11, 15, 21, 0)
+  const LAST_WEEK = new Date(2026, 6, 1, 21, 0)
+  const YESTERDAY = new Date(2026, 6, 7, 21, 0)
+  const TODAY = new Date(2026, 6, 8, 21, 30)
+
+  function log(id: string, at: Date, readings: WaterReadingDto[]): WaterLogDto {
+    return { id, measuredAt: at.toISOString(), readings }
+  }
+
+  function previous(parameter: WaterParameterKey, value: number, at: Date): PreviousReadingDto {
+    return { parameter, value, measuredAt: at.toISOString() }
+  }
+
+  /** 昨天量的 KH 8.2 與 Ca 415 是目前的「上次」 */
+  const PREVIOUS: PreviousReadingDto[] = [previous('KH', 8.2, YESTERDAY), previous('CA', 415, YESTERDAY)]
+
   it('有填的測項換成新值，沒填的維持原本的前次讀值', () => {
     expect(mergePreviousReadings(
-      [{ parameter: 'KH', value: 8 }, { parameter: 'CA', value: 415 }],
-      [{ parameter: 'KH', value: 7.8 }, { parameter: 'MG', value: 1180 }],
+      PREVIOUS,
+      log('log-new', TODAY, [{ parameter: 'KH', value: 7.8 }, { parameter: 'MG', value: 1180 }]),
     )).toEqual([
-      { parameter: 'KH', value: 7.8 },
-      { parameter: 'CA', value: 415 },
-      { parameter: 'MG', value: 1180 },
+      previous('KH', 7.8, TODAY),
+      previous('CA', 415, YESTERDAY),
+      previous('MG', 1180, TODAY),
     ])
+  })
+
+  // Given KH 的「上次」是 8.2（昨天量的）
+  // When  我把日期改成上週，KH 填 7.0，按下儲存
+  // Then  KH 的「上次」仍然是 8.2
+  it('補記上週的量測，不覆蓋比它新的「上次」', () => {
+    expect(mergePreviousReadings(
+      PREVIOUS,
+      log('log-new', LAST_WEEK, [{ parameter: 'KH', value: 7 }]),
+    )).toEqual([
+      previous('KH', 8.2, YESTERDAY),
+      previous('CA', 415, YESTERDAY),
+    ])
+  })
+
+  // Given KH 的「上次」是 8.2（昨天量的）
+  // When  我用預設的今天，KH 填 7.0，按下儲存
+  // Then  KH 的「上次」變成 7.0
+  it('用今天的日期記錄時，「上次」換成剛存下的值', () => {
+    expect(mergePreviousReadings(
+      PREVIOUS,
+      log('log-new', TODAY, [{ parameter: 'KH', value: 7 }]),
+    )).toEqual([
+      previous('KH', 7, TODAY),
+      previous('CA', 415, YESTERDAY),
+    ])
+  })
+
+  // Given Mg 沒有「上次」（該缸從未量過 Mg）
+  // When  我把日期改成上週，Mg 填 1300，按下儲存
+  // Then  Mg 出現「上次 1300」——從未量過的測項，補記的那一筆就是最近一筆已存在的讀值
+  it('從未量過的測項，補記舊資料也會成為「上次」', () => {
+    expect(mergePreviousReadings(
+      PREVIOUS,
+      log('log-new', LAST_WEEK, [{ parameter: 'MG', value: 1300 }]),
+    )).toEqual([
+      previous('KH', 8.2, YESTERDAY),
+      previous('CA', 415, YESTERDAY),
+      previous('MG', 1300, LAST_WEEK),
+    ])
+  })
+
+  // 界線取「不早於」而不是「晚於」：同一刻補記的那一筆是後寫進去的，
+  // 拿它當「上次」與 server 依 measuredAt desc 取第一筆的結果一致。
+  it('與既有那一筆同一刻時，換成剛存下的值', () => {
+    expect(mergePreviousReadings(
+      PREVIOUS,
+      log('log-new', YESTERDAY, [{ parameter: 'KH', value: 7 }]),
+    )).toEqual([
+      previous('KH', 7, YESTERDAY),
+      previous('CA', 415, YESTERDAY),
+    ])
+  })
+
+  /**
+   * 前次讀值落在歷史的筆數上限之外（`WATER_LOG_HISTORY_LIMIT`）。
+   *
+   * 這是 PR #134 的 Codex review 指出的那個缺口：早先的版本從本地那份歷史反推前次讀值
+   * 的時間，查不到就退回「歷史最舊的那一刻」，於是下面第二條會判錯。
+   * previousReadings 自己帶著 measuredAt 之後，兩條都只是一般的比大小。
+   */
+  describe('前次讀值落在歷史的筆數上限之外', () => {
+    // 看得到的歷史從 7/1 才開始，KH 最後一筆是去年 12/1
+    const OUT_OF_WINDOW: PreviousReadingDto[] = [previous('KH', 8.2, DEC_1), previous('CA', 415, YESTERDAY)]
+
+    it('補記的那一筆比它新時，換成剛存下的值', () => {
+      expect(mergePreviousReadings(
+        OUT_OF_WINDOW,
+        log('log-new', DEC_15, [{ parameter: 'KH', value: 7 }]),
+      )).toEqual([
+        previous('KH', 7, DEC_15),
+        previous('CA', 415, YESTERDAY),
+      ])
+    })
+
+    it('補記的那一筆比它舊時，保留原本的「上次」', () => {
+      expect(mergePreviousReadings(
+        OUT_OF_WINDOW,
+        log('log-new', new Date(2025, 10, 1, 21, 0), [{ parameter: 'KH', value: 7 }]),
+      )).toEqual([
+        previous('KH', 8.2, DEC_1),
+        previous('CA', 415, YESTERDAY),
+      ])
+    })
+  })
+
+  // 一筆記錄都還沒有的缸：第一筆不管填的是哪一天，都是「最近一筆已存在的讀值」
+  it('一項都還沒量過時，剛存下的那一筆就是「上次」', () => {
+    expect(mergePreviousReadings(
+      [],
+      log('log-new', LAST_WEEK, [{ parameter: 'KH', value: 7 }]),
+    )).toEqual([previous('KH', 7, LAST_WEEK)])
   })
 })
 

@@ -4,8 +4,8 @@ import { enableAutoUnmount, flushPromises } from '@vue/test-utils'
 import LogPage from '../../../app/pages/log.vue'
 import { signedInUserSession } from '../support/session'
 import type { TankOption, WaterParameterKey, WaterReadingDto } from '#shared/types/home'
-import type { WaterLogDto } from '#shared/types/waterLog'
-import { parseWaterLogInput } from '#shared/utils/waterLog'
+import type { PreviousReadingDto, WaterLogDto } from '#shared/types/waterLog'
+import { defaultMeasuredAtInput, parseWaterLogInput } from '#shared/utils/waterLog'
 
 // 記錄水質頁（screen-3，issue #124 ＝ #11 的畫面那一半）。
 //
@@ -34,13 +34,23 @@ function log(id: string, daysAgo: number, readings: WaterReadingDto[]): WaterLog
   return { id, measuredAt: new Date(Date.now() - daysAgo * DAY).toISOString(), readings }
 }
 
-const PREVIOUS_READINGS: WaterReadingDto[] = [
-  { parameter: 'KH', value: 8 },
-  { parameter: 'CA', value: 415 },
-  { parameter: 'MG', value: 1240 },
-  { parameter: 'NO3', value: 12 },
-  { parameter: 'PO4', value: 0.04 },
-  { parameter: 'SALINITY', value: 1.026 },
+/**
+ * 前次讀值帶著自己的量測時間（`PreviousReadingDto`）。
+ *
+ * 畫面靠這個時間判斷剛存下的那一筆該不該覆蓋「上次」——補記舊資料時不該蓋掉較新的
+ * （issue #131）。夾具預設一天前，與 log('log-1', 1, …) 那一筆同一刻。
+ */
+function previous(parameter: WaterParameterKey, value: number, daysAgo = 1): PreviousReadingDto {
+  return { parameter, value, measuredAt: new Date(Date.now() - daysAgo * DAY).toISOString() }
+}
+
+const PREVIOUS_READINGS: PreviousReadingDto[] = [
+  previous('KH', 8),
+  previous('CA', 415),
+  previous('MG', 1240),
+  previous('NO3', 12),
+  previous('PO4', 0.04),
+  previous('SALINITY', 1.026),
 ]
 
 const WATER_LOGS: WaterLogDto[] = [
@@ -61,7 +71,7 @@ function gate() {
 
 const state = {
   tanks: [] as TankOption[],
-  previousReadings: [] as WaterReadingDto[],
+  previousReadings: [] as PreviousReadingDto[],
   waterLogs: [] as WaterLogDto[],
   hold: { get: null as ReturnType<typeof gate> | null, post: null as ReturnType<typeof gate> | null },
   // issue #132：兩支 GET 各自可以被打成 500，用來分辨「拿不到資料」與「你沒有資料」
@@ -187,6 +197,11 @@ async function fill(page: Page, values: Partial<Record<WaterParameterKey, string
   }
 }
 
+/** 把日期欄改成某一天（時間欄維持預設的「現在」），用來模擬補記舊資料 */
+async function setMeasuredDate(page: Page, at: Date) {
+  await page.get('input[name="measuredDate"]').setValue(defaultMeasuredAtInput(at).date)
+}
+
 async function submit(page: Page) {
   await page.get('[data-testid="water-log-submit"]').trigger('click')
   await settle()
@@ -270,7 +285,7 @@ describe('記錄水質 — 六個元素輸入欄', () => {
   // 也就是 previousReadings，而不是從有筆數上限的歷史清單推導
   it('「上次」讀的是 previousReadings，不是歷史清單', async () => {
     // 歷史裡的 KH 是 8.0，前次讀值另外給 7.2：兩者不同才分得出畫面讀的是哪一份
-    state.previousReadings = [{ parameter: 'KH', value: 7.2 }]
+    state.previousReadings = [previous('KH', 7.2)]
 
     const page = await open()
 
@@ -280,7 +295,7 @@ describe('記錄水質 — 六個元素輸入欄', () => {
   // Given 該缸該測項從未被記錄過 / When 該欄渲染
   // Then 右側不顯示「上次」，只顯示單位
   it('從未被記錄過的測項不顯示「上次」，單位仍在', async () => {
-    state.previousReadings = [{ parameter: 'KH', value: 8 }]
+    state.previousReadings = [previous('KH', 8)]
 
     const page = await open()
 
@@ -396,6 +411,77 @@ describe('記錄水質 — 儲存', () => {
     expect(state.post.calls).toBe(0)
     expect(page.get('[data-testid="water-log-error"]').text()).toContain('至少填寫一項讀值')
     expect(historyIds(page)).toEqual(['log-1', 'log-2', 'log-3'])
+  })
+})
+
+// 日期與時間欄可以自由填，所以「補記上週的量測」是這一頁明確支援的用法（issue #131）。
+// 「上次」要的是該測項**最近一筆已存在**的讀值——補記的那一筆比較舊時不該蓋掉它。
+describe('記錄水質 — 補記舊資料', () => {
+  beforeEach(() => {
+    // 昨天量的 KH 8.2 是目前的「上次」；Mg 從未量過
+    state.previousReadings = [previous('KH', 8.2)]
+    state.waterLogs = [log('log-1', 1, [{ parameter: 'KH', value: 8.2 }])]
+  })
+
+  // Given KH 欄顯示「上次 8.2」（來自昨天的量測）
+  // When  我把日期改成上週，KH 填 7.0，按下儲存
+  // Then  KH 欄的「上次」仍然是 8.2，不是 7.0
+  it('補記上週的量測後，「上次」仍是昨天那筆較新的讀值', async () => {
+    const page = await open()
+
+    await setMeasuredDate(page, new Date(Date.now() - 7 * DAY))
+    await fill(page, { KH: '7.0' })
+    await submit(page)
+
+    expect(state.post.calls).toBe(1)
+    expect(reading(page, 'KH').get('[data-testid="reading-previous"]').text()).toBe('上次 8.2')
+    // 記錄本身照樣存下來，只是依量測時間排在昨天那一筆下面
+    expect(historyIds(page)).toEqual(['log-1', 'log-new'])
+  })
+
+  // Given KH 欄顯示「上次 8.2」（來自昨天的量測）
+  // When  我用預設的今天，KH 填 7.0，按下儲存
+  // Then  KH 欄的「上次」變成 7.0
+  it('用預設的今天記錄時，「上次」換成剛存下的值', async () => {
+    const page = await open()
+
+    await fill(page, { KH: '7.0' })
+    await submit(page)
+
+    expect(reading(page, 'KH').get('[data-testid="reading-previous"]').text()).toBe('上次 7.0')
+  })
+
+  // Given Mg 欄沒有「上次」（該缸從未量過 Mg）
+  // When  我把日期改成上週，Mg 填 1300，按下儲存
+  // Then  Mg 欄出現「上次 1300」
+  it('從未量過的測項，補記的那一筆就是「上次」', async () => {
+    const page = await open()
+
+    await setMeasuredDate(page, new Date(Date.now() - 7 * DAY))
+    await fill(page, { MG: '1300' })
+    await submit(page)
+
+    expect(reading(page, 'MG').get('[data-testid="reading-previous"]').text()).toBe('上次 1300')
+  })
+
+  // Given KH 的「上次」量於 200 天前，而歷史（有筆數上限）最舊的一筆只到 30 天前
+  // When  我補記 100 天前的 KH
+  // Then  KH 欄的「上次」換成剛補記的那一筆——它才是最近一筆已存在的讀值
+  //
+  // 這是 PR #134 的 Codex review 指出的缺口：早先的版本從本地那份歷史反推前次讀值的
+  // 時間，查不到就退回「歷史最舊的那一刻」，於是這一筆會被誤判成更舊的而不予覆蓋。
+  // previousReadings 自己帶著 measuredAt（PreviousReadingDto）之後就只是比大小。
+  it('前次讀值落在歷史的筆數上限之外時，仍然比得出新舊', async () => {
+    state.previousReadings = [previous('KH', 8.2, 200)]
+    state.waterLogs = [log('log-1', 30, [{ parameter: 'CA', value: 415 }])]
+
+    const page = await open()
+
+    await setMeasuredDate(page, new Date(Date.now() - 100 * DAY))
+    await fill(page, { KH: '7.0' })
+    await submit(page)
+
+    expect(reading(page, 'KH').get('[data-testid="reading-previous"]').text()).toBe('上次 7.0')
   })
 })
 

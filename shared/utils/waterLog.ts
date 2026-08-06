@@ -1,5 +1,5 @@
 import type { WaterParameterKey, WaterReadingDto } from '../types/home'
-import type { CreateWaterLogInput, WaterLogDto, WaterLogRequest } from '../types/waterLog'
+import type { CreateWaterLogInput, PreviousReadingDto, WaterLogDto, WaterLogRequest } from '../types/waterLog'
 import {
   WATER_PARAMETER_FULL_LABELS,
   WATER_PARAMETER_LABELS,
@@ -249,16 +249,38 @@ export function buildReadingFields(previousReadings: WaterReadingDto[]): WaterRe
  *
  * 這次沒填的測項維持原本的前次讀值——它們的「最近一筆已存在的讀值」沒有改變。
  * 不重抓一次 API 是同一個理由：POST 已經回傳了剛寫進去的內容（issue #124 第 3 節）。
+ *
+ * 「有填就覆蓋」則不夠（issue #131）：日期與時間欄可以自由填，補記上週的量測是這一頁
+ * 明確支援的用法，無條件覆蓋會讓那一欄的「上次」被較舊的讀值蓋掉。驗收條件要的是
+ * 該測項**最近一筆已存在**的讀值（#11 / #124），server 的 `getPreviousReadings` 也是
+ * 照 `measuredAt desc` 取第一筆，所以這裡覆蓋前先比一次時間。
+ *
+ * 比得準的前提是 `previousReadings` 自己帶著 `measuredAt`（`PreviousReadingDto`）。
+ * 早先的版本從 `waterLogs` 反推前次讀值的時間，查不到就退回「歷史最舊的那一刻」——
+ * 歷史有筆數上限，某個測項的前次讀值落在截斷之外時那個退路會判錯：看得到的歷史從
+ * 1/1 開始、KH 最後一筆在去年 12/1，補記 12/15 的 KH 會被當成更舊的而不予覆蓋。
+ *
+ * 「不早於」而不是「晚於」：同一刻的兩筆，後寫進去的那筆在 server 那側同樣會排到前面
+ * ——`getPreviousReadings` 與歷史查詢都以 `createdAt` 當次要排序鍵，這是明確的保證，
+ * 不是「大概不會撞在一起」。時間欄是分鐘精度，同一分鐘內連存兩筆做得到。
+ *
+ * 從未量過的測項沒有可比的對象，補記的那一筆就是它最近一筆已存在的讀值，照樣顯示。
  */
 export function mergePreviousReadings(
-  previousReadings: WaterReadingDto[],
-  created: WaterReadingDto[],
-): WaterReadingDto[] {
-  return WATER_PARAMETER_ORDER.flatMap((parameter) => {
-    const reading = created.find(candidate => candidate.parameter === parameter)
-      ?? previousReadings.find(candidate => candidate.parameter === parameter)
+  previousReadings: PreviousReadingDto[],
+  created: WaterLogDto,
+): PreviousReadingDto[] {
+  const createdAt = new Date(created.measuredAt).getTime()
 
-    return reading ? [{ parameter, value: reading.value }] : []
+  return WATER_PARAMETER_ORDER.flatMap((parameter) => {
+    const previous = previousReadings.find(candidate => candidate.parameter === parameter)
+    const fresh = created.readings.find(candidate => candidate.parameter === parameter)
+
+    if (fresh && (!previous || createdAt >= new Date(previous.measuredAt).getTime())) {
+      return [{ parameter, value: fresh.value, measuredAt: created.measuredAt }]
+    }
+
+    return previous ? [{ parameter, value: previous.value, measuredAt: previous.measuredAt }] : []
   })
 }
 

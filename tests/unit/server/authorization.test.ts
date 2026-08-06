@@ -360,7 +360,9 @@ describe('GET /api/tanks/:id/water-logs 的歸屬檢查', () => {
     expect(result).toEqual({
       ok: true,
       value: {
-        previousReadings: [{ parameter: 'KH', value: 7.8, measuredAt: expect.any(String) }],
+        // 寫死時間而不是 expect.any(String)：A 缸是 12:00、B 缸是 13:00（見 WATER_LOGS），
+        // 所以這一格同時釘住「取自 A 自己那筆 log」與「沒有拿到 B 的」
+        previousReadings: [{ parameter: 'KH', value: 7.8, measuredAt: '2026-08-04T12:00:00.000Z' }],
         waterLogs: [expect.objectContaining({ id: 'water-log-a1' })],
       },
     })

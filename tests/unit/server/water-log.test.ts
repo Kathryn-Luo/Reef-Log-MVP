@@ -196,9 +196,11 @@ describe('water log data', () => {
       waterLogs: [{ id: 'log-1', measuredAt: '2026-08-04T12:00:00.000Z', readings: [{ parameter: 'KH', value: 7.8 }, { parameter: 'PO4', value: 0.04 }] }],
     })
     // 歷史有筆數上限，否則記錄了三年的缸會把全部 log 連同 readings 一次撈回來
+    // 同一刻的兩筆由 createdAt 決定先後，與前次讀值那邊用的是同一個規則——
+    // 畫面把剛存下的那一筆插到歷史最上方，重新整理後的順序要跟它一致
     expect(client.waterLog.findMany).toHaveBeenCalledWith({
       where: { tankId: 'tank-1' },
-      orderBy: { measuredAt: 'desc' },
+      orderBy: [{ measuredAt: 'desc' }, { createdAt: 'desc' }],
       take: WATER_LOG_HISTORY_LIMIT,
       include: { readings: true },
     })
@@ -237,11 +239,16 @@ describe('water log data', () => {
 
     await getWaterLogPage(client, 'tank-1')
 
-    // 六個測項各一次 LIMIT 1，都帶著這個缸的條件
+    // 六個測項各一次 LIMIT 1，都帶著這個缸的條件。
+    //
+    // createdAt 是次要排序鍵：時間欄是分鐘精度，同一分鐘內連存兩筆做得到，
+    // 而只排 measuredAt 的話 Postgres 回哪一列是未定義的。畫面那側的樂觀更新
+    // 拿「不早於就覆蓋」當界線（shared/utils/waterLog.ts 的 mergePreviousReadings），
+    // 少了這個鍵，重新整理之後可能翻回舊值。
     expect(client.waterReading.findFirst).toHaveBeenCalledTimes(WATER_PARAMETER_ORDER.length)
     expect(client.waterReading.findFirst).toHaveBeenCalledWith({
       where: { parameter: 'KH', waterLog: { tankId: 'tank-1' } },
-      orderBy: { waterLog: { measuredAt: 'desc' } },
+      orderBy: [{ waterLog: { measuredAt: 'desc' } }, { waterLog: { createdAt: 'desc' } }],
       include: { waterLog: true },
     })
   })

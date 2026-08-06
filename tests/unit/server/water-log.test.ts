@@ -40,8 +40,11 @@ function fakeClient(rows: LogRow[] = []) {
       })),
     },
     waterReading: {
+      // include: { waterLog: true } 之後回傳的列帶著它所屬的那筆 log，
+      // 前次讀值的 measuredAt 就是從這裡來的
       findFirst: vi.fn(({ where }: { where: { parameter: string } }) => Promise.resolve(
-        rows.flatMap(log => log.readings).find(reading => reading.parameter === where.parameter) ?? null,
+        rows.flatMap(log => log.readings.map(reading => ({ ...reading, waterLog: log })))
+          .find(reading => reading.parameter === where.parameter) ?? null,
       )),
     },
   }
@@ -183,8 +186,13 @@ describe('water log data', () => {
       ],
     }])
 
+    // 前次讀值各自帶著自己的 measuredAt：畫面的樂觀更新要拿它跟剛存下的那一筆比大小，
+    // 從歷史清單反推不行——歷史有筆數上限，落在截斷之外的測項就查不到時間了（issue #131）
     await expect(getWaterLogPage(client, 'tank-1')).resolves.toEqual({
-      previousReadings: [{ parameter: 'KH', value: 7.8 }, { parameter: 'PO4', value: 0.04 }],
+      previousReadings: [
+        { parameter: 'KH', value: 7.8, measuredAt: '2026-08-04T12:00:00.000Z' },
+        { parameter: 'PO4', value: 0.04, measuredAt: '2026-08-04T12:00:00.000Z' },
+      ],
       waterLogs: [{ id: 'log-1', measuredAt: '2026-08-04T12:00:00.000Z', readings: [{ parameter: 'KH', value: 7.8 }, { parameter: 'PO4', value: 0.04 }] }],
     })
     // 歷史有筆數上限，否則記錄了三年的缸會把全部 log 連同 readings 一次撈回來
@@ -234,6 +242,7 @@ describe('water log data', () => {
     expect(client.waterReading.findFirst).toHaveBeenCalledWith({
       where: { parameter: 'KH', waterLog: { tankId: 'tank-1' } },
       orderBy: { waterLog: { measuredAt: 'desc' } },
+      include: { waterLog: true },
     })
   })
 

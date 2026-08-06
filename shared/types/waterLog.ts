@@ -19,6 +19,22 @@ export interface WaterLogDto {
   readings: WaterReadingDto[]
 }
 
+/**
+ * 前次讀值：讀值本身，外加**它是什麼時候量的**。
+ *
+ * 為什麼要帶時間（issue #131 的 review）：畫面在儲存成功後做樂觀更新，得判斷剛存下的
+ * 那一筆是不是比既有的「上次」更近——補記舊資料是這一頁明確支援的用法。時間不隨著
+ * 讀值一起送的話，前端只能從 `waterLogs` 反推，而歷史有筆數上限
+ * （`WATER_LOG_HISTORY_LIMIT`），落在截斷之外的測項就查不到時間，只能猜。
+ *
+ * 沒有直接在 `WaterReadingDto` 上加欄位：那個型別也是首頁 `WaterSummaryDto.readings`
+ * 在用的，那裡的讀值全部來自同一筆記錄，各自再帶一次時間沒有意義。
+ */
+export interface PreviousReadingDto extends WaterReadingDto {
+  /** 該測項最近一筆已存在的讀值是什麼時候量的（ISO 8601，UTC） */
+  measuredAt: string
+}
+
 export interface WaterLogPageData {
   /**
    * 每個測項最近一筆已存在的讀值，也就是畫面上每一欄右側的「上次 8.0」。
@@ -28,7 +44,7 @@ export interface WaterLogPageData {
    * 「最近 N 筆裡的最後一筆」）。從未量測過的測項不在這個清單裡，畫面因此
    * 分得出「還沒量過」與「量過但這次沒填」。
    */
-  previousReadings: WaterReadingDto[]
+  previousReadings: PreviousReadingDto[]
   /** 依量測時間新到舊，最多 WATER_LOG_HISTORY_LIMIT 筆 */
   waterLogs: WaterLogDto[]
 }

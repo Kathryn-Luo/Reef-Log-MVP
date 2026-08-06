@@ -197,12 +197,14 @@ function fakeClient() {
     },
     // 前次讀值各測項各查一次 LIMIT 1（見 getPreviousReadings）。這裡照著它的
     // where / orderBy 在記憶體裡找，A 的缸才真的看不到 B 的讀值。
+    // 回傳的列帶著所屬的那筆 log（`include: { waterLog: true }`）——前次讀值的
+    // measuredAt 從那裡來，畫面靠它判斷補記的舊資料該不該覆蓋（issue #131）。
     waterReading: {
       findFirst: vi.fn(({ where }: { where: { parameter: string, waterLog: { tankId: string } } }) => Promise.resolve(
         WATER_LOGS
           .filter(log => log.tankId === where.waterLog.tankId)
           .sort((left, right) => right.measuredAt.getTime() - left.measuredAt.getTime())
-          .flatMap(log => log.readings)
+          .flatMap(log => log.readings.map(reading => ({ ...reading, waterLog: log })))
           .find(reading => reading.parameter === where.parameter) ?? null,
       )),
     },
@@ -358,7 +360,7 @@ describe('GET /api/tanks/:id/water-logs 的歸屬檢查', () => {
     expect(result).toEqual({
       ok: true,
       value: {
-        previousReadings: [{ parameter: 'KH', value: 7.8 }],
+        previousReadings: [{ parameter: 'KH', value: 7.8, measuredAt: expect.any(String) }],
         waterLogs: [expect.objectContaining({ id: 'water-log-a1' })],
       },
     })

@@ -1,5 +1,5 @@
 import type { WaterParameterKey, WaterReadingDto } from '../types/home'
-import type { CreateWaterLogInput, WaterLogDto, WaterLogRequest } from '../types/waterLog'
+import type { CreateWaterLogInput, PreviousReadingDto, WaterLogDto, WaterLogRequest } from '../types/waterLog'
 import {
   WATER_PARAMETER_FULL_LABELS,
   WATER_PARAMETER_LABELS,
@@ -245,29 +245,6 @@ export function buildReadingFields(previousReadings: WaterReadingDto[]): WaterRe
 }
 
 /**
- * 該測項「最近一筆已存在的讀值」是什麼時候量的，取自本地那份歷史。
- *
- * 找不到就退回歷史裡最舊的那一刻：歷史有筆數上限（`WATER_LOG_HISTORY_LIMIT`），
- * 前次讀值可能落在截斷之外。那時唯一確定的是「它比看得到的每一筆都舊」，
- * 拿最舊的那一刻當界線因此不會把較新的讀值誤判成較舊的。
- *
- * 歷史整個是空的則回 -Infinity——一筆記錄都沒有的缸，剛存下的那一筆必然是最近的。
- */
-function previousMeasuredAt(parameter: WaterParameterKey, logs: WaterLogDto[]): number {
-  const times = logs
-    .filter(log => log.readings.some(reading => reading.parameter === parameter))
-    .map(log => new Date(log.measuredAt).getTime())
-
-  if (times.length) {
-    return Math.max(...times)
-  }
-
-  const all = logs.map(log => new Date(log.measuredAt).getTime())
-
-  return all.length ? Math.min(...all) : Number.NEGATIVE_INFINITY
-}
-
-/**
  * 剛存下的那一筆成為下一次的「上次」。
  *
  * 這次沒填的測項維持原本的前次讀值——它們的「最近一筆已存在的讀值」沒有改變。
@@ -276,26 +253,32 @@ function previousMeasuredAt(parameter: WaterParameterKey, logs: WaterLogDto[]): 
  * 「有填就覆蓋」則不夠（issue #131）：日期與時間欄可以自由填，補記上週的量測是這一頁
  * 明確支援的用法，無條件覆蓋會讓那一欄的「上次」被較舊的讀值蓋掉。驗收條件要的是
  * 該測項**最近一筆已存在**的讀值（#11 / #124），server 的 `getPreviousReadings` 也是
- * 照 `measuredAt desc` 取第一筆，所以這裡覆蓋前先確認新記錄不早於既有的最新一筆。
+ * 照 `measuredAt desc` 取第一筆，所以這裡覆蓋前先比一次時間。
+ *
+ * 比得準的前提是 `previousReadings` 自己帶著 `measuredAt`（`PreviousReadingDto`）。
+ * 早先的版本從 `waterLogs` 反推前次讀值的時間，查不到就退回「歷史最舊的那一刻」——
+ * 歷史有筆數上限，某個測項的前次讀值落在截斷之外時那個退路會判錯：看得到的歷史從
+ * 1/1 開始、KH 最後一筆在去年 12/1，補記 12/15 的 KH 會被當成更舊的而不予覆蓋。
  *
  * 「不早於」而不是「晚於」：同一刻的兩筆，後寫進去的那筆在 server 那側同樣會排到前面。
  *
  * 從未量過的測項沒有可比的對象，補記的那一筆就是它最近一筆已存在的讀值，照樣顯示。
  */
 export function mergePreviousReadings(
-  previousReadings: WaterReadingDto[],
+  previousReadings: PreviousReadingDto[],
   created: WaterLogDto,
-  existingLogs: WaterLogDto[],
-): WaterReadingDto[] {
+): PreviousReadingDto[] {
   const createdAt = new Date(created.measuredAt).getTime()
 
   return WATER_PARAMETER_ORDER.flatMap((parameter) => {
     const previous = previousReadings.find(candidate => candidate.parameter === parameter)
     const fresh = created.readings.find(candidate => candidate.parameter === parameter)
-    const supersedes = fresh && (!previous || createdAt >= previousMeasuredAt(parameter, existingLogs))
-    const reading = supersedes ? fresh : previous
 
-    return reading ? [{ parameter, value: reading.value }] : []
+    if (fresh && (!previous || createdAt >= new Date(previous.measuredAt).getTime())) {
+      return [{ parameter, value: fresh.value, measuredAt: created.measuredAt }]
+    }
+
+    return previous ? [{ parameter, value: previous.value, measuredAt: previous.measuredAt }] : []
   })
 }
 

@@ -1,6 +1,6 @@
 import type { PrismaClient, WaterLog, WaterReading } from '@prisma/client'
-import type { CreateWaterLogInput, WaterLogDto, WaterLogPageData } from '#shared/types/waterLog'
-import type { WaterParameterKey, WaterReadingDto } from '#shared/types/home'
+import type { CreateWaterLogInput, PreviousReadingDto, WaterLogDto, WaterLogPageData } from '#shared/types/waterLog'
+import type { WaterParameterKey } from '#shared/types/home'
 import { WATER_LOG_HISTORY_LIMIT, WATER_PARAMETER_ORDER } from '#shared/utils/waterQuality'
 
 // 水質記錄的資料層（issue #121，畫面是 #11 的 screen-3）。
@@ -43,16 +43,26 @@ function toDto(log: WaterLog & { readings: WaterReading[] }): WaterLogDto {
  *
  * 從未量測過的測項不會出現在回傳值裡：畫面因此分得出「還沒量過」（不顯示「上次」）
  * 與「量過但這次沒填」。
+ *
+ * `include: { waterLog: true }` 是為了把**量測時間**一起帶回去：畫面在儲存成功後要判斷
+ * 剛存下的那一筆是不是比這一筆更近（補記舊資料時不該覆蓋較新的「上次」，issue #131）。
+ * 少了它，前端只能從 `waterLogs` 反推，而那份清單有筆數上限——正好就是這支函式獨立查
+ * 的原因，反推回去等於把同一個坑再踩一次。
  */
-async function getPreviousReadings(client: PrismaClient, tankId: string): Promise<WaterReadingDto[]> {
+async function getPreviousReadings(client: PrismaClient, tankId: string): Promise<PreviousReadingDto[]> {
   const latest = await Promise.all(WATER_PARAMETER_ORDER.map(parameter =>
     client.waterReading.findFirst({
       where: { parameter, waterLog: { tankId } },
       orderBy: { waterLog: { measuredAt: 'desc' } },
+      include: { waterLog: true },
     })))
 
   return latest.flatMap((reading, index) => reading
-    ? [{ parameter: WATER_PARAMETER_ORDER[index]!, value: toNumber(reading.value) }]
+    ? [{
+        parameter: WATER_PARAMETER_ORDER[index]!,
+        value: toNumber(reading.value),
+        measuredAt: reading.waterLog.measuredAt.toISOString(),
+      }]
     : [])
 }
 

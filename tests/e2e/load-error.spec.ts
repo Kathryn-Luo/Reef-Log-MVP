@@ -135,3 +135,53 @@ test('生物詳情的 API 回 404 時仍然顯示「找不到這隻生物」', a
   await expect(page.getByTestId('creature-missing')).toBeVisible()
   await expect(page.getByTestId('load-error')).toHaveCount(0)
 })
+
+// /log 是最糟的一條路徑：使用者看到「還沒有任何缸」與一顆「建立我的第一個缸」，
+// 照著按下去就多了一個他其實不需要的缸（issue #132 的成因段落）。
+test('記錄水質的缸清單回 500 時顯示載入失敗，不是「還沒有任何缸」', async ({ page }) => {
+  await page.route('**/api/tanks', route => route.fulfill(SERVER_ERROR))
+
+  await page.goto('/log')
+
+  await expect(page.getByTestId('load-error')).toContainText('載入失敗')
+  await expect(page.getByTestId('tank-empty')).toHaveCount(0)
+  await expect(page.getByTestId('tank-empty-action')).toHaveCount(0)
+  await expect(page.locator('a[href="/tanks/new"]')).toHaveCount(0)
+})
+
+// 缸拿得到、記錄拿不到也一樣：不能假裝這個缸還沒量過水，
+// 也不能擺出一張存得下去的表單——送出的目的地本來就拿不到
+test('記錄水質的水質記錄回 500 時顯示載入失敗，不是「還沒有任何記錄」', async ({ page }) => {
+  await page.route('**/api/tanks/*/water-logs', route => route.fulfill(SERVER_ERROR))
+
+  await page.goto('/log')
+
+  await expect(page.getByTestId('load-error')).toContainText('載入失敗')
+  await expect(page.getByTestId('history-empty')).toHaveCount(0)
+  await expect(page.getByTestId('reading-field')).toHaveCount(0)
+  // 失敗的是這一頁的資料，不是整個 App——返回的入口要留著
+  await expect(page.getByTestId('water-log-back')).toBeVisible()
+})
+
+test('記錄水質點「重試」後重新取回資料，畫面回到正常', async ({ page }) => {
+  let failing = true
+
+  await page.route('**/api/tanks/*/water-logs', async (route) => {
+    if (failing) {
+      await route.fulfill(SERVER_ERROR)
+      return
+    }
+
+    await route.continue()
+  })
+
+  await page.goto('/log')
+  await expect(page.getByTestId('load-error')).toBeVisible()
+
+  failing = false
+  await page.getByTestId('load-error-retry').click()
+
+  await expect(page.getByTestId('load-error')).toHaveCount(0)
+  await expect(page.getByTestId('water-log-subtitle')).toHaveText('主缸 · 4 尺')
+  await expect(page.getByTestId('reading-field')).toHaveCount(6)
+})

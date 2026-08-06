@@ -16,7 +16,9 @@ import { formatTimeAgo } from './relativeTime'
 //   1. 欄位規則。`parseWaterLogInput` 原本住在 server/utils/waterLog.ts，
 //      這一輪搬過來讓表單與 API 共用同一份——同一組限制寫兩次的話，
 //      遲早會有一邊先漂走（issue #124 第 3 節允許的唯一一次搬移，行為未變）。
-//      server/utils/waterLog.ts 仍然把它再匯出一次，Nitro 那側的 auto-import 不受影響。
+//      server 那側直接從這裡 import，不在 server/utils/waterLog.ts 再匯出一次——
+//      同一個名字同時出現在兩份 auto-import 名單上，Nuxt 會印「Duplicated imports」
+//      並靜靜地挑一邊（理由寫在 server/utils/waterLog.ts 的檔頭）。
 //   2. 畫面上「算得出來的東西」——日期＋時間怎麼合成 measuredAt、「上次 8.0」、
 //      歷史每一列的「07 / 04 · 21:00」與「4 天前」。schema.prisma 一律不存這些衍生值。
 

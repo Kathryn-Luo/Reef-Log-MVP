@@ -10,10 +10,16 @@ import { describe, expect, it } from 'vitest'
 //
 // 不是產品壞了，是測試自己的競態。`/log` 在 #84 之後是 SPA，歷史記錄要等 API 回來
 // 才渲染，而 `locator.count()` 是一次性的快照、**不會自動等待**——`page.goto()` 之後
-// 立刻取，量到的是還在載入樣態時的 0。接著 `click()` 會自動等到表單出現，那一刻歷史
-// 已經到齊，於是「儲存前後筆數不變」變成拿載入中的 0 去對載入完的 5。
+// 立刻取，量到的是還沒渲染的 0。接著 `click()` 會自動等到表單出現，那一刻歷史已經
+// 到齊，於是「儲存前後筆數不變」變成拿 0 去對 5。
 //
-// 這支測試守的就是那個順序：只要有人再寫一次「goto 之後直接 count()」，這裡先紅，
+// 第一次的修法（等 `water-log-loading` 的筆數變成 0）沒有用，第二輪照樣紅：SPA 在
+// `goto()` 回來時整個 app 都還沒 mount，載入樣態的筆數在「還沒開始載入」與「載入完了」
+// 兩個時刻同樣都是 0，那個等待在 hydration 之前就先通過。**要等的是正面的訊號**，
+// 也就是表單真的出現。
+//
+// 這支測試守的就是那件事：`count()` 之前必須先等到一個「只有載入完才成立」的條件。
+// 只要有人再寫一次「goto 之後直接 count()」、或退回等待某個東西消失，這裡先紅，
 // 而不是等 preview 上跑 8 分鐘才紅。斷言本身對不對仍由 preview 上的 E2E 收尾
 // （與 logged-in-specs.test.ts 同樣的分工）。
 
@@ -26,13 +32,20 @@ function testBlocks(text: string): string[] {
 }
 
 describe('water-log.spec.ts 的載入等待', () => {
-  it('每一處 count() 之前都先等載入樣態消失', () => {
+  it('等的是表單出現，不是載入樣態消失', () => {
+    // toBeVisible 只有在元素真的在畫面上時才成立，hydration 之前不會誤放行；
+    // 反過來「等某個 testid 的筆數變成 0」在 SPA 上是個永遠先通過的假閘門
+    expect(source).toContain('await expect(page.getByTestId(\'water-log-form\')).toBeVisible()')
+    expect(source).not.toMatch(/getByTestId\('water-log-loading'\)\)\.toHaveCount\(0\)/)
+  })
+
+  it('每一處 count() 之前都先等畫面載入完成', () => {
     const blocks = testBlocks(source).filter(block => block.includes('.count()'))
 
     expect(blocks.length).toBeGreaterThan(0)
 
     for (const block of blocks) {
-      const wait = block.indexOf('water-log-loading')
+      const wait = block.indexOf('expectLoaded(page)')
       const count = block.indexOf('.count()')
 
       expect(wait).toBeGreaterThan(-1)

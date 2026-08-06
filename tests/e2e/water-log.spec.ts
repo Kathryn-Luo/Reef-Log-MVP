@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test'
 import { expect, test } from './support/guestSession'
 
 // 記錄水質（issue #124 ＝ #11 的畫面那一半，screen-3）。
@@ -8,6 +9,21 @@ import { expect, test } from './support/guestSession'
 // E2E 不在 TDD Develop 的 job 內執行，跑在 Vercel preview URL 上（#23）。
 // 「填寫 → 儲存 → 出現在歷史最上方」這條路徑要真的有資料庫才驗得到，
 // 所以主線留在這裡；欄位規則與排版的細節由 unit 測試覆蓋。
+
+/**
+ * 等到資料到齊、畫面切到「有缸」那一支為止。
+ *
+ * 這裡刻意等**正面的訊號**（表單出現），不是等載入樣態消失。`/log` 在 #84 之後是
+ * SPA，`page.goto()` 回來時整個 app 都還沒 mount，`getByTestId('water-log-loading')`
+ * 的筆數在「還沒開始載入」與「載入完了」兩個時刻同樣都是 0——拿它當閘門的話，
+ * 這個等待在 hydration 之前就先通過了，等於沒等。
+ *
+ * 表單與歷史列表在同一個 `v-else` 分支裡（app/pages/log.vue），所以表單可見就代表
+ * 歷史那一段也已經渲染完，`locator.count()`（一次性快照、不會自動等待）這時才數得準。
+ */
+async function expectLoaded(page: Page) {
+  await expect(page.getByTestId('water-log-form')).toBeVisible()
+}
 
 // Given 我進入「記錄水質」頁 / When 畫面載入
 // Then 頁首顯示「記錄水質」與副標「<缸名> · <尺寸>」，六個元素輸入欄依序排列
@@ -25,8 +41,7 @@ test('頁首與六個元素輸入欄', async ({ page }) => {
 test('填寫三項後儲存，新記錄出現在歷史最上方', async ({ page }) => {
   await page.goto('/log')
 
-  // 資料到齊之前輸入欄還沒渲染，等載入樣態消失再開始填
-  await expect(page.getByTestId('water-log-loading')).toHaveCount(0)
+  await expectLoaded(page)
 
   await page.locator('input[name="KH"]').fill('7.8')
   await page.locator('input[name="CA"]').fill('412')
@@ -51,10 +66,7 @@ test('填寫三項後儲存，新記錄出現在歷史最上方', async ({ page 
 test('六項全空時擋下儲存', async ({ page }) => {
   await page.goto('/log')
 
-  // count() 只看當下、不會自動等待。載入樣態還在時歷史一列都還沒渲染，
-  // 這時取到的 before 會是 0，而稍後點擊儲存時 Playwright 會等到表單出現——
-  // 那一刻歷史已經到齊，比對就變成拿「載入中」的數字對「載入完」的畫面。
-  await expect(page.getByTestId('water-log-loading')).toHaveCount(0)
+  await expectLoaded(page)
 
   const rows = page.getByTestId('history-row')
   const before = await rows.count()
@@ -69,8 +81,7 @@ test('六項全空時擋下儲存', async ({ page }) => {
 test('非法讀值在失焦時就標示出來，並擋下儲存', async ({ page }) => {
   await page.goto('/log')
 
-  // 同上：before 要在載入樣態消失之後才取，否則量到的是還沒渲染的 0
-  await expect(page.getByTestId('water-log-loading')).toHaveCount(0)
+  await expectLoaded(page)
 
   const rows = page.getByTestId('history-row')
   const before = await rows.count()

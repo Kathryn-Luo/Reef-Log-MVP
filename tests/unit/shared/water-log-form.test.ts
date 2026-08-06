@@ -47,7 +47,7 @@ describe('composeMeasuredAt — 日期＋時間合成帶 offset 的 measuredAt',
     expect(new Date(composed!).getTime()).toBe(new Date(2026, 6, 8, 21, 30).getTime())
   })
 
-  // server 要求 measuredAt 帶著 UTC offset（server/utils/waterLog.ts 的 parseWaterLogInput）：
+  // server 要求 measuredAt 帶著 UTC offset（shared/utils/waterLog.ts 的 parseWaterLogInput）：
   // 畫面上的是牆上時間，存的是量測瞬間，少了 offset 只能猜使用者在哪個時區。
   it('合成的結果過得了 server 的解析，直接送畫面上的字串則不行', () => {
     const composed = composeMeasuredAt('2026-07-08', '21:30')!

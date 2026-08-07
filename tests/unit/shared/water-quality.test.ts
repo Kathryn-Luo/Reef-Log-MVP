@@ -8,6 +8,7 @@ import {
   WATER_PARAMETER_ORDER,
   WATER_PARAMETER_UNITS,
   buildWaterDashboardRows,
+  formatReadingDelta,
   formatReadingValue,
   formatTargetRange,
   readingStatus,
@@ -79,6 +80,28 @@ describe('formatReadingValue', () => {
   // 截圖的 PO₄ 顯示為「.04」而不是「0.04」
   it('小於 1 的值省略小數點前的 0', () => {
     expect(formatReadingValue('PO4', 0.04)).toBe('.04')
+  })
+})
+
+// 趨勢頁（screen-4）右側的「▼ 0.4（7 天）」。issue #123 的截圖自己給了答案：
+// 同一個 KH，讀值寫「7.8」而變化量寫「0.4」——省略小數點前 0 的規則只適用於讀值。
+describe('formatReadingDelta', () => {
+  it('依測項的慣用精度顯示', () => {
+    expect(formatReadingDelta('KH', 0.4)).toBe('0.4')
+    expect(formatReadingDelta('CA', 10)).toBe('10')
+    expect(formatReadingDelta('SALINITY', 0.001)).toBe('0.001')
+  })
+
+  // 這是與 formatReadingValue 唯一的差別，也是它存在的理由：
+  // 「▼ .4」看起來像是漏了一個字，而截圖上寫的是「▼ 0.4」
+  it('小於 1 的變化量保留小數點前的 0', () => {
+    expect(formatReadingDelta('PO4', 0.01)).toBe('0.01')
+    expect(formatReadingValue('PO4', 0.01)).toBe('.01')
+  })
+
+  // 浮點數相減會留下 0.3999999999999995 這種尾巴，顯示前一定要收到該測項的精度
+  it('浮點數相減的尾巴收乾淨', () => {
+    expect(formatReadingDelta('KH', Math.abs(7.8 - 8.2))).toBe('0.4')
   })
 })
 

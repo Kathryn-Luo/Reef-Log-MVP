@@ -48,6 +48,10 @@ blob-report
 .agent-pr-body.md
 .agent-pr-comment.md
 
+# Claude Code 開 subagent 時建立的暫存 git worktree（跑完自動清掉，不進版控）
+# 只忽略 worktrees/，.claude/ 底下其他設定要留在版控裡
+.claude/worktrees/
+
 # Editor / OS
 .DS_Store
 .idea

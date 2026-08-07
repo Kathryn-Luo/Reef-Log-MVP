@@ -88,10 +88,13 @@ async function latestKhMeasuredAt(page: Page): Promise<Date> {
 
   expect(tanks.length, '訪客沙盒裡沒有任何缸——preview 的資料庫可能沒跑過 pnpm db:seed').toBeGreaterThan(0)
 
-  const { page: data } = await (await request.get(`/api/tanks/${tanks[0]!.id}/water-logs`)).json() as {
-    page: { previousReadings: { parameter: string, measuredAt: string }[] }
+  // 這支端點回的就是 WaterLogPageData 本身（`{ previousReadings, waterLogs }`）。
+  // `/log` 那邊看到的 `data.page.previousReadings` 多一層是因為頁面把缸與這一段
+  // 串成同一個 useAsyncData，那是 composable 組出來的形狀，不是 API 的。
+  const { previousReadings } = await (await request.get(`/api/tanks/${tanks[0]!.id}/water-logs`)).json() as {
+    previousReadings: { parameter: string, measuredAt: string }[]
   }
-  const kh = data.previousReadings.find(reading => reading.parameter === 'KH')
+  const kh = previousReadings.find(reading => reading.parameter === 'KH')
 
   expect(kh, 'KH 從未被記錄過，這條 Story 就沒有「較新的讀值」可以被蓋掉').toBeDefined()
 

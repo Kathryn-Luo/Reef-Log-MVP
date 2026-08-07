@@ -112,13 +112,21 @@ test('勾選之後重新整理，那一列仍然是已完成', async ({ page }) 
   // 樂觀更新失敗時會回捲並在那一列旁邊講一句，所以這裡順帶確認沒有回捲
   await expect(rowById(page, taskId).getByTestId('task-error')).toHaveCount(0)
 
+  // ⚠ 先等 server 真的收下，再 reload。
+  //
+  // 上面那三條看的全是**樂觀更新**：畫面在 POST 送出去之前就已經長成已完成的樣子，
+  // 所以它們一條都擋不住「請求還在路上」。直接 reload 會把還在路上的 POST 一起取消，
+  // 那一筆就永遠沒寫進去，reload 之後自然還是未勾選。
+  // 實際踩過：run 31157924044 重試才過，run 31160034319 三次重試全紅。
+  await expect.poll(
+    async () => (await maintenanceTasks(page)).find(task => task.id === taskId)?.lastCompletion?.completedOn,
+    { message: '勾選要真的寫進資料庫，不能只有畫面變了' },
+  ).toBe(today())
+
   // 真的寫進資料庫了：重新整理之後仍然是已完成
   await page.reload()
   await expectLoaded(page)
   await expect(checkbox(rowById(page, taskId))).toHaveAttribute('aria-checked', 'true')
-
-  const fact = (await maintenanceTasks(page)).find(task => task.id === taskId)
-  expect(fact?.lastCompletion?.completedOn).toBe(today())
 })
 
 // Given 某個任務今天已完成 / When 我再次點擊它的 checkbox（取消勾選）
@@ -140,12 +148,15 @@ test('取消勾選之後重新整理，那一列仍然是未完成', async ({ pa
   await expect(checkbox(rowById(page, taskId))).toHaveAttribute('aria-checked', 'false')
   await expect(page.getByTestId('today-badge')).toHaveText(String(dueBefore + 1))
 
+  // 與上面同一個理由：這兩條看的是樂觀更新，DELETE 可能還沒送到就被 reload 取消
+  await expect.poll(
+    async () => (await maintenanceTasks(page)).find(task => task.id === taskId)?.lastCompletion?.completedOn,
+    { message: '取消勾選要真的把那一筆刪掉，不能只有畫面變了' },
+  ).not.toBe(today())
+
   await page.reload()
   await expectLoaded(page)
   await expect(checkbox(rowById(page, taskId))).toHaveAttribute('aria-checked', 'false')
-
-  const fact = (await maintenanceTasks(page)).find(task => task.id === taskId)
-  expect(fact?.lastCompletion?.completedOn).not.toBe(today())
 })
 
 // Given 今天已完成的任務 / Then 它仍留在「今天該做」區，不因為做完了就跳到「即將到期」

@@ -86,6 +86,10 @@ function toRow(task: MaintenanceTaskDto, today: string): MaintenanceRow {
     task,
     nextDueOn: due,
     completedToday,
+    // `!completedToday` 在 intervalDays 為正時是多餘的（今天完成過 ⇒ 到期日至少是明天），
+    // 留著是為了 intervalDays 為 0 或負數的情況：schema 的 intervalDays 沒有下限，
+    // 而建立任務的表單（#17）還不存在，沒有東西保證它是正的。
+    // 今天才做完的事不該被畫成逾期，這個條件與 intervalDays 的值無關。
     overdue: due < today && !completedToday,
     dueInDays: Math.round((dayStart(due) - dayStart(today)) / DAY_MS),
   }

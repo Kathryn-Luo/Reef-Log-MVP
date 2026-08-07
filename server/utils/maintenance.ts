@@ -14,7 +14,9 @@ import type { MaintenancePageData, MaintenanceTaskDto } from '#shared/types/main
 // findOwnedMaintenanceTask 提供給授權層用（與 getCreatureDetail 同型）。
 
 /**
- * 最後一筆完成紀錄用 nested read 取，走 `@@index([taskId, completedAt])`。
+ * 最後一筆完成紀錄用 nested read 取，排序鍵是 `completedOn`，所以吃的是
+ * `@@unique([taskId, completedOn])` 建起來的那個索引（issue #122 第 6 節誤植為
+ * `@@index([taskId, completedAt])`，那一個目前沒有任何查詢用得到）。
  *
  * **不要**把全部履歷撈回來再取最後一筆：記錄了三年的缸每開一次保養頁就把三年的履歷
  * 讀進記憶體，而畫面上的「上次 07/01」「已完成 08:20」「今天有沒有做」只需要這一筆

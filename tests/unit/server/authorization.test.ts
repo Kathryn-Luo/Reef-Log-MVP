@@ -986,6 +986,21 @@ describe('GET /api/tanks/:id/maintenance 的歸屬檢查', () => {
   })
 })
 
+/**
+ * 「歸屬檢查通過、寫入完成，但重新查詢時歸屬已經不成立了」——例如缸在這中間被封存。
+ *
+ * 兩支寫入 API 都在寫完之後重查一次（completeTask / clearCompletion 回 null 的那條路），
+ * 而那一次重查自己也帶著歸屬條件。沒有這個替身的話，那格 404 可以整段拿掉而測試全綠。
+ */
+function archiveBetweenWriteAndReread(client: ReturnType<typeof fakeClient>) {
+  const check = client.maintenanceTask.findFirst.getMockImplementation()!
+  let calls = 0
+
+  client.maintenanceTask.findFirst.mockImplementation(
+    args => (++calls === 1 ? check(args) : Promise.resolve(null)),
+  )
+}
+
 describe('POST /api/maintenance-tasks/:id/completions 的歸屬與驗證', () => {
   // Given 「換水 10%」今天尚未完成 / When 送出 { completedOn: 今天 }
   // Then  建立一筆完成紀錄 / And 回傳更新後的該任務，讓畫面不必重抓整頁
@@ -1091,6 +1106,17 @@ describe('POST /api/maintenance-tasks/:id/completions 的歸屬與驗證', () =>
 
     expect(missing).toEqual(others)
   })
+
+  // 寫入之後歸屬才變的那條路：回「查不到」而不是硬把寫入前的任務端出去，
+  // 那份資料此刻已經不是這個人能看的東西了（與 applyCreatureStatus 同一個決定）
+  it('寫入之後歸屬變了（缸剛被封存）時回同一個 404', async () => {
+    const client = fakeClient()
+
+    archiveBetweenWriteAndReread(client)
+
+    await expect(resolveCompleteTask(client, USER_A, 'task-a1', bodyThunk({ completedOn: TODAY }), NOW))
+      .resolves.toEqual({ ok: false, error: MAINTENANCE_TASK_NOT_FOUND })
+  })
 })
 
 describe('DELETE /api/maintenance-tasks/:id/completions/:completedOn 的歸屬與驗證', () => {
@@ -1159,5 +1185,15 @@ describe('DELETE /api/maintenance-tasks/:id/completions/:completedOn 的歸屬�
     const others = await resolveClearCompletion(fakeClient(), USER_A, 'task-b1', TODAY, NOW)
 
     expect(missing).toEqual(others)
+  })
+
+  // 與 POST 那一支同一條路：刪完之後重查不到，就回 404 而不是端出刪除前的任務
+  it('刪除之後歸屬變了（缸剛被封存）時回同一個 404', async () => {
+    const client = fakeClient()
+
+    archiveBetweenWriteAndReread(client)
+
+    await expect(resolveClearCompletion(client, USER_A, 'task-a1', TODAY, NOW))
+      .resolves.toEqual({ ok: false, error: MAINTENANCE_TASK_NOT_FOUND })
   })
 })

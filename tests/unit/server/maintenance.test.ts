@@ -305,7 +305,13 @@ describe('completeTask', () => {
     const first = await completeTask(client, 'task-water', date('2026-07-08'), 'user-a')
     const second = await completeTask(client, 'task-water', date('2026-07-08'), 'user-a')
 
-    expect(second.lastCompletion).toEqual(first.lastCompletion)
+    // 兩支的回傳型別都是 `MaintenanceTaskDto | null`（null＝寫入之後歸屬變了）。
+    // 先確認不是 null 再取欄位：直接解參考的話，那條路一旦成真會是 TypeError
+    // 而不是一句看得懂的斷言失敗——而 tests/ 不在 nuxt typecheck 的 project 裡，
+    // 型別檢查不會替我們攔下來
+    expect(first).not.toBeNull()
+    expect(second).not.toBeNull()
+    expect(second?.lastCompletion).toEqual(first?.lastCompletion)
     expect(client.completions.filter(row => row.taskId === 'task-water' && row.completedOn.getTime() === date('2026-07-08').getTime()))
       .toHaveLength(1)
   })
@@ -341,7 +347,8 @@ describe('clearCompletion', () => {
     const task = await clearCompletion(client, 'task-water', date('2026-07-01'), 'user-a')
 
     // 6/24 那一筆還在，而且它成了新的「最後一筆」
-    expect(task.lastCompletion).toEqual({ completedAt: '2026-06-24T00:10:00.000Z', completedOn: '2026-06-24' })
+    expect(task).not.toBeNull()
+    expect(task?.lastCompletion).toEqual({ completedAt: '2026-06-24T00:10:00.000Z', completedOn: '2026-06-24' })
   })
 
   // Given 今天本來就沒有完成紀錄 / Then 回 200 與現況（沒有東西可刪不是錯誤），不回 404

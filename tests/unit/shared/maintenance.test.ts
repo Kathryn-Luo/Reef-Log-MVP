@@ -243,6 +243,18 @@ describe('buildMaintenanceSections 的分區', () => {
     expect(ids(today)).toEqual(['overdue', 'done-today', 'due-today'])
   })
 
+  // `overdue` 的 `!completedToday` 只有在 intervalDays 非正數時才發揮作用：intervalDays 為正時，
+  // 今天完成過 ⇒ nextDueOn 至少是明天 ⇒ `due < today` 本來就不成立。而 schema 的 intervalDays
+  // 是沒有下限的 Int（建立表單是 #17，還沒有東西擋住 0 或負數），所以那個條件不是死碼，
+  // 是防禦——沒有這一條的話，它可以被整條拿掉而測試全綠。
+  it('今天完成過的任務不算逾期，就算 intervalDays 是不合理的負數', () => {
+    const broken = task({ id: 'broken', intervalDays: -3, lastCompletion: completedOn('2026-07-08') })
+
+    const row = buildMaintenanceSections([broken], MORNING_OF_JULY_8).today[0]
+
+    expect(row).toMatchObject({ nextDueOn: '2026-07-05', completedToday: true, overdue: false })
+  })
+
   it('沒有任何任務時兩區都是空的，徽章是 0', () => {
     expect(buildMaintenanceSections([], MORNING_OF_JULY_8)).toEqual({ today: [], upcoming: [], dueCount: 0 })
   })
@@ -381,6 +393,25 @@ describe('parseCompletedOn', () => {
 
     expect(parseCompletedOn(iso).ok).toBe(true)
     expect(parseCompletedOn('2199-01-01').ok).toBe(false)
+  })
+
+  // 這一支的「今天」刻意取 UTC 而不是當地（見 parseCompletedOn 的註解）：它跑在 server 上，
+  // 使用者的今天由前端帶上來的 completedOn 表達。上面那幾條的 NOW 是 09:00Z，在台北是
+  // 同一個日曆日，所以把 getUTC* 換成 get* 也照樣全綠——那個立場等於沒有測試守著。
+  // 取 UTC 傍晚 20:00（台北已經是隔天 04:00）才分得出來：
+  //   UTC 的今天  = 07-08 → 窗口 07-07…07-09
+  //   當地的今天  = 07-09 → 窗口 07-08…07-10
+  // 兩端各取一個只有其中一種算法會收下的日期。
+  it('範圍以 server 的 UTC 今天為準，不隨行程的時區漂移', () => {
+    const eveningOfJuly8 = new Date('2026-07-08T20:00:00.000Z')
+
+    withTimezone('Asia/Taipei', () => {
+      expect(parseCompletedOn('2026-07-07', eveningOfJuly8).ok).toBe(true)
+      expect(parseCompletedOn('2026-07-10', eveningOfJuly8)).toEqual({
+        ok: false,
+        message: COMPLETED_ON_OUT_OF_RANGE_MESSAGE,
+      })
+    })
   })
 })
 

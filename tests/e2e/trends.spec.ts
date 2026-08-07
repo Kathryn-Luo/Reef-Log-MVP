@@ -183,11 +183,22 @@ test('切到「全部」之後帶著新的 range 重新請求，畫面換成該�
   // 「全部」一定有資料（上面 skip 過了），所以這裡等的是圖本身出現——正面訊號
   await expect(page.getByTestId('line-chart').locator('svg')).toBeVisible()
 
+  // ⚠ 這一條要用會重試的 poll，不能用一次性的 expect。
+  //
+  // 換範圍比首次載入多一拍：watch 先觸發 refresh，之後才輪得到那兩支串起來的請求
+  // （tests/unit/pages/trends.test.ts 的 selectRange 就是為了這一拍多 flush 一次）。
+  // 而下面那條數字斷言**擋不住這一拍**——示範資料最新的一筆通常落在 30 天內，
+  // 「30 天」與「全部」的 latest 因此是同一個數字，畫面根本不必更新就已經相等了。
+  // 兩者湊在一起的結果是：請求還在路上，一次性的 expect 已經先跑完並判失敗。
+  // 實際踩過（run 31157924044，三次重試全紅）。
+  await expect.poll(
+    () => requests.filter(url => url.includes('range=all')).length,
+    { message: '換範圍要重新問 server' },
+  ).toBeGreaterThan(0)
+
   await expect(async () => {
     expect(await numberOf(page, 'trend-latest')).toBe(rounded(all.latest!, KH_DECIMALS))
   }).toPass()
-
-  expect(requests.some(url => url.includes('range=all')), '換範圍要重新問 server').toBe(true)
 })
 
 // And 變化量顯示方向（下降 ▼ / 上升 ▲）；只有一筆讀值時整塊不顯示

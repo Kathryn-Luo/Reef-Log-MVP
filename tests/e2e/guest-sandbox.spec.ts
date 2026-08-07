@@ -26,6 +26,14 @@ async function signInAsGuest(context: BrowserContext): Promise<string> {
 
   const timing = response.headers()['x-guest-timing'] ?? '（沒有計時標頭）'
 
+  // ⚠ 暫時的除錯輸出，理由與 support/guestSession.ts 那幾行相同（run 被 45 分鐘上限
+  // 砍掉，Playwright 的報表產不出來）。這一行特別關鍵：**失敗的 302 上仍然帶著計時**
+  // （guest.get.ts 成功與失敗都會設標頭），所以它說得出這次請求走到哪一段才死的——
+  //   只有 connect        → 死在 user.create（資料庫層，例如欄位不存在）
+  //   connect + user 都有 → 帳號建好了，死在寫 session
+  //   一段都沒有          → 死在 getCurrentUser（讀 cookie / 查 User）
+  console.error(`[e2e] GET /auth/guest → ${response.status()} location=${response.headers().location} timing=${timing}`)
+
   expect(response.status(), `/auth/guest 沒有回 302，計時：${timing}`).toBe(302)
 
   // 失敗時這支路由會把人留在 /login（見 server/routes/auth/guest.get.ts 的 catch），

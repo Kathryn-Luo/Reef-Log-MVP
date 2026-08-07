@@ -62,6 +62,10 @@ const HANDLERS = [
   { file: 'server/api/creatures/[id].get.ts', resolver: 'resolveCreatureDetail' },
   { file: 'server/api/creatures/[id].patch.ts', resolver: 'applyCreatureStatus' },
   { file: 'server/api/creatures/[id]/move.patch.ts', resolver: 'moveOwnedCreature' },
+  // 保養提醒（issue #122）：讀取掛在缸底下，兩支寫入掛在任務底下
+  { file: 'server/api/tanks/[id]/maintenance.get.ts', resolver: 'resolveMaintenancePage' },
+  { file: 'server/api/maintenance-tasks/[id]/completions.post.ts', resolver: 'resolveCompleteTask' },
+  { file: 'server/api/maintenance-tasks/[id]/completions/[completedOn].delete.ts', resolver: 'resolveClearCompletion' },
 ]
 
 describe('每一支 API 都經過同一道歸屬檢查', () => {
@@ -107,6 +111,7 @@ describe('每一支 API 都經過同一道歸屬檢查', () => {
     'server/api/creatures/[id].patch.ts',
     'server/api/creatures/[id]/move.patch.ts',
     'server/api/tanks/[id]/water-logs.post.ts',
+    'server/api/maintenance-tasks/[id]/completions.post.ts',
   ])('%s 把 body 延後到身分檢查之後才讀', (file) => {
     const source = readCode(file)
 

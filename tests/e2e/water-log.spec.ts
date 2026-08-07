@@ -70,13 +70,46 @@ function dateInputValue(at: Date) {
   return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`
 }
 
+/**
+ * 這個沙盒裡 KH「最近一筆已存在的讀值」是什麼時候量的。
+ *
+ * 補記的日期要比它更舊才測得到這條 Story，而那個「更舊」不能用 `Date.now()` 往回推：
+ * 示範資料的 `measuredAt` 是 `pnpm db:seed` 執行當下算的（最新一筆是「4 小時前」），
+ * 訪客沙盒又是照原值整棵複製過去的（server/utils/guestSandbox.ts 不重算時間），
+ * 所以那筆「最新」會隨著 preview 資料庫上次 seed 的日子一天天變舊。
+ * 寫死「七天前」的話，seed 超過七天沒跑，補記的那一筆就反過來成了最新的一筆——
+ * 覆蓋是對的行為，紅掉的是測試自己。實際踩過一次：同一份程式碼前一天全綠、隔天全紅。
+ *
+ * 改成以那一筆的時間為錨，往前一天。不論 preview 的示範資料多舊都成立。
+ */
+async function latestKhMeasuredAt(page: Page): Promise<Date> {
+  const { request } = page.context()
+  const { tanks } = await (await request.get('/api/tanks')).json() as { tanks: { id: string }[] }
+
+  expect(tanks.length, '訪客沙盒裡沒有任何缸——preview 的資料庫可能沒跑過 pnpm db:seed').toBeGreaterThan(0)
+
+  // 這支端點回的就是 WaterLogPageData 本身（`{ previousReadings, waterLogs }`）。
+  // `/log` 那邊看到的 `data.page.previousReadings` 多一層是因為頁面把缸與這一段
+  // 串成同一個 useAsyncData，那是 composable 組出來的形狀，不是 API 的。
+  const { previousReadings } = await (await request.get(`/api/tanks/${tanks[0]!.id}/water-logs`)).json() as {
+    previousReadings: { parameter: string, measuredAt: string }[]
+  }
+  const kh = previousReadings.find(reading => reading.parameter === 'KH')
+
+  expect(kh, 'KH 從未被記錄過，這條 Story 就沒有「較新的讀值」可以被蓋掉').toBeDefined()
+
+  return new Date(kh!.measuredAt)
+}
+
 // Given KH 欄顯示「上次 <值>」（來自最近一次量測）
-// When  我把日期改成上週，KH 填一個不同的值，按下儲存
+// When  我把日期改成比那一筆更早的一天，KH 填一個不同的值，按下儲存
 // Then  KH 欄的「上次」不變——補記的那一筆不是「最近一筆已存在的讀值」（issue #131）
 //
 // 只影響尚未重新整理的畫面，unit 覆蓋得完整（issue #131 的判斷），這裡補一條主線：
 // 樂觀更新用的是本地那份歷史，真的走一次「填 → 存 → 回寫」才看得到它串對了沒有。
-test('補記上週的量測，不會把 KH 的「上次」蓋成較舊的讀值', async ({ page }) => {
+test('補記較早的量測，不會把 KH 的「上次」蓋成較舊的讀值', async ({ page }) => {
+  const backdate = new Date((await latestKhMeasuredAt(page)).getTime() - DAY)
+
   await page.goto('/log')
 
   await expectLoaded(page)
@@ -87,7 +120,7 @@ test('補記上週的量測，不會把 KH 的「上次」蓋成較舊的讀值'
   const kh = page.getByTestId('reading-field').filter({ hasText: 'KH' }).first()
   const previous = await kh.getByTestId('reading-previous').textContent()
 
-  await page.locator('input[name="measuredDate"]').fill(dateInputValue(new Date(Date.now() - 7 * DAY)))
+  await page.locator('input[name="measuredDate"]').fill(dateInputValue(backdate))
   await page.locator('input[name="KH"]').fill('6.5')
   await page.getByTestId('water-log-submit').click()
 

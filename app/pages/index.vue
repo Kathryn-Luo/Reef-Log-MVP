@@ -109,12 +109,19 @@ async function ensureSandbox() {
   sandboxState.value = 'preparing'
 
   try {
-    const { alreadySeeded } = await $api<GuestSandboxResponse>('/api/guest-sandbox', { method: 'POST' })
+    await $api<GuestSandboxResponse>('/api/guest-sandbox', { method: 'POST' })
 
-    // 剛剛才把示範資料放進來，清單得重新取一次；已經備妥的話重取只是白跑一趟
-    if (!alreadySeeded) {
-      await reload()
-    }
+    // ⚠ 不管回的是什麼都要重新取一次，**不能只在 alreadySeeded 為 false 時才取**。
+    //
+    // 複製可能是別人做的：冪等鎖（server/utils/guestSandbox.ts）保證只有一個呼叫者
+    // 真的複製，另一個分頁、或先前一次還在路上的請求，都會拿到 alreadySeeded: true
+    // ——而那一刻資料其實已經進來了。只在 false 時重取的話，這一頁會永遠停在
+    // 「還沒有任何缸」，而同一時間 /api/tanks 明明回得出缸。
+    //
+    // 代價是真的沒有缸的帳號（例如 Google 使用者）會多打一次 /api/tanks。
+    // 那是一次很便宜的讀取，換掉的是一個沒有出口的死畫面。
+    // 實際踩過（PR #145 的 E2E，畫面等了 34 次輪詢仍是空狀態）。
+    await reload()
 
     sandboxState.value = 'settled'
   }

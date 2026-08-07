@@ -26,14 +26,11 @@ async function signInAsGuest(context: BrowserContext): Promise<string> {
 
   const timing = response.headers()['x-guest-timing'] ?? '（沒有計時標頭）'
 
-  // ⚠ 暫時的除錯輸出，理由與 support/guestSession.ts 那幾行相同（run 被 45 分鐘上限
-  // 砍掉，Playwright 的報表產不出來）。這一行特別關鍵：**失敗的 302 上仍然帶著計時**
-  // （guest.get.ts 成功與失敗都會設標頭），所以它說得出這次請求走到哪一段才死的——
+  // 計時一併帶進失敗訊息：**失敗的 302 上仍然帶著它**（guest.get.ts 成功與失敗都會
+  // 設標頭），所以它說得出這次請求走到哪一段才死的——
   //   只有 connect        → 死在 user.create（資料庫層，例如欄位不存在）
   //   connect + user 都有 → 帳號建好了，死在寫 session
   //   一段都沒有          → 死在 getCurrentUser（讀 cookie / 查 User）
-  console.error(`[e2e] GET /auth/guest → ${response.status()} location=${response.headers().location} timing=${timing}`)
-
   expect(response.status(), `/auth/guest 沒有回 302，計時：${timing}`).toBe(302)
 
   // 失敗時這支路由會把人留在 /login（見 server/routes/auth/guest.get.ts 的 catch），
@@ -91,7 +88,15 @@ test('補建之後示範資料就在名下了', async ({ browser }) => {
 
   expect(result.alreadySeeded, '伺服器說沒有欠著的沙盒，但登入才剛建完帳號').toBe(false)
   expect(result.copied, '模板名下沒有缸——preview 的資料庫可能沒跑過 pnpm db:seed').toBeGreaterThan(0)
-  expect(await tankCount(context.request)).toBe(result.copied)
+
+  // ⚠ 不能拿 copied 當等號右邊。`copied` 數的是「複製了幾個缸」（模板有幾個就是幾個），
+  // 而 GET /api/tanks 只列未封存的（listTankOptions 的 `archivedAt: null`）——
+  // 模板裡有封存的缸，兩個數字因此本來就不相等（實測 copied 3、清單 2）。
+  // 這裡要驗的是「資料真的進來了」，缸數是示範資料的內容，寫死只會讓 seed 一改就誤紅。
+  const visible = await tankCount(context.request)
+
+  expect(visible, '補建說複製了缸，但清單是空的').toBeGreaterThan(0)
+  expect(visible, '清單裡的缸比複製的還多').toBeLessThanOrEqual(result.copied)
 
   await context.close()
 })

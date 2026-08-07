@@ -117,6 +117,8 @@ const state = {
   failSandbox: false,
   /** 打了幾次。冪等由伺服器負責，但首頁不該一直重打——那條防線在這裡 */
   sandboxCalls: 0,
+  /** 別人（另一個分頁）先複製完了：資料在，但這一次呼叫回的是 alreadySeeded: true */
+  sandboxFilledByOther: false,
 }
 
 /** 說不出原因的失敗（500 / 離線 / function 掛掉），沒有可以直接顯示給使用者的訊息 */
@@ -142,8 +144,10 @@ registerEndpoint('/api/guest-sandbox', {
       throw serverError()
     }
 
-    if (!state.sandboxAlreadySeeded) {
-      // 複製完成 ＝ 從這一刻起缸清單就有東西了，與伺服器上真的發生的事一致
+    // 複製完成 ＝ 從這一刻起缸清單就有東西了，與伺服器上真的發生的事一致。
+    // sandboxFilledByOther 模擬「別人先複製完了」：資料進來了，但這一次呼叫
+    // 什麼都沒做（冪等鎖被另一個分頁搶走），所以回的是 alreadySeeded: true
+    if (!state.sandboxAlreadySeeded || state.sandboxFilledByOther) {
       state.tanks = [MAIN_TANK]
     }
 
@@ -191,6 +195,7 @@ beforeEach(() => {
   state.sandboxAlreadySeeded = true
   state.failSandbox = false
   state.sandboxCalls = 0
+  state.sandboxFilledByOther = false
 })
 
 /**
@@ -1440,5 +1445,28 @@ describe('首頁 — 訪客沙盒準備中', () => {
     await mountHome()
 
     expect(state.sandboxCalls).toBe(0)
+  })
+})
+
+// issue #144：複製可能是**別人**做的。
+//
+// 冪等鎖（server/utils/guestSandbox.ts）保證只有一個呼叫者真的複製，其餘一律拿到
+// alreadySeeded: true。所以「這一次呼叫沒做事」與「沒有資料」是兩件完全不同的事——
+// 另一個分頁、或先前一次還在路上的請求，都可能已經把資料放進來了。
+//
+// 實際踩過（PR #145 的 E2E）：畫面等了 34 次輪詢仍是「還沒有任何缸」，而同一時間
+// /api/tanks 已經回得出缸。原因就是這一頁只在 alreadySeeded 為 false 時才重新取。
+describe('首頁 — 沙盒是別人複製完的', () => {
+  beforeEach(() => {
+    state.tanks = []
+    state.sandboxAlreadySeeded = true
+    state.sandboxFilledByOther = true
+  })
+
+  it('拿到 alreadySeeded: true 仍然重新取一次，換成示範缸的內容', async () => {
+    const page = await mountHome()
+
+    expect(page.find('[data-testid="tank-empty"]').exists()).toBe(false)
+    expect(page.get('h1').text()).toContain(MAIN_TANK.name)
   })
 })

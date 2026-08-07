@@ -3,11 +3,14 @@ import type { CreatureDetailDto, CreatureDetailResponse, MoveCreatureResponse, T
 import type { TankHomeData, TankOption } from '#shared/types/home'
 import type { MaintenancePageData, MaintenanceTaskDto, MaintenanceTaskResponse } from '#shared/types/maintenance'
 import type { CreateTankResponse } from '#shared/types/tank'
+import type { TrendPageData } from '#shared/types/trend'
 import type { CreateWaterLogResponse, WaterLogPageData } from '#shared/types/waterLog'
 import { parseCreatureStatusInput } from '#shared/utils/creatureDetail'
 // completedOn 的規則與保養頁共用同一份（issue #122，與 parseWaterLogInput 同一個作法）
 import { parseCompletedOn, parseCompletedOnInput } from '#shared/utils/maintenance'
 import { parseTankInput } from '#shared/utils/tankForm'
+// 時間範圍的規則住在 shared：#123 的畫面用的是同一份四個選項（issue #126）
+import { parseTrendRange } from '#shared/utils/trend'
 // parseWaterLogInput 與記錄水質的表單共用同一份規則，所以它住在 shared（issue #124）
 import { parseWaterLogInput } from '#shared/utils/waterLog'
 import { getCreatureDetail, moveCreature, updateCreatureStatus } from './creatureDetail'
@@ -15,6 +18,7 @@ import { getTankCreatures } from './creatureList'
 import { getTankHome, listTankOptions } from './homeData'
 import { clearCompletion, completeTask, findOwnedMaintenanceTask, getMaintenancePage } from './maintenance'
 import { createTank } from './tankWrite'
+import { getTrendPage } from './trendData'
 import { createWaterLog, getWaterLogPage } from './waterLog'
 
 // 資料歸屬的伺服器邊界（issue #68）。
@@ -303,6 +307,39 @@ export async function resolveWaterLogPage(
   }
 
   return { ok: true, value: await getWaterLogPage(client, owned.value) }
+}
+
+/**
+ * GET /api/tanks/:id/trends —— screen-4 六個測項的序列、統計與正常區間。
+ *
+ * `range` 以未解析的原始值傳進來（`getQuery(event).range`），解析在這裡、而且排在
+ * 身分與歸屬**之後**：先解析的話，未登入的人送一個 `?range=year` 會拿到 400，而
+ * #68 要的是「未登入的任何一支 API 一律 401」；打別人缸的人也會從 400 得知
+ * 「這個缸是存在的，只是你參數寫錯了」。順序與 createOwnedWaterLog 的 body 一致
+ * ——身分先於歸屬，歸屬先於內容。
+ *
+ * `now` 由呼叫端傳入，正式的 handler 走預設值（與 parseWaterLogInput 同一個作法）。
+ */
+export async function resolveTrendPage(
+  client: PrismaClient,
+  user: SessionUser | null,
+  tankId: string | undefined,
+  range: unknown,
+  now: Date = new Date(),
+): Promise<Authorized<TrendPageData>> {
+  const owned = await requireOwnedTank(client, user, tankId)
+
+  if (!owned.ok) {
+    return owned
+  }
+
+  const parsed = parseTrendRange(range)
+
+  if (!parsed.ok) {
+    return { ok: false, error: invalidInput('Invalid trend range', parsed.message) }
+  }
+
+  return { ok: true, value: await getTrendPage(client, owned.value, parsed.value, now) }
 }
 
 /**

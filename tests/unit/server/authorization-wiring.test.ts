@@ -58,6 +58,7 @@ const HANDLERS = [
   { file: 'server/api/tanks/[id]/creatures.get.ts', resolver: 'resolveTankCreatures' },
   { file: 'server/api/tanks/[id]/water-logs.get.ts', resolver: 'resolveWaterLogPage' },
   { file: 'server/api/tanks/[id]/water-logs.post.ts', resolver: 'createOwnedWaterLog' },
+  { file: 'server/api/tanks/[id]/trends.get.ts', resolver: 'resolveTrendPage' },
   { file: 'server/api/creatures/[id].get.ts', resolver: 'resolveCreatureDetail' },
   { file: 'server/api/creatures/[id].patch.ts', resolver: 'applyCreatureStatus' },
   { file: 'server/api/creatures/[id]/move.patch.ts', resolver: 'moveOwnedCreature' },

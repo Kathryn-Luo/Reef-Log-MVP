@@ -50,25 +50,51 @@ import type { Page } from '@playwright/test'
 export const GUEST_LOGIN_NAV_TIMEOUT_MS = 45_000
 
 /**
- * 等首頁上的示範資料真的備妥（issue #144）。
+ * 等示範資料真的備妥（issue #144）。
  *
  * ⚠ 網址變成 `/` 只代表**登入**完成，示範資料可能還在複製。
  *
  * #144 把複製從 `/auth/guest` 搬到首頁掛載之後的 `POST /api/guest-sandbox`，302 因此
  * 發得比從前早得多（實測 14.8 秒 → 約 2.8 秒）。代價是 `toHaveURL('/')` 通過的那一刻
  * `/api/tanks` 可能還是空的——少了這一句，接著 `goto('/log')` 或直接打 API 的 spec
- * 會看到「還沒有任何缸」，而失敗訊息會長得像畫面壞了，跟真正的原因一點關係都看不出來。
+ * 會看到「還沒有任何缸」。
  *
- * 等的是**正面訊號**（缸的固定頁首出現），不是「準備中消失」：#129 的教訓——
- * SPA 下「某個東西不存在」在還沒開始渲染時同樣成立，那種等待會提早通過。
+ * ── 為什麼自己打 API，而不是等首頁去打 ──
+ *
+ * 第一版等的是首頁的 `home-sticky-header`。它會動，但**壞掉的時候什麼都不會說**：
+ * 逾時訊息一律是「找不到那個元素」，而真正的原因可能是登入沒成功、沙盒那支 API 回 500、
+ * 模板沒 seed、或首頁沒在對的時機呼叫——四者在畫面上長得一模一樣。E2E 一輪要 45 分鐘，
+ * 一個講不出原因的逾時等於白跑一輪（實際踩過：run 31169806875，138 條裡除了不需登入的
+ * 4 條以外全紅，而 run 撞上 45 分鐘上限，連報表都沒產出）。
+ *
+ * 現在直接呼叫 `POST /api/guest-sandbox` 並確認 `/api/tanks` 真的有東西：拿得到狀態碼
+ * 與回應本文，失敗訊息因此直接指向出問題的那一層。fixture 的職責本來就是
+ * 「給我一位有資料的訪客」，不是「確認首頁畫好了」——後者是 home 那一支自己的題目。
  *
  * 預算沿用登入那一個常數：搬家之後這 11.5 秒還在，只是換了個地方等。
  */
 export async function waitForSandbox(page: Page): Promise<void> {
-  await expect(
-    page.getByTestId('home-sticky-header'),
-    '示範資料一直沒有備妥——preview 的資料庫可能沒跑過 pnpm db:seed',
-  ).toBeVisible({ timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
+  const { request } = page.context()
+
+  // 自己打，不等首頁去打。
+  //
+  // 這支 API 是冪等的（server/utils/guestSandbox.ts 的 claim），所以與首頁自己那一次
+  // 併發也只會複製一份——最壞情況是兩邊各等一次同一個交易。
+  const response = await request.post('/api/guest-sandbox', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
+  const body = await response.text()
+
+  expect(response.status(), `POST /api/guest-sandbox 回了 ${response.status()}：${body}`).toBe(200)
+
+  // 補建說成功了，資料就該真的在。這一句分得出「API 說它做了」與「東西真的在」——
+  // 模板沒 seed 過時前者照樣是 200，而 copied 會是 0
+  const tanks = await request.get('/api/tanks')
+  const tanksBody = await tanks.text()
+
+  expect(tanks.status(), `GET /api/tanks 回了 ${tanks.status()}：${tanksBody}`).toBe(200)
+  expect(
+    (JSON.parse(tanksBody) as { tanks: unknown[] }).tanks.length,
+    `沙盒是空的。補建回的是：${body}——preview 的資料庫可能沒跑過 pnpm db:seed`,
+  ).toBeGreaterThan(0)
 }
 
 /** 走一遍登入頁上的「以訪客身分瀏覽」，回來時人已經在首頁上、示範資料也已經在手上。 */

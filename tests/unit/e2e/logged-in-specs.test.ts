@@ -49,6 +49,8 @@ const LOGGED_IN_SPECS = [
   // 記錄水質（#124）。這一支寫入水質記錄，同樣要有身分才進得去，
   // 所以一起納入這份名單——新加的 spec 漏接 fixture 會紅在這裡。
   ['tests/e2e/water-log.spec.ts', 5],
+  // 保養提醒（#125）。勾選 / 取消會寫進自己的沙盒，同樣要有身分。
+  ['tests/e2e/maintenance.spec.ts', 5],
 ] as const
 
 /**

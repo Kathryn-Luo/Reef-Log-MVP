@@ -76,6 +76,16 @@ export const GUEST_LOGIN_NAV_TIMEOUT_MS = 45_000
 export async function waitForSandbox(page: Page): Promise<void> {
   const { request } = page.context()
 
+  // ⚠ 這幾行 console.error 是刻意的，不是忘了拿掉的除錯碼。
+  //
+  // Playwright 的失敗詳情要等整個 run 結束才印，而這條路徑壞掉的時候 run 根本
+  // 走不到結束：138 條裡除了不需登入的 4 條以外全紅，每條又重試 2 次，job 撞上
+  // 45 分鐘上限被砍（run 31169806875、31180418977 連續兩輪都是），連報表都沒產出。
+  // 兩輪下來我手上只有一串進度符號，一句錯誤訊息都沒有。
+  //
+  // stderr 是即時的，砍掉也留得住。這一段等到 E2E 能跑完之後就該拿掉——
+  // 屆時 Playwright 自己的失敗詳情比這個好讀得多。
+
   // 自己打，不等首頁去打。
   //
   // 這支 API 是冪等的（server/utils/guestSandbox.ts 的 claim），所以與首頁自己那一次
@@ -83,12 +93,16 @@ export async function waitForSandbox(page: Page): Promise<void> {
   const response = await request.post('/api/guest-sandbox', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
   const body = await response.text()
 
+  console.error(`[e2e] POST /api/guest-sandbox → ${response.status()} ${body.slice(0, 400)}`)
+
   expect(response.status(), `POST /api/guest-sandbox 回了 ${response.status()}：${body}`).toBe(200)
 
   // 補建說成功了，資料就該真的在。這一句分得出「API 說它做了」與「東西真的在」——
   // 模板沒 seed 過時前者照樣是 200，而 copied 會是 0
   const tanks = await request.get('/api/tanks')
   const tanksBody = await tanks.text()
+
+  console.error(`[e2e] GET /api/tanks → ${tanks.status()} ${tanksBody.slice(0, 200)}`)
 
   expect(tanks.status(), `GET /api/tanks 回了 ${tanks.status()}：${tanksBody}`).toBe(200)
   expect(
@@ -105,7 +119,17 @@ export async function loginAsGuest(page: Page): Promise<void> {
   // 停在首頁才算數：登入失敗時這支路由會把人留在 /login，
   // 少了這一句，後面每一條斷言都會以「登入頁上找不到那個元素」的形式失敗，
   // 看起來像是畫面壞了，而不是沒登入。
-  await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
+  try {
+    await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
+  }
+  catch (cause) {
+    // 登入失敗時 /auth/guest 會把人留在 /login（見該 handler 的 catch），
+    // 而畫面上看起來只是「按鈕沒反應」。把實際停在哪裡印出來，分得出
+    // 「導向沒發生」與「導向去了別的地方」
+    console.error(`[e2e] 訪客登入沒有停在首頁，現在在 ${page.url()}`)
+
+    throw cause
+  }
 
   await waitForSandbox(page)
 }

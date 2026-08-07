@@ -142,6 +142,19 @@ export function formatReadingValue(parameter: WaterParameterKey, value: number):
 }
 
 /**
+ * 「變化了多少」的顯示格式：小數位與該測項的讀值相同，但**保留小數點前的 0**。
+ *
+ * 為什麼不共用 formatReadingValue：screen-4 的截圖自己給了答案——同一個 KH，
+ * 上方大字寫「7.8」，右側的變化量寫「0.4」。省略前導 0 是讀值為了在窄螢幕上並排
+ * 才付的代價（screen-1 的六格），而變化量單獨佔一行，「▼ .4」只會看起來像漏字。
+ *
+ * 也順手收掉浮點數相減的尾巴（8.2 − 7.8 ＝ 0.3999999999999995）。
+ */
+export function formatReadingDelta(parameter: WaterParameterKey, value: number): string {
+  return value.toFixed(DISPLAY_DECIMALS[parameter])
+}
+
+/**
  * 把一筆水質記錄的讀數整理成摘要列，並數出「N 需注意」。
  * 未量測的測項不會有 WaterReading 列（見 schema.prisma 的 @@unique 註解），這裡也就不補位。
  */

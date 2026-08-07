@@ -156,6 +156,21 @@ describe('summarizeTrendSeries', () => {
     expect(summary.change).toEqual({ delta: 1, days: 7 })
   })
 
+  // `days` 是四捨五入到整數的（issue #126 第 3-2 節），所以 0.5 天是它的分界。
+  // 沒有這一條的話，`Math.round` 換成 `Math.floor` 或 `Math.ceil` 都不會有測試轉紅——
+  // 而那兩者會讓「同一天早晚各量一次」在畫面上變成「0 天」或「1 天」，
+  // 剛好是這個欄位唯一能講錯的地方。
+  it.each([
+    ['11 小時無條件捨去', 11 / 24, 0],
+    ['12 小時進位', 12 / 24, 1],
+    ['13 小時進位', 13 / 24, 1],
+    ['36 小時進位成 2 天', 1.5, 2],
+  ])('相隔天數四捨五入到整數（%s）', (_label, apart, expected) => {
+    const summary = summarizeTrendSeries([point(daysAgo(apart), 7.8), point(daysAgo(0), 7.9)])
+
+    expect(summary.change?.days).toBe(expected)
+  })
+
   it('最高 / 最低 / 平均看的是整段區間，不是只有頭尾', () => {
     const summary = summarizeTrendSeries([
       point(daysAgo(21), 7.5),

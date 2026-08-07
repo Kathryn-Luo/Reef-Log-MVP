@@ -253,6 +253,40 @@ describe('登入畫面 — 訪客按鈕的處理中樣態', () => {
     expect(second.defaultPrevented).toBe(true)
   })
 
+  // ⚠ 這一條是整段最重要的：**處理中的樣態不能把這顆連結變成按不動的東西**。
+  //
+  // 這顆按鈕是 `<a href="/auth/guest">`，導向由瀏覽器處理。點下去的同一拍把元素
+  // disable 掉，瀏覽器會把那次還沒開始的導向一起取消——結果是「按了完全沒事」，
+  // 比沒有處理中樣態更糟。
+  //
+  // 實際踩過（PR #145）：`:loading` 看起來人畜無害，但 Nuxt UI 的 UButton 在
+  // loading 為 true 時會自己加上 disabled。E2E 因此整批紅——138 條裡除了不需登入的
+  // 4 條以外全部停在 /login，而 jsdom 裡沒有真正的導向可以被取消，
+  // 原本那幾條測試（data-starting、preventDefault）一條都沒轉紅。
+  it('進入處理中之後仍然是按得動的連結', async () => {
+    const page = await mountLogin()
+    const guest = page.get('[data-testid="login-action-guest"]')
+
+    await guest.trigger('click')
+
+    expect(guest.attributes('href')).toBe('/auth/guest')
+    expect(guest.attributes('disabled')).toBeUndefined()
+    expect(guest.attributes('aria-disabled')).not.toBe('true')
+    expect(guest.classes()).not.toContain('pointer-events-none')
+    expect(guest.element.tagName).toBe('A')
+  })
+
+  // 樣態要真的看得出來，不能只有一個測試用的屬性在變
+  it('處理中時圖示換成轉圈的那一個', async () => {
+    const page = await mountLogin()
+
+    expect(page.get('[data-testid="login-guest-icon"]').classes()).not.toContain('animate-spin')
+
+    await page.get('[data-testid="login-action-guest"]').trigger('click')
+
+    expect(page.get('[data-testid="login-guest-icon"]').classes()).toContain('animate-spin')
+  })
+
   // Google 那顆不受影響：兩顆共用一個旗標的話，按了訪客之後 Google 也會轉圈
   it('Google 按鈕不跟著進入處理中', async () => {
     const page = await mountLogin()

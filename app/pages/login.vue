@@ -163,15 +163,21 @@ function startGuest(event: MouseEvent) {
           variant="outline"
           size="xl"
           block
-          :loading="guestStarting"
           class="rounded-2xl border border-default bg-elevated/40 py-3.5 text-base font-semibold"
           @click="startGuest"
         >
+          <!--
+            ⚠ 處理中的樣態是自己換圖示，**不能用 UButton 的 `loading` prop**。
+            它在 loading 為 true 時會自己把元素 disable 掉，而這顆是連結——
+            點下去的同一拍被 disable，瀏覽器會把那次還沒開始的導向一起取消，
+            結果是「按了完全沒事」。實際踩過（PR #145，E2E 整批停在 /login）。
+          -->
           <template #leading>
             <UIcon
               data-testid="login-guest-icon"
-              name="i-lucide-user"
+              :name="guestStarting ? 'i-lucide-loader-circle' : 'i-lucide-user'"
               class="size-5"
+              :class="guestStarting ? 'animate-spin motion-reduce:animate-none' : ''"
             />
           </template>
 

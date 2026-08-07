@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mountSuspended, registerEndpoint } from '@nuxt/test-utils/runtime'
+import { flushPromises } from '@vue/test-utils'
 import IndexPage from '../../app/pages/index.vue'
 import type { TankOption } from '#shared/types/home'
 
@@ -23,6 +24,13 @@ describe('首頁的「＋ 新增」生物按鈕', () => {
   // 「新增 / 編輯生物表單」issue 負責；本 issue 只渲染按鈕並連向該路由。
   it('渲染為連向新增生物路由的按鈕', async () => {
     const page = await mountSuspended(IndexPage, { route: '/' })
+
+    // #110 之後首頁是 lazy 的：掛載當下畫面是骨架，按鈕還沒渲染。
+    // 等骨架消失（缸清單與缸內容是串起來的兩支請求，一次 flush 不夠）。
+    for (let attempt = 0; attempt < 10 && page.find('[data-testid="home-loading"]').exists(); attempt++) {
+      await flushPromises()
+    }
+
     const addButton = page.findAll('a').find(link => link.text().includes('新增'))
 
     expect(addButton).toBeDefined()

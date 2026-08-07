@@ -98,6 +98,10 @@ export async function resolveGoogleLogin(
       data: {
         email: profile.email ?? null,
         displayName: profile.name ?? null,
+        // Google 使用者沒有訪客沙盒要複製，所以建立當下就填上現在（issue #144）。
+        // 欄位語義是「沒有欠著的複製」，不是「複製過了」——留 null 的話，
+        // 首頁會判定他還在等示範資料，永遠停在「正在準備」上。
+        sandboxSeededAt: new Date(),
         accounts: {
           create: {
             provider: 'GOOGLE',

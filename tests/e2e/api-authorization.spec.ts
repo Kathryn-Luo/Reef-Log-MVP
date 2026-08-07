@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import type { APIRequestContext, Browser, BrowserContext } from '@playwright/test'
-import { GUEST_LOGIN_NAV_TIMEOUT_MS } from './support/guestSession'
+import { GUEST_LOGIN_NAV_TIMEOUT_MS, waitForSandbox } from './support/guestSession'
 
 // 資料歸屬的伺服器邊界（issue #68）。E2E 不在 TDD Develop 的 job 內執行，
 // 跑在 Vercel preview URL 上。
@@ -43,6 +43,8 @@ async function openSandbox(browser: Browser): Promise<Sandbox> {
   // 這個 beforeAll 連開兩位訪客，最容易撞上冷的 instance：三條 test 在 CI 上第一次跑
   // 就全部倒在這一句、重試才過（run 30809735121）。
   await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
+  // #144：登入完成不等於示範資料備妥，複製已經移到首頁掛載之後
+  await waitForSandbox(page)
 
   const { tanks } = await (await context.request.get('/api/tanks')).json() as { tanks: { id: string, name: string }[] }
 
@@ -310,7 +312,7 @@ test.describe('別人的 id', () => {
 // Then  回傳 401，不回傳任何資料
 test.describe('未登入', () => {
   // 全新的 context，一張 cookie 都沒有——不是「過期」，是從來沒登入過
-  test('十一支 API 一律回 401', async ({ browser }) => {
+  test('十二支 API 一律回 401', async ({ browser }) => {
     const context = await browser.newContext()
 
     const responses = await Promise.all([
@@ -327,9 +329,12 @@ test.describe('未登入', () => {
       context.request.get('/api/tanks/any-tank-id/maintenance'),
       context.request.post('/api/maintenance-tasks/any-task-id/completions', { data: { completedOn: today() } }),
       context.request.delete(`/api/maintenance-tasks/any-task-id/completions/${today()}`),
+      // 訪客沙盒的補建（issue #144）。這一支特別要緊：它是唯一一支不需要任何既有資料
+      // 就會**寫入**的 API，折成 200 的話沒有 cookie 的請求也能讓資料庫長出一整份示範資料
+      context.request.post('/api/guest-sandbox'),
     ])
 
-    expect(responses.map(response => response.status())).toEqual(Array.from({ length: 11 }, () => 401))
+    expect(responses.map(response => response.status())).toEqual(Array.from({ length: 12 }, () => 401))
 
     await context.close()
   })

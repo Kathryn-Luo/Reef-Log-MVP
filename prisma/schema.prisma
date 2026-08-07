@@ -87,6 +87,25 @@ model User {
   /// default 設為建立時間；續發 session 前更新它，寫 session 失敗時最多多保留資料，
   /// 不會反向刪除仍可能有效的沙盒。
   lastActiveAt DateTime @default(now())
+
+  /// 訪客沙盒複製完成的時間。**null ＝ 這位使用者還欠一份沙盒。**
+  ///
+  /// issue #144：複製示範資料要 11.5 秒，佔 `/auth/guest` 全部耗時的 78%，而那 302 是
+  /// handler 最後一行才發的——使用者因此在登入頁前面乾等十幾秒。複製移出登入請求之後，
+  /// 「這位訪客的沙盒建好了沒」就不再是同一次請求內的事，需要一個查得到的狀態。
+  ///
+  /// 為什麼是可空的時間戳而不是布林：布林只答得出「好了沒」，答不出「什麼時候好的」，
+  /// 而卡在半路的訪客要靠這個欄位找得出來。null 同時是複製那一步的**冪等鎖**——
+  /// `updateMany({ where: { sandboxSeededAt: null } })` 搶得到才複製，
+  /// 連點兩下或兩個分頁同時打都只會複製一份（見 server/utils/guestSandbox.ts）。
+  ///
+  /// Google 使用者建立當下就填上現在：他們沒有沙盒要複製，欄位語義是「沒有欠著的複製」，
+  /// 不是「複製過了」。留 null 的話首頁會永遠停在「正在準備示範資料」。
+  ///
+  /// 既有的使用者由 migration 一併回填成各自的 createdAt——他們的沙盒在登入當下就複製完了。
+  /// 不回填的話下次進站會被判定為「還欠一份」，於是**再複製一份**，缸直接變兩倍。
+  sandboxSeededAt DateTime?
+
   updatedAt DateTime @updatedAt
 
   accounts Account[]

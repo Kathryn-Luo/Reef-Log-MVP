@@ -24,7 +24,12 @@ import type { Page } from '@playwright/test'
 // 得多，而累積本來就是 #52 / #70 要解決的題目——真人訪客一樣會累積。
 
 /**
- * 「按下訪客登入 → 停在首頁」這一次導航的等待預算（issue #111）。
+ * 「按下訪客登入 → 停在首頁、示範資料備妥」整段的等待預算（issue #111）。
+ *
+ * ⚠ issue #144 之後這段等待**換了地方**，但總長度沒有變。複製示範資料那 11.5 秒從
+ * `/auth/guest` 這次請求裡搬到了首頁掛載之後的 `POST /api/guest-sandbox`——使用者因此
+ * 早得多就看得到畫面，但「從按下按鈕到示範資料真的在手上」仍然是同一個量級。
+ * 這個常數涵蓋的正是後者，所以照舊。
  *
  * `/auth/guest` 這一次請求在 preview 上實測 9.4～14.8 秒（#98 量了 5 次）：訪客登入要建
  * 一位 User、再把模板的示範資料整份複製一份（#66），加上 Vercel 冷啟與 Neon 建立連線。
@@ -44,7 +49,29 @@ import type { Page } from '@playwright/test'
  */
 export const GUEST_LOGIN_NAV_TIMEOUT_MS = 45_000
 
-/** 走一遍登入頁上的「以訪客身分瀏覽」，回來時人已經在首頁上。 */
+/**
+ * 等首頁上的示範資料真的備妥（issue #144）。
+ *
+ * ⚠ 網址變成 `/` 只代表**登入**完成，示範資料可能還在複製。
+ *
+ * #144 把複製從 `/auth/guest` 搬到首頁掛載之後的 `POST /api/guest-sandbox`，302 因此
+ * 發得比從前早得多（實測 14.8 秒 → 約 2.8 秒）。代價是 `toHaveURL('/')` 通過的那一刻
+ * `/api/tanks` 可能還是空的——少了這一句，接著 `goto('/log')` 或直接打 API 的 spec
+ * 會看到「還沒有任何缸」，而失敗訊息會長得像畫面壞了，跟真正的原因一點關係都看不出來。
+ *
+ * 等的是**正面訊號**（缸的固定頁首出現），不是「準備中消失」：#129 的教訓——
+ * SPA 下「某個東西不存在」在還沒開始渲染時同樣成立，那種等待會提早通過。
+ *
+ * 預算沿用登入那一個常數：搬家之後這 11.5 秒還在，只是換了個地方等。
+ */
+export async function waitForSandbox(page: Page): Promise<void> {
+  await expect(
+    page.getByTestId('home-sticky-header'),
+    '示範資料一直沒有備妥——preview 的資料庫可能沒跑過 pnpm db:seed',
+  ).toBeVisible({ timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
+}
+
+/** 走一遍登入頁上的「以訪客身分瀏覽」，回來時人已經在首頁上、示範資料也已經在手上。 */
 export async function loginAsGuest(page: Page): Promise<void> {
   await page.goto('/login')
   await page.getByTestId('login-action-guest').click()
@@ -53,6 +80,8 @@ export async function loginAsGuest(page: Page): Promise<void> {
   // 少了這一句，後面每一條斷言都會以「登入頁上找不到那個元素」的形式失敗，
   // 看起來像是畫面壞了，而不是沒登入。
   await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
+
+  await waitForSandbox(page)
 }
 
 /**

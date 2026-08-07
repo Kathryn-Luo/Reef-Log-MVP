@@ -18,6 +18,7 @@ import {
   resolveClearCompletion,
   resolveCompleteTask,
   resolveCreatureDetail,
+  resolveGuestSandbox,
   resolveMaintenancePage,
   resolveTankCreatures,
   resolveTankHome,
@@ -1299,5 +1300,23 @@ describe('DELETE /api/maintenance-tasks/:id/completions/:completedOn 的歸屬�
 
     await expect(resolveClearCompletion(client, USER_A, 'task-a1', TODAY, NOW))
       .resolves.toEqual({ ok: false, error: MAINTENANCE_TASK_NOT_FOUND })
+  })
+})
+
+// POST /api/guest-sandbox —— 補上這位使用者欠著的示範資料（issue #144）。
+//
+// 這支不掛在任何缸底下，所以沒有「不是你的」這一態可驗：要做的事正是「讓這位使用者有缸」。
+// 剩下的授權問題就只有身分——而它是**唯一一支會在沒有任何既有資料的情況下寫入**的 API，
+// 401 折成 200 的話，任何沒有 cookie 的請求都能讓資料庫多長出一整份示範資料。
+//
+// 「已經備妥就不再複製」的冪等性由 guest-sandbox-ensure.test.ts 顧，那是這一層以下的事。
+describe('resolveGuestSandbox', () => {
+  // Given 我沒有登入 / Then 回傳 401，而且一次查詢都不發出
+  it('未登入時回 401，而且一次寫入都不發出', async () => {
+    const client = fakeClient()
+
+    await expect(resolveGuestSandbox(client, null))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+    expectNoQuery(client)
   })
 })

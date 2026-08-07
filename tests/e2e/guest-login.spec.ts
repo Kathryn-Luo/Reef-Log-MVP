@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import type { BrowserContext } from '@playwright/test'
-import { GUEST_LOGIN_NAV_TIMEOUT_MS } from './support/guestSession'
+import { GUEST_LOGIN_NAV_TIMEOUT_MS, waitForSandbox } from './support/guestSession'
 
 // 訪客登入（issue #66）。E2E 不在 TDD Develop 的 job 內執行，跑在 Vercel preview URL 上。
 //
@@ -28,6 +28,8 @@ test('按下「以訪客身分瀏覽」就進得了首頁，看得到自己的�
   // 本檔每一次登入都用同一個常數，理由見 support/guestSession.ts（#111）。
   // 下一句就回到全域的 15 秒：那時人已經在首頁，等的只是畫面。
   await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
+  // #144：登入完成不等於示範資料備妥，複製已經移到首頁掛載之後
+  await waitForSandbox(page)
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('主缸 · 4 尺')
   await expect(page.getByTestId('tank-subtitle')).toHaveText('SPS MIXED · 420L')
 })
@@ -38,6 +40,8 @@ test('再次進站沿用同一個沙盒，不會多長出一份示範資料', as
   await page.goto('/login')
   await page.getByTestId('login-action-guest').click()
   await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
+  // #144：登入完成不等於示範資料備妥，複製已經移到首頁掛載之後
+  await waitForSandbox(page)
 
   const before = await tankIds(context)
 
@@ -71,6 +75,8 @@ test('兩位訪客拿到各自的沙盒', async ({ browser }) => {
     await page.goto('/login')
     await page.getByTestId('login-action-guest').click()
     await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
+    // #144：登入完成不等於示範資料備妥，複製已經移到首頁掛載之後
+    await waitForSandbox(page)
 
     return tankIds(context)
   }))
@@ -94,6 +100,8 @@ test('訪客改動自己的沙盒之後，下一位訪客拿到的仍是乾淨�
   await page.goto('/login')
   await page.getByTestId('login-action-guest').click()
   await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
+  // #144：登入完成不等於示範資料備妥，複製已經移到首頁掛載之後
+  await waitForSandbox(page)
 
   // 訪客可寫，且寫入 API 不判斷 provider（Story ⑤）——這一筆就是「A 弄髒自己的沙盒」
   const created = await first.request.post('/api/tanks', {
@@ -110,6 +118,8 @@ test('訪客改動自己的沙盒之後，下一位訪客拿到的仍是乾淨�
   await nextPage.goto('/login')
   await nextPage.getByTestId('login-action-guest').click()
   await expect(nextPage).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
+  // #144：登入完成不等於示範資料備妥，複製已經移到首頁掛載之後
+  await waitForSandbox(nextPage)
 
   const clean = await tankIds(second)
 

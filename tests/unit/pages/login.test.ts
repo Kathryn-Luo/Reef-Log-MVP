@@ -211,3 +211,54 @@ describe('登入畫面 — 版面', () => {
     expect(screen.classes()).toContain('dark')
   })
 })
+
+// issue #110：按下「以訪客身分瀏覽」之後，那顆按鈕要立刻看起來在跑。
+//
+// 這條路徑是整頁導向（<a>，不是 fetch），瀏覽器在等 302 的期間仍然停在這一頁上，
+// 所以這個樣態是使用者這幾秒**唯一**看得到的回饋。#144 把示範資料的複製搬出登入請求
+// 之後這一段短了很多（實測 14.8 秒 → 約 2.8 秒），但「按了沒反應」的問題與長度無關。
+describe('登入畫面 — 訪客按鈕的處理中樣態', () => {
+  it('按下之前不是處理中', async () => {
+    const page = await mountLogin()
+
+    expect(page.get('[data-testid="login-action-guest"]').attributes('data-starting')).toBe('false')
+  })
+
+  it('按下之後立刻進入處理中', async () => {
+    const page = await mountLogin()
+    const guest = page.get('[data-testid="login-action-guest"]')
+
+    await guest.trigger('click')
+
+    expect(guest.attributes('data-starting')).toBe('true')
+  })
+
+  // 連點兩下不能送出兩次登入：每一次 /auth/guest 都會建一位新訪客並複製一整份示範資料
+  // （issue #66），第二次等於白白多一個沒人用的沙盒，還要再等一次那幾秒。
+  //
+  // 擋法是 preventDefault 而不是 disabled：這顆按鈕是連結，導向由瀏覽器處理。
+  // 把它 disable 掉有機會連第一次那一次導向都一起取消，於是變成「按了完全沒事」。
+  it('第一次點擊放行，之後的點擊被擋下來', async () => {
+    const page = await mountLogin()
+    const guest = page.get('[data-testid="login-action-guest"]')
+
+    const first = new MouseEvent('click', { bubbles: true, cancelable: true })
+    const second = new MouseEvent('click', { bubbles: true, cancelable: true })
+
+    guest.element.dispatchEvent(first)
+    await page.vm.$nextTick()
+    guest.element.dispatchEvent(second)
+
+    expect(first.defaultPrevented).toBe(false)
+    expect(second.defaultPrevented).toBe(true)
+  })
+
+  // Google 那顆不受影響：兩顆共用一個旗標的話，按了訪客之後 Google 也會轉圈
+  it('Google 按鈕不跟著進入處理中', async () => {
+    const page = await mountLogin()
+
+    await page.get('[data-testid="login-action-guest"]').trigger('click')
+
+    expect(page.get('[data-testid="login-action-google"]').attributes('data-starting')).toBe('false')
+  })
+})

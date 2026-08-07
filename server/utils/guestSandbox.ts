@@ -1,4 +1,5 @@
-import type { Prisma } from '@prisma/client'
+import type { Prisma, PrismaClient } from '@prisma/client'
+import type { GuestSandboxResponse } from '#shared/types/guestSandbox'
 import type { Timer } from './requestTiming'
 import { TEMPLATE_USER } from '../../prisma/seedUser'
 import { createTimer } from './requestTiming'
@@ -13,8 +14,12 @@ import { createTimer } from './requestTiming'
 // 波及 production；但「下一位訪客看到被弄髒的示範缸」這個理由本身不受影響。）也沒有走
 // 「訪客唯讀」：ReefLog 是記錄工具，訪客不能記錄就等於看不到主要功能。
 //
-// Prisma Client 由呼叫端傳入（實際上是 resolveGuestLogin 開的交易），與 googleLogin.ts、
-// currentContext.ts 同一個作法：函式因此能在完全連不到資料庫的情況下測試。
+// Prisma Client 由呼叫端傳入，與 googleLogin.ts、currentContext.ts 同一個作法：
+// 函式因此能在完全連不到資料庫的情況下測試。
+//
+// ⚠ issue #144 之後，複製**不再發生在訪客登入那次請求裡**。實測那一段要 11.5 秒，
+// 佔 /auth/guest 全部耗時的 78%，而該路由的 302 是 handler 最後一行才發的。
+// 現在的入口是下方的 ensureGuestSandbox()，由首頁在畫面已經看得到之後才呼叫。
 
 /** 模板連同下層一次撈出來的形狀——複製鏈的每一層都在這裡。 */
 const TEMPLATE_INCLUDE = {
@@ -138,6 +143,78 @@ export async function copyTemplateSandbox(
   }
 
   return tanks.length
+}
+
+/**
+ * 複製沙盒的交易上限（毫秒）。
+ *
+ * Prisma 互動式交易的預設是 5 秒，而這裡要跑的是「模板有幾個缸就幾句 nested create」，
+ * 每一句底下又是數十筆 insert。實測整段 11.5 秒（issue #144），5 秒必踩。
+ *
+ * 這兩個常數 #144 之前住在 guestLogin.ts，跟著複製一起搬過來：搬家不會讓工作量變小，
+ * 留著預設值等於用 5 秒去做一件要 11 秒的事。
+ */
+const SANDBOX_TRANSACTION_TIMEOUT_MS = 30_000
+
+/**
+ * 等一條可用連線的上限（毫秒）。
+ *
+ * 與 timeout 是兩件事：timeout 管的是「交易開始之後能跑多久」，maxWait 管的是「交易
+ * 開始之前能等多久」，預設只有 2 秒。Neon 是 serverless，連線吃緊時光是拿到連線就可能
+ * 超過 2 秒——只放寬 timeout 會留下一個很難查的故障：交易根本還沒開始就失敗了，
+ * 而錯誤訊息談的是交易。
+ */
+const SANDBOX_TRANSACTION_MAX_WAIT_MS = 10_000
+
+/**
+ * 補上這位使用者欠著的沙盒——沒欠就什麼都不做（issue #144）。
+ *
+ * #66 當初把複製放在 `/auth/guest` 裡，與建帳號同一個交易。那樣有一個很好的性質：
+ * 要嘛「有帳號也有資料」，要嘛「兩者都沒有」，不會有中間態。代價是那 11.5 秒卡在
+ * 302 之前，訪客只能對著登入頁乾等。
+ *
+ * 搬到這裡之後中間態真的出現了（有帳號、沒資料），所以那個保證要用別的方式拿回來：
+ * **claim 與複製包在同一個交易裡**。
+ *
+ *   claim ＝ `updateMany({ where: { id, sandboxSeededAt: null } })`
+ *
+ *   - **搶得到才複製。** `sandboxSeededAt: null` 這個條件就是鎖本身，少了它這句 update
+ *     永遠成功，冪等性整個失效。
+ *   - **複製失敗 → 整個交易回滾 → claim 一起消失。** 這位使用者的 `sandboxSeededAt`
+ *     仍然是 null，下次進站會再試一次。若把錯誤吞掉改回 `alreadySeeded: true`，
+ *     交易會提交，他就被永久標記成「已備妥」而名下一個缸都沒有——#144 要避免的
+ *     「半個帳號」正是這個。所以這支函式**不接住任何錯誤**。
+ *   - **併發的第二次**卡在同一列的 row lock 上，等第一次提交後重新檢查 where，
+ *     `sandboxSeededAt` 已經不是 null 了 → 0 筆 → 不複製。連點兩下、兩個分頁、
+ *     重新整理，都只會有一份。
+ *
+ * 這支函式對「這位是不是訪客」沒有意見：Google 使用者建立當下 `sandboxSeededAt`
+ * 就填上了現在（見 googleLogin.ts），claim 一律搶不到，於是自動什麼都不做。
+ * 判斷因此只有一個地方（那個欄位），不必在這裡再問一次 provider。
+ */
+export async function ensureGuestSandbox(
+  client: PrismaClient,
+  userId: string,
+  timer: Timer = createTimer(),
+): Promise<GuestSandboxResponse> {
+  return await client.$transaction(
+    async (tx) => {
+      const claim = await tx.user.updateMany({
+        where: { id: userId, sandboxSeededAt: null },
+        data: { sandboxSeededAt: new Date() },
+      })
+
+      if (claim.count === 0) {
+        return { copied: 0, alreadySeeded: true }
+      }
+
+      return { copied: await copyTemplateSandbox(tx, userId, timer), alreadySeeded: false }
+    },
+    {
+      timeout: SANDBOX_TRANSACTION_TIMEOUT_MS,
+      maxWait: SANDBOX_TRANSACTION_MAX_WAIT_MS,
+    },
+  )
 }
 
 /**

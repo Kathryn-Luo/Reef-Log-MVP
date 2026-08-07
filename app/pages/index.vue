@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { GuestSandboxResponse } from '#shared/types/guestSandbox'
 import type { CreatureCategoryKey, TankHomeData, TankOption } from '#shared/types/home'
 import {
   CREATURE_CATEGORY_LABELS,
@@ -25,58 +26,131 @@ const now = new Date()
 // $api 而不是裸 $fetch：session 過期時要被帶去登入頁，而不是停在一頁空資料上（#67）
 const { $api } = useNuxtApp()
 
-const {
-  data: tankList,
-  status: tanksStatus,
-  refresh: refreshTanks,
-} = await useAsyncData('home:tanks', () =>
-  $api<{ tanks: TankOption[] }>('/api/tanks'),
-)
-
-const tanks = computed(() => tankList.value?.tanks ?? [])
-
-// 未選擇時看的是清單第一個，也就是 schema 定義的「預設缸」。
 // 建立缸的表單會帶著 ?tank=<id> 導回來，讓剛建立的那個缸成為當前缸——
 // 新缸的 displayOrder 最大，不指名的話看到的會是排序第一個的舊缸。
 const route = useRoute()
 const selectedTankId = ref<string | null>(
   typeof route.query.tank === 'string' ? route.query.tank : null,
 )
-const currentTankId = computed(() =>
-  tanks.value.find(tank => tank.id === selectedTankId.value)?.id ?? tanks.value[0]?.id ?? null,
-)
-const currentTank = computed(() => tanks.value.find(tank => tank.id === currentTankId.value) ?? null)
 
-const {
-  data: home,
-  status: homeStatus,
-  refresh: refreshHome,
-} = await useAsyncData<TankHomeData | null>(
-  'home:tank-data',
-  () => {
-    const tankId = currentTankId.value
+/**
+ * 缸清單與該缸的內容串成同一個請求鏈，而不是兩個各自的 useAsyncData（issue #110）。
+ *
+ * 拆成兩個的話，缸清單拿到之後、缸內容還沒發出去之前會有一拍「已完成但沒有資料」，
+ * 畫面就會閃一次「還沒有任何缸」——而那個空狀態的唯一出口是「建立我的第一個缸」，
+ * 照著按下去就多一個不需要的缸。併成一個之後 status 只有 pending → success 兩種樣子。
+ * 與 /trends、/log、/maintenance 同一個作法。
+ *
+ * lazy 而且**不 await**：這一頁自己畫得出載入樣態，不該在 setup 階段擋著整頁不渲染。
+ * #84 之後是 SPA，await 的代價就是整頁空白到資料回來為止——那正是 #110 的問題本身。
+ */
+const { data, status, refresh: reload } = useAsyncData('home', async () => {
+  const { tanks } = await $api<{ tanks: TankOption[] }>('/api/tanks')
 
-    return tankId ? $api<TankHomeData>(`/api/tanks/${tankId}/home`) : Promise.resolve(null)
-  },
-  { watch: [currentTankId] },
-)
+  // 未選擇時看的是清單第一個，也就是 schema 定義的「預設缸」
+  const tank = tanks.find(candidate => candidate.id === selectedTankId.value) ?? tanks[0] ?? null
+
+  return {
+    tanks,
+    tank,
+    page: tank ? await $api<TankHomeData>(`/api/tanks/${tank.id}/home`) : null,
+  }
+}, { lazy: true, watch: [selectedTankId] })
+
+const tanks = computed(() => data.value?.tanks ?? [])
+const currentTank = computed(() => data.value?.tank ?? null)
+const home = computed(() => data.value?.page ?? null)
 
 // issue #132：請求失敗時 data 是 null，與「成功但沒有缸」長得一模一樣。
 // 少了這一態，「拿不到資料」會被畫成「你沒有資料」，而那個空狀態的唯一出口
 // 是「建立我的第一個缸」——照著按下去就多一個不需要的缸。
 //
 // 401 不在此列：那條路由由 $api 的攔截器帶去登入頁（#67），比這裡更早。
-//
-// 先缸清單、後缸資料而不是並行：缸清單重打成功時 currentTankId 才定案，
-// 並行的話缸資料那一支會拿著舊的（失敗時是 null）id 出發。
-const {
-  failed: loadFailed,
-  retrying,
-  retry: retryLoad,
-} = useLoadFailure([tanksStatus, homeStatus], async () => {
-  await refreshTanks()
-  await refreshHome()
-})
+const { failed: loadFailed, retrying, retry: retryLoad } = useLoadFailure([status], reload)
+
+/**
+ * 骨架只給「第一次、還沒有任何資料」的那一段（issue #110）。
+ *
+ * 換缸時 data 還在，useAsyncData 會保留上一份——整頁消失再長回來比等一下更難看懂，
+ * 與 /trends 換範圍時的處置一致。
+ */
+const loading = computed(() =>
+  !loadFailed.value && !data.value && (status.value === 'idle' || status.value === 'pending'),
+)
+
+/**
+ * 訪客的示範資料還在複製中（issue #144）。
+ *
+ * 為什麼首頁得管這件事：複製要 11.5 秒，原本卡在 /auth/guest 的 302 之前，訪客只能
+ * 對著登入頁乾等。搬出來之後訪客會**先進到這一頁**，而此刻 `/api/tanks` 回的是空清單
+ * ——與「這個帳號真的沒有缸」在畫面上一模一樣。分不開的話，訪客會看到
+ * 「建立我的第一個缸」並照著按下去，然後示範資料才突然冒出來。
+ *
+ * 分辨的方式是問伺服器：POST /api/guest-sandbox 只在「這位使用者欠著一份沙盒」時
+ * 才真的複製（冪等鎖見 server/utils/guestSandbox.ts），並回報它做了什麼。
+ *
+ *   'unknown'   還沒問過。**空清單在這一態也算準備中**——否則從「載入完成、0 個缸」
+ *               到「開始準備」之間會閃一次空狀態，等於換個地方犯同樣的錯。
+ *   'preparing' 正在複製。畫面上要有明確在跑的訊號，不是一片骨架：這一段長達十幾秒，
+ *               看不出在跑的話使用者會以為當掉了。
+ *   'settled'   問過了，沒有欠著的沙盒。空清單此刻才真的是「你還沒有缸」。
+ *   'failed'    複製失敗。走 LoadErrorState 的重試，不會把人留在空狀態上。
+ */
+const sandboxState = ref<'unknown' | 'preparing' | 'settled' | 'failed'>('unknown')
+
+const tanksEmpty = computed(() => !!data.value && data.value.tanks.length === 0)
+
+const preparing = computed(() =>
+  !loadFailed.value && tanksEmpty.value
+  && (sandboxState.value === 'unknown' || sandboxState.value === 'preparing'),
+)
+
+async function ensureSandbox() {
+  sandboxState.value = 'preparing'
+
+  try {
+    const { alreadySeeded } = await $api<GuestSandboxResponse>('/api/guest-sandbox', { method: 'POST' })
+
+    // 剛剛才把示範資料放進來，清單得重新取一次；已經備妥的話重取只是白跑一趟
+    if (!alreadySeeded) {
+      await reload()
+    }
+
+    sandboxState.value = 'settled'
+  }
+  catch {
+    sandboxState.value = 'failed'
+  }
+}
+
+/**
+ * 空清單就問一次伺服器——只問一次。
+ *
+ * `sandboxState !== 'unknown'` 這道閘門不能省：ensureSandbox 成功時會 reload()，
+ * data 因此再變一次，watcher 於是又醒過來。少了它，沙盒真的空著的帳號
+ * （模板沒 seed 過的環境）會無限重打這支 API。
+ */
+watch(data, () => {
+  if (tanksEmpty.value && sandboxState.value === 'unknown') {
+    void ensureSandbox()
+  }
+}, { immediate: true })
+
+/** 準備示範資料失敗時的重試：先重打那一支，再照常重取整頁 */
+async function retryAll() {
+  if (sandboxState.value === 'failed') {
+    sandboxState.value = 'unknown'
+
+    await ensureSandbox()
+
+    return
+  }
+
+  await retryLoad()
+}
+
+/** 取資料失敗，或準備示範資料失敗——兩者對使用者是同一件事：這一頁現在給不出內容 */
+const showError = computed(() => loadFailed.value || sandboxState.value === 'failed')
 
 const creatures = computed(() => home.value?.creatures ?? [])
 const counts = computed(() => countCreaturesByCategory(creatures.value))
@@ -90,14 +164,25 @@ const { settled, pending } = useScrollRestore()
 // 所以開放的時機要等到 settled（還原已經處理完）之後。
 // at 是「樣態要對齊哪個位置」：還原期間頁首要先擺成補回去之後的樣子，
 // 否則那一捲之後才收合，抽掉的高度會被 scroll anchoring 從落點上扣回來。
-const { collapsed, animated } = useHeaderCollapse({ until: settled, at: pending })
+//
+// ⚠ until 還要等 data（issue #110）。這一頁改成 lazy 之後，頁首在資料回來之前
+// 根本還沒渲染，而 settled 在沒有東西要還原時是 onMounted 當下就 true 的——
+// 只看 settled 的話，頁首的第一次渲染會發生在過場**已經開放之後**，
+// reef-motion-off 那一幀就不存在了，還原捲動位置時會看到頁首演一遍收合（#103）。
+const { collapsed, animated } = useHeaderCollapse({
+  until: () => settled.value && !!data.value,
+  at: pending,
+})
 
 // 數據儀表板（screen-2）的展開狀態。關閉的手勢有三種（✕ / 遮罩 / 下拉把手），
 // 狀態放在頁面這一層，三者才是在改同一個開關。
 const dashboardOpen = ref(false)
 
 // 換缸時把儀表板收起來：留著的話會變成「新缸的頁首配舊缸的數據」。
-watch(currentTankId, () => {
+//
+// 看 selectedTankId 而不是當前那個缸：換缸的手勢就是改這個 ref，而缸的內容要等
+// 請求回來才變——盯著後者的話，儀表板會在新資料到達前多開著幾秒，配的正是舊缸的數字。
+watch(selectedTankId, () => {
   dashboardOpen.value = false
 })
 
@@ -125,10 +210,74 @@ const cards = computed(() =>
   <div class="mx-auto max-w-2xl">
     <!-- 拿不到資料。要排在空狀態之前：兩者的 data 都是 null，先問的那一個說了算 -->
     <LoadErrorState
-      v-if="loadFailed"
+      v-if="showError"
       :retrying="retrying"
-      @retry="retryLoad"
+      @retry="retryAll"
     />
+
+    <!--
+      資料還在路上時的骨架（issue #110）。#84 之後是 SPA，首屏沒有伺服器算好的畫面，
+      直接判斷「有沒有缸」會先閃一次「還沒有任何缸」——而那個空狀態的唯一出口
+      是「建立我的第一個缸」，照著按下去就多一個不需要的缸。
+
+      形狀照著下面真正的版面排：固定頁首（缸名列 + 水質摘要卡）、生物標題與分類 chip、
+      兩欄生物卡片。與 /trends、/log、/maintenance 同一套樣式。
+    -->
+    <div
+      v-else-if="loading"
+      data-testid="home-loading"
+      class="space-y-4 px-4 pt-4"
+    >
+      <div class="h-9 w-40 animate-pulse rounded-2xl bg-elevated/60" />
+      <div class="h-32 animate-pulse rounded-2xl bg-elevated/60" />
+      <div class="h-8 w-28 animate-pulse rounded-2xl bg-elevated/60" />
+
+      <div class="grid grid-cols-2 gap-3">
+        <div
+          v-for="placeholder in 4"
+          :key="placeholder"
+          class="h-40 animate-pulse rounded-2xl bg-elevated/60"
+        />
+      </div>
+
+      <span class="sr-only">載入中</span>
+    </div>
+
+    <!--
+      訪客的示範資料還在複製中（issue #144）。
+
+      這一段跟上面的骨架刻意**不一樣**：複製要十幾秒，一片沒有說明的骨架撐那麼久，
+      使用者分不出「在跑」與「當掉了」。所以這裡有一句話講明在做什麼，
+      而且沒有任何連出去的入口——尤其不能有「建立我的第一個缸」，
+      那顆按鈕在這一刻按下去，等於在示範資料落地的路上多插一個空缸。
+    -->
+    <div
+      v-else-if="preparing"
+      data-testid="home-preparing"
+      role="status"
+      class="px-4 py-16 text-center"
+    >
+      <div
+        class="mx-auto grid size-20 place-items-center rounded-full border border-dashed border-primary/40"
+        aria-hidden="true"
+      >
+        <UIcon
+          name="i-lucide-loader-circle"
+          class="size-8 animate-spin text-primary motion-reduce:animate-none"
+        />
+      </div>
+
+      <p
+        data-testid="home-preparing-title"
+        class="mt-6 text-2xl font-semibold"
+      >
+        正在為你準備示範資料
+      </p>
+
+      <p class="mx-auto mt-3 max-w-xs text-balance text-muted">
+        我們正在複製一份示範缸給你，這需要幾秒鐘。完成後這裡就會出現水質、生物與保養記錄。
+      </p>
+    </div>
 
     <div
       v-else-if="!currentTank"

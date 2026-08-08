@@ -23,10 +23,13 @@ import { DEFAULT_WATER_TARGETS, WATER_PARAMETER_ORDER } from '#shared/utils/wate
 //   Then  test 轉紅
 //
 // auth-guard.spec.ts 的「已登入開 <path> 停在原地」改成先等 PROTECTED_PAGES 上那個
-// 標記出現。這支測試驗的是那張表的前提：**每一個標記都只在該頁載入成功時存在**。
-// 少了它，表上有人塞一個「三態共用的常駐頁首」（例如 trends-subtitle）進來，
-// E2E 那組 test 會安靜地退回原本的問題——整頁壞掉照樣是綠的，而且要等到有人真的
-// 把某一頁打壞才會發現。
+// 標記出現（成因寫在 tests/e2e/support/protectedPages.ts）。這支測試驗的是那張表的
+// 前提：**每一個標記都只在該頁載入成功時存在**。少了它，表上有人塞一個「三態共用的
+// 常駐頁首」（例如 trends-subtitle）進來，E2E 那組 test 會安靜地退回原本的問題
+// ——整頁壞掉照樣是綠的，而且要等到有人真的把某一頁打壞才會發現。
+//
+// 這裡是那張表唯一繞不過去的守門：auth-guard-spec.test.ts 那兩條命名黑名單只是
+// 早期警示，`water-log-subtitle` 之類沒被列進去的常駐頁首照樣走得過。
 //
 // E2E 本體跑在 Vercel preview 上（#23），不在 TDD Develop 的 job 內執行。
 // 所以這裡不模擬瀏覽器，直接把頁面元件掛起來，把它要的 API 全部打成 500——
@@ -53,9 +56,12 @@ const TODAY = toLocalDateOnly(new Date())
 /**
  * 一個今天到期的保養任務。
  *
- * 「今天該做」那一區要有東西才會渲染（兩區都空時畫的是 maintenance-empty），
- * 而 `today-section` 正是 /maintenance 在表上的標記。日期由今天往回推，
- * 寫死的話同一份程式碼會在某一天自己紅掉（PR #138 的教訓）。
+ * `today-section` 是 /maintenance 在表上的標記，它落在 `v-else-if="isEmpty"` 的
+ * 後面那一支——**「今天該做」與「即將到期」兩區都空的時候才不渲染**（那時畫的是
+ * maintenance-empty）。區內今天沒事時仍會渲染，只是內容換成 today-empty。
+ * 所以這裡給一個任務就夠，不必刻意讓它落在「今天」。
+ *
+ * 日期由今天往回推，寫死的話同一份程式碼會在某一天自己紅掉（PR #138 的教訓）。
  */
 function dueTodayTask(): MaintenanceTaskDto {
   return {

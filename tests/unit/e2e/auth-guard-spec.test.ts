@@ -5,14 +5,9 @@ import { describe, expect, it } from 'vitest'
 import { read, testBlocks } from '../support/spec-source'
 import { PROTECTED_PAGES } from '../../e2e/support/protectedPages'
 
-// issue #146：auth-guard.spec.ts 的「已登入開 <path> 停在原地」原本只驗兩件事——
-// 網址沒被改掉、登入頁的標記不存在。第二件是「某個東西不存在」，而 #84 關掉 SSR 之後
-// `page.goto()` 回來時整個 app 還沒 mount，畫面上什麼都沒有，包括登入頁的標記。
-// 那句斷言因此在「頁面正常載入」與「頁面根本還沒開始畫」兩種情況下同樣成立：
-// 某一頁在登入狀態下整頁壞掉（500、或一個 render 期的例外），這組 test 照樣是綠的。
-//
-// #110 讓它更容易空過：首頁改成先畫骨架，`toHaveURL()` 一通過就可能落在
-// 「什麼都還沒有」的那一瞬間。
+// issue #146：auth-guard.spec.ts 的「已登入開 <path> 停在原地」原本只驗網址與
+// 「登入頁的標記不存在」，而後者在 app 還沒 mount 的那一拍同樣成立，所以某一頁
+// 整頁壞掉時那組 test 照樣是綠的。完整的成因寫在 tests/e2e/support/protectedPages.ts。
 //
 // 這支測試守的是修法本身：那一組 test 要先等到「這一頁自己載入成功才會有」的正面標記，
 // 而且那句等待要排在 `toHaveCount(0)` 之前。等到之後畫面對不對仍由 Vercel preview 上的
@@ -78,15 +73,25 @@ describe('每一個受保護的頁面都指名了自己的正面標記', () => {
       .toEqual(['/', '/log', '/trends', '/creatures', '/maintenance', '/tanks/new'])
   })
 
+  // ⚠ 底下兩題只是命名上的早期警示，**不是**「標記合格」的證明。
+  //
+  // 一個是關鍵字、一個是兩個字串的黑名單，兩者都繞得過去：`water-log-subtitle`
+  // 同樣是三態共用的常駐頁首卻不在黑名單上，`sandbox-preparing`（#144）名字裡
+  // 也沒有 loading。真正逐頁把關的是 tests/unit/pages/protected-page-markers.test.ts
+  // ——它把該頁的 API 全部打成 500，看那個標記在不在，繞不過去。
+  //
+  // 留著是因為它們便宜且訊息直白：踩到已知的兩個坑時，錯誤會指名道姓，
+  // 而不是丟一句「500 時標記還在」讓人回頭找原因。
+
   // 載入樣態在「還沒開始畫」與「已經畫完」時都不在畫面上，
   // 拿它當條件與 toHaveCount(0) 是同一個毛病（#129）
-  it.each(PROTECTED_PAGES)('$path 的標記不是載入樣態', ({ marker }) => {
+  it.each(PROTECTED_PAGES)('$path 的標記名稱裡沒有 loading', ({ marker }) => {
     expect(marker).not.toMatch(/loading/)
   })
 
   // /trends 與 /maintenance 的副標是三態共用的常駐頁首：整頁壞掉時它還在，
   // 拿它當正面標記等於沒驗到。這兩個名字因此不准出現在表上。
-  it.each(PROTECTED_PAGES)('$path 的標記不是三態共用的常駐頁首', ({ marker }) => {
+  it.each(PROTECTED_PAGES)('$path 的標記不是已知的那兩個常駐頁首', ({ marker }) => {
     expect(['trends-subtitle', 'maintenance-subtitle']).not.toContain(marker)
   })
 })
@@ -140,15 +145,12 @@ describe('原本驗到的兩件事都還在', () => {
 // 非目標：不處理未登入那一半（`/login` 會出現，那本來就是正面訊號）。
 // 這一組守的是它沒有被順手改掉。
 describe('未登入那一半沒有被動到', () => {
-  it('未登入的清單仍然涵蓋六頁加上 /creatures/:id', () => {
-    const block = testBlocks(source).find(candidate => candidate.includes('未登入開'))!
-    const paths = source.slice(0, source.indexOf(block))
-
-    for (const { path } of PROTECTED_PAGES) {
-      expect(paths, `未登入的清單漏了 ${path}`).toContain(`'${path}'`)
-    }
-
-    expect(paths).toContain('/creatures/not-a-real-id')
+  // 六頁不必逐一驗：未登入的清單是從 PROTECTED_PAGES 直接展開的，漏不掉。
+  // 要盯的是那個展開沒有被拆回手抄的清單，以及只出現在這裡的 /creatures/:id
+  // ——它沒有「登入後畫得出來」的標記可以指名，所以進不了那張表。
+  it('未登入的清單直接沿用共用的那張表，另外多一條 /creatures/:id', () => {
+    expect(source).toMatch(/\.\.\.PROTECTED_PAGES\.map\(\s*page\s*=>\s*page\.path\s*\)/)
+    expect(source).toContain('/creatures/not-a-real-id')
   })
 
   it('未登入開受保護的頁面仍然等登入頁自己出現', () => {

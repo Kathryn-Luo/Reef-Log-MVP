@@ -70,6 +70,8 @@ function gate() {
 }
 
 const state = {
+  /** #144 的補建被打了幾次。每一次都是一支會寫入的 API，不該重複 */
+  sandboxCalls: 0,
   tanks: [] as TankOption[],
   previousReadings: [] as PreviousReadingDto[],
   waterLogs: [] as WaterLogDto[],
@@ -96,6 +98,21 @@ interface MockNodeEvent {
 function serverError() {
   return createError({ statusCode: 500, statusMessage: 'Internal Server Error' })
 }
+
+// 訪客沙盒的補建（issue #144）。這一頁在拿到空的缸清單時會問一次「這是準備中，
+// 還是真的沒有缸」——沒有這支端點的話，那個問題永遠得不到答案，畫面會停在
+// 「正在為你準備示範資料」，而所有驗空狀態的題目都會以「找不到元素」失敗。
+//
+// 預設 alreadySeeded: true ＝「沒有欠著的沙盒」，也就是這幾題要的前提：清單空著
+// 就是真的沒有缸。訪客那條路徑由首頁的測試（home.test.ts）自己顧。
+registerEndpoint('/api/guest-sandbox', {
+  method: 'POST',
+  handler: () => {
+    state.sandboxCalls++
+
+    return { copied: 0, alreadySeeded: true }
+  },
+})
 
 registerEndpoint('/api/tanks', () => {
   if (state.fail.tanks) {
@@ -157,6 +174,11 @@ beforeEach(() => {
   // useAsyncData 的結果會留在 payload 上，測試之間必須清掉才不會拿到上一題的資料
   clearNuxtData()
 
+  // 沙盒的狀態 #144 之後住在 useState（跨頁共用），不歸 clearNuxtData 管——
+  // 少了這一句，上一題問完之後的 'settled' 會讓下一題連問都不問
+  clearNuxtState()
+  state.sandboxCalls = 0
+
   state.tanks = [MAIN_TANK]
   state.previousReadings = PREVIOUS_READINGS
   state.waterLogs = WATER_LOGS
@@ -176,6 +198,9 @@ type Page = Awaited<ReturnType<typeof mountSuspended>>
  */
 async function settle() {
   await flushPromises()
+  await flushPromises()
+  // #144：拿到空的缸清單時這一頁會問一次「這是準備中，還是真的沒有缸」，
+  // 答案回來之前畫面停在「正在為你準備示範資料」
   await flushPromises()
 }
 
@@ -781,5 +806,36 @@ describe('記錄水質 — 取資料失敗', () => {
     await vi.waitFor(() => {
       expect(page.find('[data-testid="load-error"]').exists()).toBe(false)
     })
+  })
+})
+
+// issue #144：訪客的示範資料還在複製時，**這一頁也要說同一件事**。
+//
+// 複製要 11.5 秒，而底部的 tab 列一直都在——使用者在等待期間可以走到這裡。
+// 只有首頁認得那一態的話，這裡會畫成「還沒有任何缸」，而首頁同一時間正說著
+// 「正在為你準備」。實際在 preview 上踩到過。
+describe('記錄水質 — 訪客沙盒準備中', () => {
+  it('清單空著且還沒問到答案時，顯示「正在準備示範資料」而不是「還沒有任何缸」', async () => {
+    state.tanks = []
+
+    // 不走 open()：那個 helper 會等補建的答案回來，而這裡要看的正是「還沒回來」那一刻
+    const page = await mountSuspended(LogPage, { route: '/log' })
+
+    await flushPromises()
+
+    expect(page.find('[data-testid="sandbox-preparing"]').exists()).toBe(true)
+    expect(page.find('[data-testid="tank-empty"]').exists()).toBe(false)
+    expect(page.find('[data-testid="tank-empty-action"]').exists()).toBe(false)
+  })
+
+  // 這一頁也要**觸發**補建：書籤直接開這裡的訪客，首頁根本沒掛載，
+  // 那支 API 一次都不會被呼叫，他會永遠等不到資料。
+  it('由這一頁自己去問，不必先經過首頁', async () => {
+    state.tanks = []
+    state.sandboxCalls = 0
+
+    await open()
+
+    expect(state.sandboxCalls).toBe(1)
   })
 })

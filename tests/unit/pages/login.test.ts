@@ -211,3 +211,134 @@ describe('登入畫面 — 版面', () => {
     expect(screen.classes()).toContain('dark')
   })
 })
+
+// issue #110：按下「以訪客身分瀏覽」之後，那顆按鈕要立刻看起來在跑。
+//
+// 這條路徑是整頁導向（<a>，不是 fetch），瀏覽器在等 302 的期間仍然停在這一頁上，
+// 所以這個樣態是使用者這幾秒**唯一**看得到的回饋。#144 把示範資料的複製搬出登入請求
+// 之後這一段短了很多（實測 14.8 秒 → 約 2.8 秒），但「按了沒反應」的問題與長度無關。
+describe('登入畫面 — 訪客按鈕的處理中樣態', () => {
+  it('按下之前不是處理中', async () => {
+    const page = await mountLogin()
+
+    expect(page.get('[data-testid="login-action-guest"]').attributes('data-starting')).toBe('false')
+  })
+
+  it('按下之後立刻進入處理中', async () => {
+    const page = await mountLogin()
+    const guest = page.get('[data-testid="login-action-guest"]')
+
+    await guest.trigger('click')
+
+    expect(guest.attributes('data-starting')).toBe('true')
+  })
+
+  // 連點兩下不能送出兩次登入：每一次 /auth/guest 都會建一位新訪客並複製一整份示範資料
+  // （issue #66），第二次等於白白多一個沒人用的沙盒，還要再等一次那幾秒。
+  //
+  // 擋法是 preventDefault 而不是 disabled：這顆按鈕是連結，導向由瀏覽器處理。
+  // 把它 disable 掉有機會連第一次那一次導向都一起取消，於是變成「按了完全沒事」。
+  it('第一次點擊放行，之後的點擊被擋下來', async () => {
+    const page = await mountLogin()
+    const guest = page.get('[data-testid="login-action-guest"]')
+
+    const first = new MouseEvent('click', { bubbles: true, cancelable: true })
+    const second = new MouseEvent('click', { bubbles: true, cancelable: true })
+
+    guest.element.dispatchEvent(first)
+    await page.vm.$nextTick()
+    guest.element.dispatchEvent(second)
+
+    expect(first.defaultPrevented).toBe(false)
+    expect(second.defaultPrevented).toBe(true)
+  })
+
+  // ⚠ 這一條是整段最重要的：**處理中的樣態不能把這顆連結變成按不動的東西**。
+  //
+  // 這顆按鈕是 `<a href="/auth/guest">`，導向由瀏覽器處理。點下去的同一拍把元素
+  // disable 掉，瀏覽器會把那次還沒開始的導向一起取消——結果是「按了完全沒事」，
+  // 比沒有處理中樣態更糟。
+  //
+  // 實際踩過（PR #145）：`:loading` 看起來人畜無害，但 Nuxt UI 的 UButton 在
+  // loading 為 true 時會自己加上 disabled。E2E 因此整批紅——138 條裡除了不需登入的
+  // 4 條以外全部停在 /login，而 jsdom 裡沒有真正的導向可以被取消，
+  // 原本那幾條測試（data-starting、preventDefault）一條都沒轉紅。
+  it('進入處理中之後仍然是按得動的連結', async () => {
+    const page = await mountLogin()
+    const guest = page.get('[data-testid="login-action-guest"]')
+
+    await guest.trigger('click')
+
+    expect(guest.attributes('href')).toBe('/auth/guest')
+    expect(guest.attributes('disabled')).toBeUndefined()
+    expect(guest.attributes('aria-disabled')).not.toBe('true')
+    expect(guest.classes()).not.toContain('pointer-events-none')
+    expect(guest.element.tagName).toBe('A')
+  })
+
+  // 樣態要真的看得出來，不能只有一個測試用的屬性在變
+  it('處理中時圖示換成轉圈的那一個', async () => {
+    const page = await mountLogin()
+
+    expect(page.get('[data-testid="login-guest-icon"]').classes()).not.toContain('animate-spin')
+
+    await page.get('[data-testid="login-action-guest"]').trigger('click')
+
+    expect(page.get('[data-testid="login-guest-icon"]').classes()).toContain('animate-spin')
+  })
+
+  // Google 那顆不受影響：兩顆共用一個旗標的話，按了訪客之後 Google 也會轉圈。
+  //
+  // ⚠ 不能驗 Google 那顆的 data-starting——那是寫死的字串字面量，不是綁定，
+  // 任何實作下都會是 'false'。要驗的是它**有實際反應的部分**：圖示沒有跟著轉。
+  it('Google 按鈕不跟著進入處理中', async () => {
+    const page = await mountLogin()
+
+    await page.get('[data-testid="login-action-guest"]').trigger('click')
+
+    const googleIcon = page.get('[data-testid="login-google-icon"]')
+
+    expect(googleIcon.classes()).not.toContain('animate-spin')
+    expect(page.get('[data-testid="login-action-google"]').attributes('aria-busy')).not.toBe('true')
+  })
+
+  // Cmd / Ctrl / Shift + 點擊是「在新分頁開」，本頁原地不動。
+  // 算成「開始登入」的話旗標會翻過去而畫面永遠不會換——這顆按鈕從此轉著圈且點不動。
+  it.each([
+    ['Cmd', { metaKey: true }],
+    ['Ctrl', { ctrlKey: true }],
+    ['Shift', { shiftKey: true }],
+  ])('%s + 點擊不會進入處理中', async (_label, modifier) => {
+    const page = await mountLogin()
+    const guest = page.get('[data-testid="login-action-guest"]')
+
+    guest.element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...modifier }))
+    await page.vm.$nextTick()
+
+    expect(guest.attributes('data-starting')).toBe('false')
+  })
+
+  // 訪客進到首頁之後按上一頁，Safari / Firefox 從 bfcache 還原這一頁時元件狀態
+  // 原封不動——旗標還在，之後每一次點擊都會被 preventDefault 擋掉，
+  // 使用者面對的是一顆轉著圈而且點不動的按鈕。
+  it('從 bfcache 回到這一頁時，處理中的樣態會歸位', async () => {
+    const page = await mountLogin()
+    const guest = page.get('[data-testid="login-action-guest"]')
+
+    await guest.trigger('click')
+
+    expect(guest.attributes('data-starting')).toBe('true')
+
+    window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }))
+    await page.vm.$nextTick()
+
+    expect(guest.attributes('data-starting')).toBe('false')
+
+    // 而且真的又按得動了
+    const again = new MouseEvent('click', { bubbles: true, cancelable: true })
+
+    guest.element.dispatchEvent(again)
+
+    expect(again.defaultPrevented).toBe(false)
+  })
+})

@@ -103,6 +103,19 @@ describe('resolveGoogleLogin — 尚未註冊過的 Google 使用者', () => {
     })
   })
 
+  // issue #144：Google 使用者沒有訪客沙盒要複製，建立當下就把 sandboxSeededAt 填上。
+  //
+  // 留 null 的話首頁會判定他還欠一份示範資料，於是永遠停在「正在準備」——
+  // 而那份資料永遠不會來，因為他根本不是訪客。這一條是那個畫面的唯一防線：
+  // 少了它，Google 登入壞掉的樣子是「首頁一直轉」，離「少寫了一個欄位」很遠。
+  it('sandboxSeededAt 在建立當下就填上，不留 null', async () => {
+    const client = fakeClient()
+
+    await resolveGoogleLogin(client, PROFILE)
+
+    expect(client.user.create.mock.calls[0]![0].data.sandboxSeededAt).toBeInstanceOf(Date)
+  })
+
   // Story ①「And 建立一列 Account（provider = GOOGLE、providerAccountId = OIDC 的 sub）」
   //
   // 用 nested create 一起寫入，而不是先 user.create 再 account.create：

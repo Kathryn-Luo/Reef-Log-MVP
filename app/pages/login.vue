@@ -33,6 +33,67 @@ const GUEST_START = '/auth/guest'
 // placeholder）。路徑先定下來，內容頁補上之前按下去會是 404。
 const TERMS = '/terms'
 const PRIVACY = '/privacy'
+
+/**
+ * 訪客登入已經送出，正在等瀏覽器導向（issue #110）。
+ *
+ * 這條路徑是整頁導向，導向期間瀏覽器仍然停在這一頁上——所以這個樣態是使用者
+ * 這幾秒**唯一**看得到的回饋。#144 之前那是 9～15 秒，之後約 2.8 秒；
+ * 「按了沒反應」與長度無關，兩種情況都需要它。
+ */
+const guestStarting = ref(false)
+
+/**
+ * 這一次點擊會不會真的讓**本頁**導向出去。
+ *
+ * 修飾鍵與中鍵是「在新分頁開」，本頁原地不動。把它們算成「開始登入」的話，
+ * 旗標會翻過去而畫面永遠不會換——這顆按鈕從此轉著圈且點不動。
+ */
+const navigatesAway = (event: MouseEvent) =>
+  event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
+
+/**
+ * 第一次點擊放行，之後的擋下來。
+ *
+ * 為什麼是 preventDefault 而不是 `:disabled`：這顆按鈕是連結，導向由瀏覽器處理。
+ * 把它 disable 掉會在同一拍改變元素的可互動性，有機會連第一次那一次導向都一起取消，
+ * 於是變成「按了完全沒事」——比沒有處理中樣態更糟。
+ *
+ * 擋第二次是有代價的事：每一次 /auth/guest 都會建一位新訪客（#66），
+ * 連點兩下就是兩位訪客、兩份示範資料，而且第二次會把第一次的 session 換掉。
+ */
+function startGuest(event: MouseEvent) {
+  if (guestStarting.value) {
+    event.preventDefault()
+
+    return
+  }
+
+  if (!navigatesAway(event)) {
+    return
+  }
+
+  guestStarting.value = true
+}
+
+/**
+ * 回到這一頁時把處理中的樣態歸位。
+ *
+ * 這個狀態是單向的話會留下一顆**轉著圈而且點不動**的按鈕：訪客進到首頁之後按上一頁，
+ * Safari / Firefox 從 bfcache 還原這一頁時元件狀態原封不動，第一次點擊設下的旗標
+ * 還在，之後每一次點擊都會被上面那條 preventDefault 擋掉，使用者只能手動重新整理。
+ *
+ * pageshow 的 persisted 為 true 就是「從 bfcache 回來的」；一般的重新整理是全新的
+ * 元件實例，本來就沒有狀態要清。
+ */
+function resetOnRestore(event: PageTransitionEvent) {
+  if (event.persisted) {
+    guestStarting.value = false
+  }
+}
+
+onMounted(() => window.addEventListener('pageshow', resetOnRestore))
+onBeforeUnmount(() => window.removeEventListener('pageshow', resetOnRestore))
 </script>
 
 <template>
@@ -83,6 +144,7 @@ const PRIVACY = '/privacy'
         <UButton
           data-testid="login-action-google"
           data-emphasis="primary"
+          data-starting="false"
           :to="GOOGLE_START"
           external
           rel="nofollow noopener noreferrer"
@@ -125,6 +187,8 @@ const PRIVACY = '/privacy'
         <UButton
           data-testid="login-action-guest"
           data-emphasis="secondary"
+          :data-starting="guestStarting ? 'true' : 'false'"
+          :aria-busy="guestStarting ? 'true' : 'false'"
           :to="GUEST_START"
           external
           rel="nofollow noopener noreferrer"
@@ -133,12 +197,20 @@ const PRIVACY = '/privacy'
           size="xl"
           block
           class="rounded-2xl border border-default bg-elevated/40 py-3.5 text-base font-semibold"
+          @click="startGuest"
         >
+          <!--
+            ⚠ 處理中的樣態是自己換圖示，**不能用 UButton 的 `loading` prop**。
+            它在 loading 為 true 時會自己把元素 disable 掉，而這顆是連結——
+            點下去的同一拍被 disable，瀏覽器會把那次還沒開始的導向一起取消，
+            結果是「按了完全沒事」。實際踩過（PR #145，E2E 整批停在 /login）。
+          -->
           <template #leading>
             <UIcon
               data-testid="login-guest-icon"
-              name="i-lucide-user"
+              :name="guestStarting ? 'i-lucide-loader-circle' : 'i-lucide-user'"
               class="size-5"
+              :class="guestStarting ? 'animate-spin motion-reduce:animate-none' : ''"
             />
           </template>
 

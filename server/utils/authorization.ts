@@ -1,5 +1,7 @@
 import type { PrismaClient, User } from '@prisma/client'
 import type { CreatureDetailDto, CreatureDetailResponse, MoveCreatureResponse, TankCreaturesData } from '#shared/types/creature'
+import type { GuestSandboxResponse } from '#shared/types/guestSandbox'
+import type { Timer } from './requestTiming'
 import type { TankHomeData, TankOption } from '#shared/types/home'
 import type { MaintenancePageData, MaintenanceTaskDto, MaintenanceTaskResponse } from '#shared/types/maintenance'
 import type { CreateTankResponse } from '#shared/types/tank'
@@ -15,6 +17,8 @@ import { parseTrendRange } from '#shared/utils/trend'
 import { parseWaterLogInput } from '#shared/utils/waterLog'
 import { getCreatureDetail, moveCreature, updateCreatureStatus } from './creatureDetail'
 import { getTankCreatures } from './creatureList'
+import { ensureGuestSandbox } from './guestSandbox'
+import { createTimer } from './requestTiming'
 import { getTankHome, listTankOptions } from './homeData'
 import { clearCompletion, completeTask, findOwnedMaintenanceTask, getMaintenancePage } from './maintenance'
 import { createTank } from './tankWrite'
@@ -277,6 +281,31 @@ export async function resolveTankOptions(
   }
 
   return { ok: true, value: { tanks: await listTankOptions(client, user.id) } }
+}
+
+/**
+ * POST /api/guest-sandbox —— 補上這位使用者欠著的示範資料（issue #144）。
+ *
+ * 由首頁在拿到一份空的缸清單之後呼叫：那正是「沙盒還沒複製完」與「這個帳號真的沒有缸」
+ * 唯一分不開的時刻，而這支 API 的回答把兩者分開。已經備妥的話它什麼都不做
+ * （見 ensureGuestSandbox 的冪等鎖），所以重新整理、兩個分頁、連點兩下都安全。
+ *
+ * 未登入回 401，與其他每一支一樣。這支會寫入，所以更不能折成 200——
+ * 沒有身分就沒有「你的沙盒」可言。
+ *
+ * 這裡不再問一次「你是不是訪客」：Google 使用者建立當下 sandboxSeededAt 就有值
+ * （見 googleLogin.ts），claim 一律搶不到。判斷只留在那一個欄位上，不散成兩處。
+ */
+export async function resolveGuestSandbox(
+  client: PrismaClient,
+  user: SessionUser | null,
+  timer: Timer = createTimer(),
+): Promise<Authorized<GuestSandboxResponse>> {
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  return { ok: true, value: await ensureGuestSandbox(client, user.id, timer) }
 }
 
 /** GET /api/tanks/:id/home —— screen-1 單一缸的內容 */

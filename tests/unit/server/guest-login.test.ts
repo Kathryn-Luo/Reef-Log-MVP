@@ -7,14 +7,17 @@ import { TEMPLATE_USER } from '../../../prisma/seedUser'
 import { GUEST_DISPLAY_NAME, createGuestAccountId, resolveGuestLogin } from '../../../server/utils/guestLogin'
 import { createTimer } from '../../../server/utils/requestTiming'
 
-// 訪客登入的「查／建帳號 + 建沙盒」（issue #66）。
+// 訪客登入的「查／建帳號」（issue #66；複製沙盒那一半已於 #144 搬走）。
 //
 // 每位訪客一個獨立帳號（Epic #47 第 6 節定案），所以這裡沒有任何「共用訪客」的路徑：
 // 沒有 session 就是建一位新的 User，而不是去找一位既有的訪客沿用。
 //
+// ⚠ #144：這支函式**不再複製示範資料**。那一段實測 11.5 秒、佔 /auth/guest 全部耗時的
+// 78%，而 302 是 handler 最後一行才發的，訪客因此在登入頁前面乾等十幾秒。複製移到了
+// server/utils/guestSandbox.ts 的 ensureGuestSandbox()，由首頁在畫面已經看得到之後才呼叫。
+// 下面那一整個 describe（「不再複製沙盒」）守的就是它沒有被搬回來。
+//
 // 這個 job 連不到資料庫，Prisma Client 一律以假物件替身餵入。
-// $transaction 的替身直接把同一個假 client 當成 tx 傳回去——要驗的是「有沒有包在一起」，
-// 不是 Prisma 自己的交易語意。
 
 const TEMPLATE_TANK = {
   id: 'seed-tank-main',
@@ -77,6 +80,8 @@ function fakeClient() {
 interface CreatedUser {
   email: string | null
   displayName: string | null
+  /** #144：新訪客欠著一份沙盒，所以這一欄刻意不被寫入（維持 null） */
+  sandboxSeededAt?: Date
   accounts: { create: { provider: string, providerAccountId: string } }
 }
 
@@ -142,53 +147,54 @@ describe('resolveGuestLogin — 首次進站', () => {
     expect(ids.size).toBe(50)
   })
 
-  // And 把示範資料模板的內容複製一份掛在我名下
-  it('複製模板資料，掛在新建的這一位名下', async () => {
+  // And 沙盒欄位維持 null —— 「這位使用者還欠一份沙盒」（issue #144）。
+  //
+  // 這是首頁唯一分得出「正在準備」與「真的沒有缸」的依據。這裡若順手填上時間，
+  // 訪客會被判定成沙盒已備妥，然後停在一個永遠不會長出東西的空狀態上。
+  it('不預先填上 sandboxSeededAt，新訪客欠著一份沙盒', async () => {
     const { client } = fakeClient()
 
     await resolveGuestLogin(client, null)
 
-    const [findArgs] = client.tank.findMany.mock.calls[0] as unknown as [{ where: { userId: string } }]
-    const [createArgs] = client.tank.create.mock.calls[0] as unknown as [{ data: { userId: string } }]
-
-    expect(findArgs.where.userId).toBe(TEMPLATE_USER.id)
-    expect(createArgs.data.userId).toBe('guest-user-1')
+    expect(createdUser(client).sandboxSeededAt).toBeUndefined()
   })
 
-  // 建帳號與複製沙盒之間失敗的話，訪客會拿到一個半份資料的沙盒，而且因為 User 已經存在，
-  // 之後再進站也不會補完（Story ② 不重複複製）。兩件事因此必須一起成立或一起不成立。
-  // `$connect` 排在最前面是 issue #98 加的：連線建立要在交易之外完成，量出來的
-  // `tx` 才是交易本身的成本。它不影響這條斷言要守的東西——建帳號與複製沙盒仍然
-  // 都在 `$transaction` 之後、同一個交易裡。
-  it('建帳號與複製沙盒包在同一個交易裡', async () => {
+  it('建帳號是單獨一次 nested create，不再需要交易', async () => {
     const { client, calls } = fakeClient()
 
     await resolveGuestLogin(client, null)
 
-    expect(client.$transaction).toHaveBeenCalledTimes(1)
-    expect(calls).toEqual(['$connect', '$transaction', 'user.create', 'tank.create'])
+    // User 與 Account 的原子性由 nested create 自己提供（同一句 INSERT 鏈），
+    // 交易原本是為了把複製沙盒一起包進來——那一段搬走之後就沒有第二件事要包了
+    expect(client.$transaction).not.toHaveBeenCalled()
+    expect(calls).toEqual(['$connect', 'user.create'])
   })
+})
 
-  // Prisma 互動式交易有兩個上限，兩個都要放寬：
-  //   timeout —— 交易本身能跑多久（預設 5 秒）。要跑的是「模板有幾個缸就幾句 nested
-  //              create」，每一句底下數十筆 insert。
-  //   maxWait —— 等一條可用連線的上限（預設 2 秒）。Neon 是 serverless，連線吃緊時
-  //              光是拿到連線就可能超過 2 秒。
-  //
-  // 只放寬 timeout 會留下一個很難查的故障：交易根本還沒開始就失敗了，而錯誤訊息談的
-  // 是交易。訪客這條路徑一位訪客只走一次，失敗就沒有第二次機會（下次進站是新沙盒）。
-  it('交易的 timeout 與 maxWait 都放寬，不留下預設值', async () => {
+// #144 的核心：那 11.5 秒不能再回到這條路徑上。
+//
+// 這一整段是「搬走了就不要搬回來」的防線。少了它，把 copyTemplateSandbox 加回
+// resolveGuestLogin 不會有任何一條測試轉紅，而使用者會安安靜靜地退回等十幾秒。
+describe('resolveGuestLogin — 不再複製沙盒', () => {
+  it('不讀模板、不建缸', async () => {
     const { client } = fakeClient()
 
     await resolveGuestLogin(client, null)
 
-    const [, options] = client.$transaction.mock.calls[0] as unknown as [
-      unknown,
-      { timeout?: number, maxWait?: number } | undefined,
-    ]
+    expect(client.tank.findMany).not.toHaveBeenCalled()
+    expect(client.tank.create).not.toHaveBeenCalled()
+  })
 
-    expect(options?.timeout).toBeGreaterThan(5_000)
-    expect(options?.maxWait).toBeGreaterThan(2_000)
+  // 驗收條件本文：302 的 X-Guest-Timing 裡不再出現任何 tx.sandbox.* 段落。
+  // E2E 在 preview 上驗同一件事，這裡先在 unit 這一層擋住。
+  it('計時裡不留下任何 tx.sandbox.* 段落', async () => {
+    const { client } = fakeClient()
+    const timer = createTimer()
+
+    await resolveGuestLogin(client, null, timer)
+
+    expect(timer.segments().map(segment => segment.name).filter(name => name.startsWith('tx.sandbox')))
+      .toEqual([])
   })
 })
 
@@ -208,15 +214,15 @@ describe('resolveGuestLogin — 已有 session', () => {
     expect(client.user.create).not.toHaveBeenCalled()
   })
 
-  // And 不會再建一個沙盒，也不會重複複製示範資料
-  it('不再建一個沙盒，也不重複複製示範資料', async () => {
+  // And 不會再建一個沙盒
+  it('不再建一個沙盒', async () => {
     const { client } = fakeClient()
 
     await resolveGuestLogin(client, EXISTING)
 
     expect(client.tank.findMany).not.toHaveBeenCalled()
     expect(client.tank.create).not.toHaveBeenCalled()
-    expect(client.$transaction).not.toHaveBeenCalled()
+    expect(client.user.create).not.toHaveBeenCalled()
   })
 })
 
@@ -229,9 +235,12 @@ describe('resolveGuestLogin — 分段計時', () => {
   /** 量到的段落名稱，依開始順序 */
   const names = (timer: ReturnType<typeof createTimer>) => timer.segments().map(segment => segment.name)
 
-  // 連線建立要在交易之外先做完。Prisma 預設是「第一次查詢時才連」，那樣 Neon 的
-  // 握手時間會被算進 `tx` 裡（甚至算進 maxWait 的等待），量出來的交易時間就不是交易的。
-  it('連線建立自己一段，而且排在交易之前', async () => {
+  // 連線建立要在寫入之前先做完。Prisma 預設是「第一次查詢時才連」，那樣 Neon 的
+  // 握手時間會被算進建帳號那一段裡，量出來的就不是建帳號的成本。
+  //
+  // #144 之後這件事更要緊：`connect` 與 `user` 是這次請求剩下的**全部**，
+  // 下一次要再壓時間就得從這兩個數字裡找。
+  it('連線建立自己一段，而且排在建帳號之前', async () => {
     const { client, calls } = fakeClient()
     const timer = createTimer()
 
@@ -239,37 +248,32 @@ describe('resolveGuestLogin — 分段計時', () => {
 
     expect(client.$connect).toHaveBeenCalledTimes(1)
     expect(names(timer).indexOf('connect')).toBeGreaterThan(-1)
-    expect(names(timer).indexOf('connect')).toBeLessThan(names(timer).indexOf('tx'))
-    // 真的先連再開交易，不只是段落的排序好看
-    expect(calls.indexOf('$connect')).toBeLessThan(calls.indexOf('$transaction'))
+    expect(names(timer).indexOf('connect')).toBeLessThan(names(timer).indexOf('user'))
+    // 真的先連再寫，不只是段落的排序好看
+    expect(calls.indexOf('$connect')).toBeLessThan(calls.indexOf('user.create'))
   })
 
-  // 交易整體之外還要分得出「建帳號」與「複製沙盒」：#98 的方向 C（縮小模板）只有在
-  // 時間確實花在複製那一段時才值得做。
-  it('交易整體、建帳號、複製沙盒各自一段', async () => {
+  it('建帳號自己一段', async () => {
     const { client } = fakeClient()
     const timer = createTimer()
 
     await resolveGuestLogin(client, null, timer)
 
-    // 沙盒那一段自己還會再切細（讀模板、逐缸寫入），細分在 guest-sandbox.test.ts 顧
-    expect(names(timer)).toEqual(expect.arrayContaining(['tx', 'tx.user', 'tx.sandbox.read']))
-    // 巢狀：交易整體排在自己的子段落前面
-    expect(names(timer).indexOf('tx')).toBeLessThan(names(timer).indexOf('tx.user'))
+    expect(names(timer)).toEqual(['connect', 'user'])
   })
 
-  // 失敗那一次最需要數據——交易逾時的時候，人要知道它是卡在哪一段才逾時的。
-  it('交易失敗時，已經量到的段落仍然留著', async () => {
+  // 失敗那一次最需要數據——卡住的時候，人要知道它是卡在哪一段。
+  it('寫入失敗時，已經量到的段落仍然留著', async () => {
     const { client } = fakeClient()
-    const boom = new Error('transaction timed out')
+    const boom = new Error('write timed out')
 
-    client.tank.create.mockRejectedValueOnce(boom)
+    client.user.create.mockRejectedValueOnce(boom)
 
     const timer = createTimer()
 
     await expect(resolveGuestLogin(client, null, timer)).rejects.toBe(boom)
-    // 連拋錯的那一段（tank1）自己都留著耗時——「卡在哪裡才逾時的」正是要看這個
-    expect(names(timer)).toEqual(expect.arrayContaining(['connect', 'tx', 'tx.sandbox.tank1']))
+    // 連拋錯的那一段自己都留著耗時——「卡在哪裡才失敗的」正是要看這個
+    expect(names(timer)).toEqual(expect.arrayContaining(['connect', 'user']))
   })
 
   // Story ②：已經有身分時這支函式一次資料庫都不碰，所以也沒有任何段落可量。
@@ -297,34 +301,24 @@ describe('resolveGuestLogin — 分段計時', () => {
 // 資料歸屬的實際隔離由既有的授權路徑（缸掛在 User 之下、handler 一律以當前 userId 查）
 // 提供，這裡守的是它的前提：兩位訪客拿到的是兩位不同的 User 與兩份不同的缸。
 describe('resolveGuestLogin — 兩位訪客互不干擾', () => {
-  it('兩位訪客拿到不同的 userId，缸各自掛在自己名下', async () => {
+  it('兩位訪客拿到不同的 userId', async () => {
     const { client } = fakeClient()
 
     const first = await resolveGuestLogin(client, null)
     const second = await resolveGuestLogin(client, null)
 
     expect(first.userId).not.toBe(second.userId)
-
-    const [firstTank, secondTank] = client.tank.create.mock.calls as unknown as Array<
-      [{ data: { userId: string } }]
-    >
-
-    expect(firstTank![0].data.userId).toBe(first.userId)
-    expect(secondTank![0].data.userId).toBe(second.userId)
   })
 
-  // 訪客的資料一定是自己的那一份：沒有任何一列會掛回模板使用者，
-  // 否則訪客 A 的修改會直接改到之後每一位訪客的示範資料（Story ④）。
-  it('沒有任何一位訪客的資料掛在模板使用者名下', async () => {
+  // 訪客的資料一定是自己的那一份，不會掛回模板使用者——否則訪客 A 的修改會直接改到
+  // 之後每一位訪客的示範資料（Story ④）。缸的歸屬 #144 之後由 ensureGuestSandbox
+  // 決定（guest-sandbox-ensure.test.ts 顧），這裡守的是它的輸入：新訪客拿到的
+  // 是一個全新的 userId，不是模板那一位。
+  it('新訪客的 userId 不是模板使用者', async () => {
     const { client } = fakeClient()
 
-    await resolveGuestLogin(client, null)
-    await resolveGuestLogin(client, null)
+    const { userId } = await resolveGuestLogin(client, null)
 
-    for (const [args] of client.tank.create.mock.calls as unknown as Array<
-      [{ data: { userId: string } }]
-    >) {
-      expect(args.data.userId).not.toBe(TEMPLATE_USER.id)
-    }
+    expect(userId).not.toBe(TEMPLATE_USER.id)
   })
 })

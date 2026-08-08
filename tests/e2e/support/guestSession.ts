@@ -1,5 +1,5 @@
 import { expect, test as base } from '@playwright/test'
-import type { Page } from '@playwright/test'
+import type { Page, Response } from '@playwright/test'
 
 // 需要登入才跑得完的 spec 共用的進站方式（issue #80）。
 //
@@ -24,7 +24,12 @@ import type { Page } from '@playwright/test'
 // 得多，而累積本來就是 #52 / #70 要解決的題目——真人訪客一樣會累積。
 
 /**
- * 「按下訪客登入 → 停在首頁」這一次導航的等待預算（issue #111）。
+ * 「按下訪客登入 → 停在首頁、示範資料備妥」整段的等待預算（issue #111）。
+ *
+ * ⚠ issue #144 之後這段等待**換了地方**，但總長度沒有變。複製示範資料那 11.5 秒從
+ * `/auth/guest` 這次請求裡搬到了首頁掛載之後的 `POST /api/guest-sandbox`——使用者因此
+ * 早得多就看得到畫面，但「從按下按鈕到示範資料真的在手上」仍然是同一個量級。
+ * 這個常數涵蓋的正是後者，所以照舊。
  *
  * `/auth/guest` 這一次請求在 preview 上實測 9.4～14.8 秒（#98 量了 5 次）：訪客登入要建
  * 一位 User、再把模板的示範資料整份複製一份（#66），加上 Vercel 冷啟與 Neon 建立連線。
@@ -44,15 +49,69 @@ import type { Page } from '@playwright/test'
  */
 export const GUEST_LOGIN_NAV_TIMEOUT_MS = 45_000
 
-/** 走一遍登入頁上的「以訪客身分瀏覽」，回來時人已經在首頁上。 */
+/**
+ * 等首頁上的示範資料真的備妥（issue #144）。
+ *
+ * ⚠ 網址變成 `/` 只代表**登入**完成，示範資料可能還在複製。
+ *
+ * #144 把複製從 `/auth/guest` 搬到首頁掛載之後的 `POST /api/guest-sandbox`，302 因此
+ * 發得比從前早得多（實測 14.8 秒 → 約 1.3 秒）。代價是 `toHaveURL('/')` 通過的那一刻
+ * `/api/tanks` 可能還是空的——少了這一句，接著 `goto('/log')` 或直接打 API 的 spec
+ * 會看到「還沒有任何缸」，而失敗訊息會長得像畫面壞了，跟真正的原因一點關係都看不出來。
+ *
+ * ⚠ **等首頁自己那一次請求，不要自己再打一次。**
+ *
+ * 自己打 POST 的話會與首頁那一次**併發**：後到的那一支卡在 `sandboxSeededAt` 那一列的
+ * row lock 上，直到前一支交易提交為止，也就是兩條連線各被佔住約 11.5 秒。
+ * playwright.config.ts 是 fullyParallel，每個 worker 的尖峰連線需求因此翻倍，而
+ * 交易的 maxWait 只有 10 秒——Neon 連線吃緊時最先炸的會是首頁自己那一支，
+ * 畫面翻成 load-error，測試以「找不到元素」的形式偶發失敗，正是這支 fixture 要避免的。
+ *
+ * 改等首頁那一次還多驗到一件事：**首頁真的有在對的時機呼叫它**。
+ *
+ * @param sandbox 首頁那一次補建請求（在 click 之前掛好的 `page.waitForResponse`）。
+ *   省略時只輪詢缸清單——那對「補建是誰觸發的」不表態，適合已經在站內的呼叫端。
+ */
+export async function waitForSandbox(page: Page, sandbox?: Promise<Response>): Promise<void> {
+  if (sandbox) {
+    const response = await sandbox
+    const body = await response.text()
+
+    expect(response.status(), `POST /api/guest-sandbox 回了 ${response.status()}：${body}`).toBe(200)
+  }
+
+  // 等的是**正面訊號**（缸真的在清單裡），不是「準備中消失」：#129 的教訓——
+  // SPA 下「某個東西不存在」在還沒開始渲染時同樣成立，那種等待會提早通過。
+  await expect
+    .poll(async () => {
+      const tanks = await page.context().request.get('/api/tanks')
+
+      return tanks.ok() ? ((await tanks.json()) as { tanks: unknown[] }).tanks.length : -1
+    }, {
+      message: '示範資料一直沒有出現在缸清單裡——preview 的資料庫可能沒跑過 pnpm db:seed',
+      timeout: GUEST_LOGIN_NAV_TIMEOUT_MS,
+    })
+    .toBeGreaterThan(0)
+}
+
+/** 走一遍登入頁上的「以訪客身分瀏覽」，回來時人已經在首頁上、示範資料也已經在手上。 */
 export async function loginAsGuest(page: Page): Promise<void> {
   await page.goto('/login')
+
+  // 掛在 click 之前：補建那一次請求是首頁掛載後立刻發的，事後才掛會錯過它
+  const sandbox = page.waitForResponse(
+    response => response.url().includes('/api/guest-sandbox'),
+    { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS },
+  )
+
   await page.getByTestId('login-action-guest').click()
 
   // 停在首頁才算數：登入失敗時這支路由會把人留在 /login，
   // 少了這一句，後面每一條斷言都會以「登入頁上找不到那個元素」的形式失敗，
   // 看起來像是畫面壞了，而不是沒登入。
   await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
+
+  await waitForSandbox(page, sandbox)
 }
 
 /**

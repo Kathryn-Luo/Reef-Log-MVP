@@ -89,6 +89,8 @@ const MAIN_TANK_CREATURES: CreatureListItemDto[] = [
 ]
 
 const state = {
+  /** #144 的補建被打了幾次。每一次都是一支會寫入的 API，不該重複 */
+  sandboxCalls: 0,
   tanks: [] as TankOption[],
   creatures: [] as CreatureListItemDto[],
   // issue #132：兩支請求各自可以被打成 500，用來分辨「拿不到資料」與「你沒有資料」
@@ -100,6 +102,21 @@ const state = {
 function serverError() {
   return createError({ statusCode: 500, statusMessage: 'Internal Server Error' })
 }
+
+// 訪客沙盒的補建（issue #144）。這一頁在拿到空的缸清單時會問一次「這是準備中，
+// 還是真的沒有缸」——沒有這支端點的話，那個問題永遠得不到答案，畫面會停在
+// 「正在為你準備示範資料」，而所有驗空狀態的題目都會以「找不到元素」失敗。
+//
+// 預設 alreadySeeded: true ＝「沒有欠著的沙盒」，也就是這幾題要的前提：清單空著
+// 就是真的沒有缸。訪客那條路徑由首頁的測試（home.test.ts）自己顧。
+registerEndpoint('/api/guest-sandbox', {
+  method: 'POST',
+  handler: () => {
+    state.sandboxCalls++
+
+    return { copied: 0, alreadySeeded: true }
+  },
+})
 
 registerEndpoint('/api/tanks', () => {
   if (state.failTanks) {
@@ -122,6 +139,11 @@ beforeEach(() => {
   // useAsyncData 的結果會留在 payload 上，測試之間必須清掉才不會拿到上一題的資料
   clearNuxtData()
 
+  // 沙盒的狀態 #144 之後住在 useState（跨頁共用），不歸 clearNuxtData 管——
+  // 少了這一句，上一題問完之後的 'settled' 會讓下一題連問都不問
+  clearNuxtState()
+  state.sandboxCalls = 0
+
   state.tanks = [MAIN_TANK]
   state.creatures = MAIN_TANK_CREATURES
   state.failTanks = false
@@ -130,8 +152,14 @@ beforeEach(() => {
 
 type Page = Awaited<ReturnType<typeof mountSuspended>>
 
-function open() {
-  return mountSuspended(CreaturesPage, { route: '/creatures' })
+async function open() {
+  const page = await mountSuspended(CreaturesPage, { route: '/creatures' })
+
+  // #144：拿到空的缸清單時這一頁會問一次「這是準備中，還是真的沒有缸」，
+  // 答案回來之前畫面停在「正在為你準備示範資料」。等它落地再交出去。
+  await flushPromises()
+
+  return page
 }
 
 function tabTexts(page: Page) {

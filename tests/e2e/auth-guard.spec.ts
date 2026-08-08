@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { GUEST_LOGIN_NAV_TIMEOUT_MS } from './support/guestSession'
+import { GUEST_LOGIN_NAV_TIMEOUT_MS, waitForSandbox } from './support/guestSession'
 
 // 路由保護（issue #67）。E2E 不在 TDD Develop 的 job 內執行，跑在 Vercel preview URL 上。
 //
@@ -71,6 +71,8 @@ test.describe('已登入', () => {
     // （身分已經在 cookie 裡了），量級與這裡差一個數量級，跟著加碼只會讓真的壞掉的
     // 導向多等三倍才回報。
     await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
+    // #144：登入完成不等於示範資料備妥，複製已經移到首頁掛載之後
+    await waitForSandbox(page)
   })
 
   // Given 我已經登入 / When 我開啟（或重新整理）受保護的頁面 / Then 頁面正常載入，不被導向

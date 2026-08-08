@@ -38,6 +38,16 @@ ReefLog 是一個海水缸記錄工具，同時作為展示「AI Agent + GitHub 
     導入前需人類決策，貼 `needs-human`，勿自作主張切換。單人專案目前用不到——測試之間的隔離由
     「每位訪客一個沙盒」（#66）在應用層提供，per-PR 分支多買到的那層隔離是重複的。
 - 測試：Vitest（unit）、Playwright（E2E，跑在 Vercel preview URL 上）
+- UI：Nuxt UI 4。**連結型的按鈕（`UButton` 帶 `to` + `external`）絕對不能用 `loading`
+  或 `disabled`。** 那兩個 prop 都會讓元素變成 disabled，而整頁導向是瀏覽器對
+  `<a>` 的預設行為——點下去的同一拍被 disable，那次還沒開始的導向會**一起被取消**，
+  結果是「按了完全沒事」。
+  - 要顯示處理中就自己換圖示（見 `app/pages/login.vue` 的訪客鈕），元素本身一個屬性都不動。
+  - **jsdom 裡沒有真正的導向可以被取消**，所以驗「旗標有沒有變」的 unit 測試會全綠而
+    功能全壞。要驗的是元素本身：`href` 還在、`tagName` 仍是 `A`、沒有 `disabled` /
+    `aria-disabled` / `pointer-events-none`。
+  - 踩過一次：PR #145，138 條 E2E 除了不需登入的 4 條以外全紅（全部停在 `/login`），
+    而 1685 條 unit 測試一條都沒轉紅。
 - 前端工程師主導的 solo side project — 文件與 handoff 材料以個人維護規模撰寫，非團隊 onboarding
 
 > **部署歷史備註**：本專案曾評估 Cloud Run 與 Cloudflare Workers / NuxtHub。

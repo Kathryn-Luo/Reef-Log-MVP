@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { GUEST_LOGIN_NAV_TIMEOUT_MS, waitForSandbox } from './support/guestSession'
+import { PROTECTED_PAGES } from './support/protectedPages'
 
 // 路由保護（issue #67）。E2E 不在 TDD Develop 的 job 內執行，跑在 Vercel preview URL 上。
 //
@@ -75,10 +76,28 @@ test.describe('已登入', () => {
     await waitForSandbox(page)
   })
 
-  // Given 我已經登入 / When 我開啟（或重新整理）受保護的頁面 / Then 頁面正常載入，不被導向
-  for (const path of ['/', '/log', '/trends', '/creatures', '/maintenance', '/tanks/new']) {
-    test(`已登入開 ${path} 停在原地，不會被導去登入頁`, async ({ page }) => {
+  // Given 我已經登入
+  // When  我開啟（或重新整理）受保護的頁面
+  // Then  該頁自己的正面標記出現
+  // And   我沒有被導去登入頁
+  //
+  // ⚠ 順序不能對調（issue #146）。
+  //
+  // 這一組原本只驗網址與「登入頁的標記不存在」。後者是「某個東西不存在」，而 #84
+  // 關掉 SSR 之後，`page.goto()` 回來時整個 app 還沒 mount——畫面上什麼都沒有，
+  // 包括登入頁的標記。兩句因此在「頁面正常載入」與「頁面根本還沒開始畫」時同樣成立：
+  // 某一頁在登入狀態下整頁壞掉（500、或一個 render 期的例外），網址不會變、
+  // 登入頁的標記也不會出現，這組 test 照樣是綠的。#110 之後更容易空過。
+  //
+  // 所以先等這一頁自己的正面標記。哪一頁等哪一個寫在 support/protectedPages.ts，
+  // 那張表由 unit 這一側逐頁證明「該頁 500 時它真的不會出現」。
+  for (const { path, marker } of PROTECTED_PAGES) {
+    test(`已登入開 ${path} 停在原地，看得到這一頁自己的內容`, async ({ page }) => {
       await page.goto(path)
+
+      // 這一句通過＝app 已經 mount，而且畫出來的是這一頁自己的內容。
+      // 底下兩句要在它之後才有意義——尤其 toHaveCount(0)。
+      await expect(page.getByTestId(marker).first()).toBeVisible()
 
       await expect(page).toHaveURL(new RegExp(`${path.replace(/\//g, '\\/')}$`))
       await expect(page.getByTestId('login-screen')).toHaveCount(0)

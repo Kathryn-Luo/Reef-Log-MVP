@@ -75,7 +75,10 @@ describe('guest-login.spec.ts 的四條 test 都還在', () => {
   })
 })
 
-// And auth-guard.spec.ts:91「已登入開 /login 會被帶回首頁」仍然通過
+// And auth-guard.spec.ts 的「已登入開 /login 會被帶回首頁」仍然通過
+//
+// 不寫行號：底下是用標題去找那條 test 的，行號只會隨著別人改那支 spec 而愈飄愈遠
+// （這行原本寫 :91，在 main 上就已經指到別條了）。
 //
 // 兩條 spec 互相矛盾時，最省事的「修法」是把 #67 那條一起改掉。這條擋住那個走法。
 describe('#67 的行為不被這次修改動到', () => {

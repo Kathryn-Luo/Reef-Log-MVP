@@ -148,18 +148,38 @@ beforeEach(() => {
   state.failing = false
 })
 
+const MARKER_BY_PATH = new Map(PROTECTED_PAGES.map(page => [page.path, page.marker]))
+
+/** flush 幾輪就放棄。夠寬到容得下日後多串一段請求，又不會在真的卡住時空轉 */
+const MAX_SETTLE_ROUNDS = 10
+
 /**
  * 掛起某一頁，等它自己那串請求落地。
  *
- * 這幾頁的載入都是兩段串起來的（先問有哪些缸，再問那個缸的內容），
- * 加上 #144 那一問，所以要多 flush 幾輪。
+ * 這幾頁的載入是兩段串起來的（先問有哪些缸，再問那個缸的內容），加上 #144 沙盒那一問，
+ * 所以要 flush 好幾輪。但**不能寫死次數**：實際要幾輪取決於該頁串了幾段，日後任一頁
+ * 多串一段（像 #144 那樣），標記就會因為「還沒載完」而不在——而這支測試要證明的是
+ * 「因為壞掉所以不在」。兩者在斷言上長得一模一樣，證明會安靜地變成假的。
+ * （寫死 3 次的時候實測 2 次就夠、1 次會紅，餘裕只有一輪。）
+ *
+ * 所以等到這一頁自己講話為止：成功就畫出它的標記，失敗就畫出 load-error（#132）。
+ * 兩者都沒有＝這一頁還在半路上，那時候不管斷言什麼都沒有意義，直接讓它紅在這裡，
+ * 錯誤訊息也會直接說是哪一頁沒落地。
  */
 async function open(path: string) {
   const page = await mountSuspended(PAGE_COMPONENTS[path]!, { route: path })
+  const marker = MARKER_BY_PATH.get(path)!
 
-  await flushPromises()
-  await flushPromises()
-  await flushPromises()
+  const settled = () =>
+    page.find(`[data-testid="${marker}"]`).exists()
+    || page.find('[data-testid="load-error"]').exists()
+
+  for (let round = 0; round < MAX_SETTLE_ROUNDS && !settled(); round += 1) {
+    await flushPromises()
+  }
+
+  expect(settled(), `${path} flush ${MAX_SETTLE_ROUNDS} 輪之後既沒畫出 ${marker} 也沒畫出 load-error`)
+    .toBe(true)
 
   return page
 }
@@ -179,14 +199,16 @@ describe('每一頁載入成功時，表上的標記真的畫得出來', () => {
 describe('每一頁整頁壞掉時，表上的標記不會出現', () => {
   const dataPages = PROTECTED_PAGES.filter(page => !STATIC_PAGES.includes(page.path))
 
+  // 「而且是真的畫成載入失敗，不是碰巧什麼都沒渲染出來」這件事不在這裡斷言，
+  // 而是由 open() 的等待條件保證：它等到 marker 或 load-error 其中一個出現才回來，
+  // 都沒有就自己紅。所以標記不在的時候，畫面上一定是 load-error。
+  // 在這裡再斷言一次的話，那句話會恆為真——open() 已經把它證完了。
   it.each(dataPages)('$path 的 API 全部 500 時，$marker 不存在', async ({ path, marker }) => {
     state.failing = true
 
     const page = await open(path)
 
     expect(page.find(`[data-testid="${marker}"]`).exists()).toBe(false)
-    // 而且是真的畫成「載入失敗」，不是碰巧什麼都沒渲染出來
-    expect(page.find('[data-testid="load-error"]').exists()).toBe(true)
   })
 
   // STATIC_PAGES（目前只有 /tanks/new）不在這一組裡：它沒有任何 GET，打不壞，

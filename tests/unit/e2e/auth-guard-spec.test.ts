@@ -36,13 +36,23 @@ function loggedInBlock(): string {
 }
 
 /**
- * 去掉整行的註解再看。
+ * 去掉註解再看。
  *
  * 底下幾題比對的是「誰排在誰前面」，而說明這件事的註解本身就會提到
  * `toHaveCount(0)`——不去掉的話，量到的是註解的位置，不是那句斷言的位置。
+ *
+ * 區塊註解一定要一起處理，不能只濾掉 `//` 開頭的行。少了那一句的話，
+ * 把整段斷言用區塊註解包起來之後，底下每一題都還是綠的——切得出剛好一行、
+ * 形狀對、順序也算得出來——而 E2E 那一組已經完全退回 #146 的原狀。
+ * 這不是假想的攻擊：偶發紅的時候先註解掉看看是不是它，然後那個「先」變成永久。
  */
 const withoutComments = (block: string) =>
-  block.split('\n').filter(line => !line.trim().startsWith('//')).join('\n')
+  block
+    // 先整段拿掉區塊註解，再逐行濾單行註解
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter(line => !line.trim().startsWith('//'))
+    .join('\n')
 
 /**
  * 「等 marker 出現」那一句斷言本身。
@@ -62,6 +72,21 @@ function markerAssertion(): string {
     .filter(line => line.includes('getByTestId(marker)'))
 
   expect(lines, `${SPEC} 裡等 marker 的斷言不是剛好一句`).toHaveLength(1)
+
+  // 那一句必須是單獨一句 await expect(…)，不能被任何東西包起來。
+  //
+  // 少了這一句的話，守門看的只是「這一行長得對不對」，管不到它會不會執行：
+  //
+  //   if (path === '/') await expect(page.getByTestId(marker).first()).toBeVisible()
+  //
+  // 切得出剛好一行、形狀也對，於是全綠——而六頁裡有五頁的正面標記在 E2E 上
+  // 等於不存在。這正是為了單獨重跑某一頁而臨時加上、然後忘了拿掉的樣子。
+  // 同一句話也擋掉 `x && await expect(…)`、賦值與 return 包裝。
+  //
+  // ⚠ 守門到此為止：把 if 拆成兩行就繞得過去。那已經是刻意規避，不是無心之過，
+  // 而正則寫不出「這一句真的會執行」的證明——再疊下去只是把洞縮小，不是補起來。
+  expect(lines[0]!.trim(), `${SPEC} 等 marker 的那一句不是單獨一句 await expect(…)`)
+    .toMatch(/^await expect\(/)
 
   return lines[0]!
 }
@@ -149,7 +174,9 @@ describe('未登入那一半沒有被動到', () => {
   // 要盯的是那個展開沒有被拆回手抄的清單，以及只出現在這裡的 /creatures/:id
   // ——它沒有「登入後畫得出來」的標記可以指名，所以進不了那張表。
   it('未登入的清單直接沿用共用的那張表，另外多一條 /creatures/:id', () => {
-    expect(source).toMatch(/\.\.\.PROTECTED_PAGES\.map\(\s*page\s*=>\s*page\.path\s*\)/)
+    // 只認「有沒有展開」，不管參數叫什麼、有沒有型別註記、eslint 怎麼換行——
+    // 要防的是「拆回手抄清單」，把格式綁死只會在無關的改寫上假紅
+    expect(source).toMatch(/\.\.\.PROTECTED_PAGES\.map\(/)
     expect(source).toContain('/creatures/not-a-real-id')
   })
 
@@ -170,8 +197,10 @@ describe('沒有 test 被刪掉或跳過', () => {
     expect((source.match(/^[ \t]*test\(/gm) ?? []).length).toBeGreaterThanOrEqual(6)
   })
 
-  it('沒有被宣告成 skip / only 的 test', () => {
+  it('沒有被宣告成 skip / fixme / only 的 test', () => {
     expect(source).not.toMatch(/test(?:\.describe)?\.skip\(\s*(['"`]|async)/)
+    // fixme 是 Playwright 版的 skip，跳過的效果一樣（skip 那條擋不到它）
+    expect(source).not.toMatch(/test(?:\.describe)?\.fixme\(/)
     expect(source).not.toContain('test.only')
     expect(source).not.toContain('test.describe.only')
   })

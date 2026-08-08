@@ -49,6 +49,28 @@ function loggedInBlock(): string {
 const withoutComments = (block: string) =>
   block.split('\n').filter(line => !line.trim().startsWith('//')).join('\n')
 
+/**
+ * 「等 marker 出現」那一句斷言本身。
+ *
+ * 為什麼要精準切到一行，而不是在整段裡用一個「marker 後面幾十個字元內要有
+ * toBeVisible」的視窗去比對：那種寫法擋不住中間插進來的否定。
+ * `.first()).not.toBeVisible()` 只有 14 個字元，任何合理的視窗都容得下它，
+ * 於是「等這一頁的標記**消失**」——正是 #129 禁止、而且 SPA 還沒 mount 時恆真的
+ * 那個寫法——會從守門前面大搖大擺走過去。
+ *
+ * 切到單獨一行之後就沒有視窗可鑽了：整句話都在眼前，否定藏不住。
+ * 順帶也擋掉「多加一句等 marker」的情況——只准有一句，不然順序那題會失去意義。
+ */
+function markerAssertion(): string {
+  const lines = withoutComments(loggedInBlock())
+    .split('\n')
+    .filter(line => line.includes('getByTestId(marker)'))
+
+  expect(lines, `${SPEC} 裡等 marker 的斷言不是剛好一句`).toHaveLength(1)
+
+  return lines[0]!
+}
+
 describe('每一個受保護的頁面都指名了自己的正面標記', () => {
   // issue 的清單：/ /log /trends /creatures /maintenance /tanks/new
   it('六頁都在表上', () => {
@@ -79,9 +101,17 @@ describe('已登入的那一組先等正面標記', () => {
     expect(source).toMatch(/for\s*\(const\s*\{[^}]*marker[^}]*\}\s*of\s*PROTECTED_PAGES\)/)
   })
 
-  it('等的是該頁自己的標記出現，不是等某個東西消失', () => {
+  it('等的是該頁自己的標記出現', () => {
     // toBeVisible 只有在元素真的在畫面上時才成立，hydration 之前不會誤放行
-    expect(withoutComments(loggedInBlock())).toMatch(/getByTestId\(marker\)[\s\S]{0,40}toBeVisible\(\)/)
+    expect(markerAssertion()).toMatch(/getByTestId\(marker\)(?:\.first\(\))?\)\s*\.toBeVisible\(\)/)
+  })
+
+  // 這一題是上一題的另一半，不能省。「等 marker 出現」與「等 marker 消失」都會提到
+  // marker，光看有沒有 toBeVisible 分不出來——`.not.toBeVisible()` 兩者皆備。
+  // 而「等某個東西消失」在 app 還沒 mount 時恆成立，正是 #146 要修掉的那個毛病。
+  it('不是等某個東西消失', () => {
+    expect(markerAssertion())
+      .not.toMatch(/\.not\.|toBeHidden|toBeDetached|toHaveCount\(\s*0\s*\)/)
   })
 
   // 順序是重點：「登入頁的標記不存在」要排在正面訊號之後才有意義，

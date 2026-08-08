@@ -183,28 +183,17 @@ describe('每一頁整頁壞掉時，表上的標記不會出現', () => {
     expect(page.find('[data-testid="load-error"]').exists()).toBe(true)
   })
 
-  // /tanks/new 沒有任何 GET，打不壞。它的標記就是表單本身，
-  // 頁面畫得出來才有——render 期的例外一樣會讓它消失，只是這裡模擬不出來。
-  it('/tanks/new 沒有資料可壞，標記就是表單本身', async () => {
-    state.failing = true
-
-    const page = await open('/tanks/new')
-
-    expect(page.find('[data-testid="tank-form"]').exists()).toBe(true)
-  })
+  // STATIC_PAGES（目前只有 /tanks/new）不在這一組裡：它沒有任何 GET，打不壞，
+  // 而它的標記就是表單本身——頁面畫得出來才有。那件事上面那組已經驗過了，
+  // 在這裡再寫一次只是換個 describe 重複斷言同一件事。
+  // render 期的例外一樣會讓 tank-form 消失，只是在 unit 這一側模擬不出來。
 })
 
-// 這就是 #146 的成因，留成一條 test 而不是註解：舊判準在「整頁壞掉」時同樣成立，
-// 所以那組 test 在真的壞掉時仍然是綠的。有人想把新寫法改回去時，先看這一條。
-describe('舊判準（登入頁的標記不存在）在整頁壞掉時同樣成立', () => {
-  it.each(PROTECTED_PAGES.filter(page => !STATIC_PAGES.includes(page.path)))(
-    '$path 壞掉時 login-screen 一樣不存在',
-    async ({ path }) => {
-      state.failing = true
-
-      const page = await open(path)
-
-      expect(page.find('[data-testid="login-screen"]').exists()).toBe(false)
-    },
-  )
-})
+// #146 的成因不留成 test，因為在這個掛載方式下它證明不了任何事：
+// 這支測試掛的是頁面元件本身，不是 <NuxtPage>，而 login-screen 只住在
+// app/pages/login.vue。「壞掉時 login-screen 不存在」在這裡是任何實作、任何狀態下
+// 都成立的——它量到的不是「舊判準沒有鑑別力」，只是「我沒有掛登入頁」。
+// 恆綠的斷言在本專案是禁止的（CLAUDE.md），所以那一組拿掉了。
+//
+// 「舊判準在真的瀏覽器裡同樣恆成立」只有 E2E 驗得到，而那正是 auth-guard.spec.ts
+// 現在先等正面標記的理由——寫在那支 spec 的註解裡。

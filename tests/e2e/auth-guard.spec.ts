@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { GUEST_LOGIN_NAV_TIMEOUT_MS, waitForSandbox } from './support/guestSession'
+import { PROTECTED_PAGES } from './support/protectedPages'
 
 // 路由保護（issue #67）。E2E 不在 TDD Develop 的 job 內執行，跑在 Vercel preview URL 上。
 //
@@ -7,15 +8,17 @@ import { GUEST_LOGIN_NAV_TIMEOUT_MS, waitForSandbox } from './support/guestSessi
 // 走得完），#66 落地之後補上了。Google 那條仍然走不完：Authorized redirect URI 不支援
 // 萬用字元，而 preview 每個分支一個動態網址（Epic #47 的硬約束）。
 
-/** issue 的「要保護的頁面」清單，外加一個尚未存在的生物 id（:id 那一條路由） */
+/**
+ * issue 的「要保護的頁面」清單，外加一個尚未存在的生物 id（:id 那一條路由）。
+ *
+ * 直接從 PROTECTED_PAGES 展開，不另抄一份：兩份清單並存的話，日後多一個受保護的頁面
+ * 只加到其中一邊，另一半會安靜地漏掉那一頁而沒有東西轉紅。
+ * `/creatures/:id` 只出現在這裡——它沒有「登入後畫得出來」的標記可以指名（那是一頁
+ * 不存在的生物），所以進不了那張表。
+ */
 const PROTECTED_PATHS = [
-  '/',
-  '/log',
-  '/trends',
-  '/creatures',
+  ...PROTECTED_PAGES.map(page => page.path),
   '/creatures/not-a-real-id',
-  '/maintenance',
-  '/tanks/new',
 ]
 
 // Given 我沒有登入 / When 我開啟首頁 / Then 我被導向 /login
@@ -75,12 +78,31 @@ test.describe('已登入', () => {
     await waitForSandbox(page)
   })
 
-  // Given 我已經登入 / When 我開啟（或重新整理）受保護的頁面 / Then 頁面正常載入，不被導向
-  for (const path of ['/', '/log', '/trends', '/creatures', '/maintenance', '/tanks/new']) {
-    test(`已登入開 ${path} 停在原地，不會被導去登入頁`, async ({ page }) => {
+  // Given 我已經登入
+  // When  我開啟（或重新整理）受保護的頁面
+  // Then  該頁自己的正面標記出現
+  // And   我沒有被導去登入頁
+  //
+  // ⚠ `toHaveCount(0)` 必須排在正面標記之後（issue #146）。
+  //
+  // 這一組原本只驗網址與「登入頁的標記不存在」，而後者是「某個東西不存在」——
+  // 在 app 還沒 mount 的那一拍同樣成立，所以整頁壞掉時照樣是綠的。
+  // 完整的成因與這張表的挑選規則寫在 support/protectedPages.ts。
+  //
+  // 至於 `toHaveURL`：它排在最前面，因為它沒有上面那個毛病（網址不是「不存在」），
+  // 而且它的診斷訊息最好。這一組守的正是 #84 那條「已登入卻被踢回 /login」的無限導向，
+  // 真的回歸時 toHaveURL 會直接說「expected /, got /login」；讓 marker 先跑的話，
+  // 人要先等滿一輪逾時，才拿到一句「找不到 home-sticky-header」。
+  for (const { path, marker } of PROTECTED_PAGES) {
+    test(`已登入開 ${path} 停在原地，看得到這一頁自己的內容`, async ({ page }) => {
       await page.goto(path)
 
       await expect(page).toHaveURL(new RegExp(`${path.replace(/\//g, '\\/')}$`))
+
+      // 這一句通過＝app 已經 mount，而且畫出來的是這一頁自己的內容。
+      // 底下那句要在它之後才有意義。
+      await expect(page.getByTestId(marker).first()).toBeVisible()
+
       await expect(page.getByTestId('login-screen')).toHaveCount(0)
     })
   }

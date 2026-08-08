@@ -58,7 +58,22 @@ const { data, status, refresh: reload } = useAsyncData('home', async () => {
 }, { lazy: true, watch: [selectedTankId] })
 
 const tanks = computed(() => data.value?.tanks ?? [])
-const currentTank = computed(() => data.value?.tank ?? null)
+
+/**
+ * 此刻頁首該顯示哪一個缸。
+ *
+ * ⚠ 先看 `selectedTankId`，再退回請求鏈算出來的那一個。
+ *
+ * 只看 `data.value.tank` 的話，換缸之後頁首會停在**舊缸**直到兩支串接的請求都回來
+ * ——選單關了、儀表板收了，但缸名、色塊與水質數字全是上一個缸的。使用者會以為
+ * 沒點到而再點一次。缸清單在手上就算得出新缸是哪一個，沒有理由等。
+ */
+const currentTank = computed(() =>
+  data.value?.tanks.find(tank => tank.id === selectedTankId.value)
+  ?? data.value?.tank
+  ?? null,
+)
+
 const home = computed(() => data.value?.page ?? null)
 
 // issue #132：請求失敗時 data 是 null，與「成功但沒有缸」長得一模一樣。
@@ -98,6 +113,17 @@ const loading = computed(() =>
  */
 const sandboxState = ref<'unknown' | 'preparing' | 'settled' | 'failed'>('unknown')
 
+/**
+ * 補建沙盒這一次請求的時間預算（毫秒）。
+ *
+ * 這支端點背後是一個 30 秒上限的交易加上 10 秒等連線，所以它**可以**合法地跑很久。
+ * 但「跑很久」與「再也不回來」在畫面上長得一樣：少了這個上限，請求掛住時 promise
+ * 不會 reject，畫面就永遠停在「正在準備示範資料」，而那一態刻意沒有任何出口。
+ * 45 秒 ＝ 端點自己的上限（30 + 10）再加一點餘裕：真的還在跑就別打斷它，
+ * 真的死了就要有人說出來。
+ */
+const SANDBOX_TIMEOUT_MS = 45_000
+
 const tanksEmpty = computed(() => !!data.value && data.value.tanks.length === 0)
 
 const preparing = computed(() =>
@@ -109,7 +135,10 @@ async function ensureSandbox() {
   sandboxState.value = 'preparing'
 
   try {
-    await $api<GuestSandboxResponse>('/api/guest-sandbox', { method: 'POST' })
+    await $api<GuestSandboxResponse>('/api/guest-sandbox', {
+      method: 'POST',
+      timeout: SANDBOX_TIMEOUT_MS,
+    })
 
     // ⚠ 不管回的是什麼都要重新取一次，**不能只在 alreadySeeded 為 false 時才取**。
     //
@@ -143,21 +172,48 @@ watch(data, () => {
   }
 }, { immediate: true })
 
-/** 準備示範資料失敗時的重試：先重打那一支，再照常重取整頁 */
-async function retryAll() {
-  if (sandboxState.value === 'failed') {
-    sandboxState.value = 'unknown'
+/**
+ * 重新補建一次示範資料。
+ *
+ * 與整頁的 retryLoad 分開：兩者失敗的東西不同，能給的出路也不同（見下方 showError）。
+ * `retryingSandbox` 讓按鈕在請求進行中按不下去——與 useLoadFailure 的 retrying 同一個
+ * 用意（#132），少了它同一個 tick 內連點兩下就會送出兩次寫入。
+ */
+const retryingSandbox = ref(false)
 
-    await ensureSandbox()
-
+async function retrySandbox() {
+  if (retryingSandbox.value) {
     return
   }
 
-  await retryLoad()
+  retryingSandbox.value = true
+
+  try {
+    await ensureSandbox()
+  }
+  finally {
+    retryingSandbox.value = false
+  }
 }
 
-/** 取資料失敗，或準備示範資料失敗——兩者對使用者是同一件事：這一頁現在給不出內容 */
-const showError = computed(() => loadFailed.value || sandboxState.value === 'failed')
+/**
+ * 整頁給不出內容——**只有取缸清單失敗才算**。
+ *
+ * ⚠ 補建沙盒失敗不在此列，這是刻意的。
+ *
+ * LoadErrorState 沒有任何連出去的入口（#132：拿不到資料時給「建立第一個缸」，
+ * 人照著按下去就多一個不需要的缸）。把補建失敗也畫成它，代價是**真的沒有缸的人
+ * 被鎖在門外**：Google 使用者的缸清單明明拿得到，卻只因為一支訪客專屬的 API 掛了
+ * 就完全無法建立第一個缸。那條路徑在 #144 之前不存在。
+ *
+ * 所以補建失敗降級成一列提示（下方的 sandbox-error），空狀態與它的出口照常顯示。
+ * 訪客因此可能在示範資料到齊之前先建一個空缸——那是這個取捨換來的代價，
+ * 比把人鎖在門外便宜得多，而且提示本身說得出發生了什麼。
+ */
+const showError = computed(() => loadFailed.value)
+
+/** 補建失敗：示範資料沒來，但這一頁其餘部分照常運作 */
+const sandboxFailed = computed(() => sandboxState.value === 'failed')
 
 const creatures = computed(() => home.value?.creatures ?? [])
 const counts = computed(() => countCreaturesByCategory(creatures.value))
@@ -172,12 +228,16 @@ const { settled, pending } = useScrollRestore()
 // at 是「樣態要對齊哪個位置」：還原期間頁首要先擺成補回去之後的樣子，
 // 否則那一捲之後才收合，抽掉的高度會被 scroll anchoring 從落點上扣回來。
 //
-// ⚠ until 還要等 data（issue #110）。這一頁改成 lazy 之後，頁首在資料回來之前
-// 根本還沒渲染，而 settled 在沒有東西要還原時是 onMounted 當下就 true 的——
-// 只看 settled 的話，頁首的第一次渲染會發生在過場**已經開放之後**，
+// ⚠ until 還要等頁首真的渲染得出來（issue #110）。這一頁改成 lazy 之後，頁首在
+// 資料回來之前根本還沒渲染，而 settled 在沒有東西要還原時是 onMounted 當下就 true
+// 的——只看 settled 的話，頁首的第一次渲染會發生在過場**已經開放之後**，
 // reef-motion-off 那一幀就不存在了，還原捲動位置時會看到頁首演一遍收合（#103）。
+//
+// 條件是 currentTank 而不是 data：訪客那條路上 data 早就非 null（清單是空的，
+// 畫面停在「正在準備」），而頁首要等十幾秒後補建完才第一次出現。看 data 的話
+// 閘門會在頁首還不存在時就開啟，那一幀又沒了。
 const { collapsed, animated } = useHeaderCollapse({
-  until: () => settled.value && !!data.value,
+  until: () => settled.value && !!currentTank.value,
   at: pending,
 })
 
@@ -215,11 +275,46 @@ const cards = computed(() =>
 
 <template>
   <div class="mx-auto max-w-2xl">
+    <!--
+      補建示範資料失敗（issue #144）。刻意只是一列提示而不是整頁的 LoadErrorState：
+      那一態沒有任何出口，會把「建立我的第一個缸」一起拆掉——而缸清單明明是好的。
+      真的沒有缸的人（例如 Google 使用者）會因此完全無法建立第一個缸。
+    -->
+    <div
+      v-if="sandboxFailed && !showError"
+      data-testid="sandbox-error"
+      role="alert"
+      class="mx-4 mt-4 flex items-center gap-3 rounded-2xl border border-default bg-elevated/40 px-4 py-3 text-sm"
+    >
+      <UIcon
+        name="i-lucide-cloud-off"
+        class="size-5 shrink-0 text-dimmed"
+        aria-hidden="true"
+      />
+
+      <p class="flex-1 text-muted">
+        示範資料準備失敗，你仍然可以自己建立缸。
+      </p>
+
+      <UButton
+        data-testid="sandbox-error-retry"
+        type="button"
+        size="sm"
+        color="neutral"
+        variant="outline"
+        :loading="retryingSandbox"
+        class="shrink-0 rounded-full"
+        @click="retrySandbox"
+      >
+        重試
+      </UButton>
+    </div>
+
     <!-- 拿不到資料。要排在空狀態之前：兩者的 data 都是 null，先問的那一個說了算 -->
     <LoadErrorState
       v-if="showError"
       :retrying="retrying"
-      @retry="retryAll"
+      @retry="retryLoad"
     />
 
     <!--

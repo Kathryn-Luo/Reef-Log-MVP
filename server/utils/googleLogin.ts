@@ -99,8 +99,11 @@ export async function resolveGoogleLogin(
         email: profile.email ?? null,
         displayName: profile.name ?? null,
         // Google 使用者沒有訪客沙盒要複製，所以建立當下就填上現在（issue #144）。
-        // 欄位語義是「沒有欠著的複製」，不是「複製過了」——留 null 的話，
-        // 首頁會判定他還在等示範資料，永遠停在「正在準備」上。
+        // 欄位語義是「沒有欠著的複製」，不是「複製過了」。
+        //
+        // ⚠ 留 null 的後果不是畫面卡住而已：那樣 ensureGuestSandbox 的 claim 會
+        // **搶得到**，於是把整份示範沙盒（主缸、示範生物、示範水質紀錄）複製進一位
+        // 真實使用者的帳號，跟他自己的資料混在一起。這一行不是裝飾。
         sandboxSeededAt: new Date(),
         accounts: {
           create: {

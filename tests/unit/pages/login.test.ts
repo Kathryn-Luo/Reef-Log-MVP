@@ -287,12 +287,58 @@ describe('登入畫面 — 訪客按鈕的處理中樣態', () => {
     expect(page.get('[data-testid="login-guest-icon"]').classes()).toContain('animate-spin')
   })
 
-  // Google 那顆不受影響：兩顆共用一個旗標的話，按了訪客之後 Google 也會轉圈
+  // Google 那顆不受影響：兩顆共用一個旗標的話，按了訪客之後 Google 也會轉圈。
+  //
+  // ⚠ 不能驗 Google 那顆的 data-starting——那是寫死的字串字面量，不是綁定，
+  // 任何實作下都會是 'false'。要驗的是它**有實際反應的部分**：圖示沒有跟著轉。
   it('Google 按鈕不跟著進入處理中', async () => {
     const page = await mountLogin()
 
     await page.get('[data-testid="login-action-guest"]').trigger('click')
 
-    expect(page.get('[data-testid="login-action-google"]').attributes('data-starting')).toBe('false')
+    const googleIcon = page.get('[data-testid="login-google-icon"]')
+
+    expect(googleIcon.classes()).not.toContain('animate-spin')
+    expect(page.get('[data-testid="login-action-google"]').attributes('aria-busy')).not.toBe('true')
+  })
+
+  // Cmd / Ctrl / Shift + 點擊是「在新分頁開」，本頁原地不動。
+  // 算成「開始登入」的話旗標會翻過去而畫面永遠不會換——這顆按鈕從此轉著圈且點不動。
+  it.each([
+    ['Cmd', { metaKey: true }],
+    ['Ctrl', { ctrlKey: true }],
+    ['Shift', { shiftKey: true }],
+  ])('%s + 點擊不會進入處理中', async (_label, modifier) => {
+    const page = await mountLogin()
+    const guest = page.get('[data-testid="login-action-guest"]')
+
+    guest.element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...modifier }))
+    await page.vm.$nextTick()
+
+    expect(guest.attributes('data-starting')).toBe('false')
+  })
+
+  // 訪客進到首頁之後按上一頁，Safari / Firefox 從 bfcache 還原這一頁時元件狀態
+  // 原封不動——旗標還在，之後每一次點擊都會被 preventDefault 擋掉，
+  // 使用者面對的是一顆轉著圈而且點不動的按鈕。
+  it('從 bfcache 回到這一頁時，處理中的樣態會歸位', async () => {
+    const page = await mountLogin()
+    const guest = page.get('[data-testid="login-action-guest"]')
+
+    await guest.trigger('click')
+
+    expect(guest.attributes('data-starting')).toBe('true')
+
+    window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }))
+    await page.vm.$nextTick()
+
+    expect(guest.attributes('data-starting')).toBe('false')
+
+    // 而且真的又按得動了
+    const again = new MouseEvent('click', { bubbles: true, cancelable: true })
+
+    guest.element.dispatchEvent(again)
+
+    expect(again.defaultPrevented).toBe(false)
   })
 })

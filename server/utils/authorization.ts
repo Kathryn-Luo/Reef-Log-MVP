@@ -1,6 +1,7 @@
 import type { PrismaClient, User } from '@prisma/client'
 import type { CreatureDetailDto, CreatureDetailResponse, MoveCreatureResponse, TankCreaturesData } from '#shared/types/creature'
 import type { GuestSandboxResponse } from '#shared/types/guestSandbox'
+import type { Timer } from './requestTiming'
 import type { TankHomeData, TankOption } from '#shared/types/home'
 import type { MaintenancePageData, MaintenanceTaskDto, MaintenanceTaskResponse } from '#shared/types/maintenance'
 import type { CreateTankResponse } from '#shared/types/tank'
@@ -17,6 +18,7 @@ import { parseWaterLogInput } from '#shared/utils/waterLog'
 import { getCreatureDetail, moveCreature, updateCreatureStatus } from './creatureDetail'
 import { getTankCreatures } from './creatureList'
 import { ensureGuestSandbox } from './guestSandbox'
+import { createTimer } from './requestTiming'
 import { getTankHome, listTankOptions } from './homeData'
 import { clearCompletion, completeTask, findOwnedMaintenanceTask, getMaintenancePage } from './maintenance'
 import { createTank } from './tankWrite'
@@ -297,12 +299,13 @@ export async function resolveTankOptions(
 export async function resolveGuestSandbox(
   client: PrismaClient,
   user: SessionUser | null,
+  timer: Timer = createTimer(),
 ): Promise<Authorized<GuestSandboxResponse>> {
   if (!user) {
     return { ok: false, error: NOT_SIGNED_IN }
   }
 
-  return { ok: true, value: await ensureGuestSandbox(client, user.id) }
+  return { ok: true, value: await ensureGuestSandbox(client, user.id, timer) }
 }
 
 /** GET /api/tanks/:id/home —— screen-1 單一缸的內容 */

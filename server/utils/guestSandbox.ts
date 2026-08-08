@@ -183,7 +183,11 @@ const SANDBOX_TRANSACTION_MAX_WAIT_MS = 10_000
  *   - **複製失敗 → 整個交易回滾 → claim 一起消失。** 這位使用者的 `sandboxSeededAt`
  *     仍然是 null，下次進站會再試一次。若把錯誤吞掉改回 `alreadySeeded: true`，
  *     交易會提交，他就被永久標記成「已備妥」而名下一個缸都沒有——#144 要避免的
- *     「半個帳號」正是這個。所以這支函式**不接住任何錯誤**。
+ *     「半個帳號」正是這個。所以真正的失敗一律往外拋。
+ *   - **「複製了 0 個」也算失敗。** copyTemplateSandbox 對空模板是回 0 而不是拋錯
+ *     （訪客照樣要進得去），交易於是會正常提交、claim 留下——同樣是永久的半個帳號，
+ *     只是從另一個方向進來。所以那一種在交易內部拋 EmptyTemplateError 讓它回滾，
+ *     再於外層換成正常回應（畫面看到的是空狀態，不是一頁 500）。
  *   - **併發的第二次**卡在同一列的 row lock 上，等第一次提交後重新檢查 where，
  *     `sandboxSeededAt` 已經不是 null 了 → 0 筆 → 不複製。連點兩下、兩個分頁、
  *     重新整理，都只會有一份。
@@ -192,29 +196,69 @@ const SANDBOX_TRANSACTION_MAX_WAIT_MS = 10_000
  * 就填上了現在（見 googleLogin.ts），claim 一律搶不到，於是自動什麼都不做。
  * 判斷因此只有一個地方（那個欄位），不必在這裡再問一次 provider。
  */
+class EmptyTemplateError extends Error {}
+
 export async function ensureGuestSandbox(
   client: PrismaClient,
   userId: string,
   timer: Timer = createTimer(),
 ): Promise<GuestSandboxResponse> {
-  return await client.$transaction(
-    async (tx) => {
-      const claim = await tx.user.updateMany({
-        where: { id: userId, sandboxSeededAt: null },
-        data: { sandboxSeededAt: new Date() },
-      })
+  try {
+    return await client.$transaction(
+      async (tx) => {
+        const claim = await tx.user.updateMany({
+          where: { id: userId, sandboxSeededAt: null },
+          data: { sandboxSeededAt: new Date() },
+        })
 
-      if (claim.count === 0) {
-        return { copied: 0, alreadySeeded: true }
-      }
+        if (claim.count === 0) {
+          return { copied: 0, alreadySeeded: true }
+        }
 
-      return { copied: await copyTemplateSandbox(tx, userId, timer), alreadySeeded: false }
-    },
-    {
-      timeout: SANDBOX_TRANSACTION_TIMEOUT_MS,
-      maxWait: SANDBOX_TRANSACTION_MAX_WAIT_MS,
-    },
-  )
+        // 已經有缸卻還沒被標記過——只補標記，**不要再複製一份**。
+        //
+        // 這是 migration 回填的第二道防線。回填只涵蓋「執行當下已存在的列」，而
+        // `prisma migrate deploy` 跑在 build 開始時、新的 bundle 要等 build 跑完才
+        // 服務流量：那幾分鐘內由舊程式碼建立的訪客會**帶著完整的沙盒**而欄位是 null
+        // （舊的 client 不認得那一欄）。少了這一條，他之後只要看到一次空清單就會被
+        // 複製第二份，缸與生物直接變兩倍。
+        if (await timer.measure('tx.sandbox.existing', () => tx.tank.count({ where: { userId } })) > 0) {
+          return { copied: 0, alreadySeeded: true }
+        }
+
+        const copied = await copyTemplateSandbox(tx, userId, timer)
+
+        // 模板一個缸都沒有——**不能讓 claim 留下來**。
+        //
+        // copyTemplateSandbox 對空模板是回 0 而不是拋錯（訪客照樣要進得去），
+        // 所以交易會正常提交，這位使用者從此被標記成「沙盒已備妥」而名下沒有資料。
+        // 之後人類跑了 `pnpm db:seed` 也救不回來：claim 再也搶不到。
+        // #78 已經真的發生過一次「模板名下沒有缸」，那時的徵兆同樣只有畫面是空的。
+        //
+        // 拋錯讓交易回滾，sandboxSeededAt 回到 null，下次進站會再試一次。
+        // 這個錯誤在下面被接住換成正常回應——使用者看到的是空狀態，不是一頁 500。
+        if (copied === 0) {
+          throw new EmptyTemplateError()
+        }
+
+        return { copied, alreadySeeded: false }
+      },
+      {
+        timeout: SANDBOX_TRANSACTION_TIMEOUT_MS,
+        maxWait: SANDBOX_TRANSACTION_MAX_WAIT_MS,
+      },
+    )
+  }
+  catch (cause) {
+    // 只接住「模板是空的」這一種。其餘（連線斷、交易逾時）照樣往外拋——
+    // 那些要讓呼叫端知道，畫面才有失敗提示與重試可給。
+    if (!(cause instanceof EmptyTemplateError)) {
+      throw cause
+    }
+
+    // alreadySeeded 為 false ＝「還欠著」，與資料庫此刻的狀態一致（claim 已回滾）
+    return { copied: 0, alreadySeeded: false }
+  }
 }
 
 /**

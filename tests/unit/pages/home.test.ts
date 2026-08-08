@@ -222,6 +222,11 @@ async function mountHome(route = '/') {
     await flushPromises()
   }
 
+  // 迴圈耗盡就明確失敗。少了這一句，卡住的頁面會被靜靜交出去——
+  // 而所有「斷言某東西**不存在**」的測試都會空過：一頁骨架同樣沒有 /tanks/new、
+  // 同樣不含「還沒有任何缸」。
+  expect(settling(), '頁面十次 flush 之後仍停在骨架或準備中').toBe(false)
+
   return page
 }
 
@@ -1334,7 +1339,8 @@ describe('首頁 — 載入樣態', () => {
 
   // 換缸時 data 還在，useAsyncData 保留上一份——整頁消失再長回來比等一下更難看懂
   // （與 /trends 換範圍時的處置一致）
-  it('換缸時不退回骨架，舊缸的內容留在畫面上', async () => {
+  // 換缸時 data 還在，useAsyncData 保留上一份——整頁消失再長回來比等一下更難看懂
+  it('換缸時不退回骨架', async () => {
     state.tanks = [MAIN_TANK, SECOND_TANK]
 
     const page = await mountHome()
@@ -1343,7 +1349,23 @@ describe('首頁 — 載入樣態', () => {
     await page.get('[data-testid="tank-menu"]').findAll('[role="option"]')[1]!.trigger('click')
 
     expect(page.find('[data-testid="home-loading"]').exists()).toBe(false)
-    expect(page.get('h1').text()).toContain(MAIN_TANK.name)
+  })
+
+  // ⚠ 缸名要**立刻**翻過去，不能等兩支串接的請求都回來。
+  //
+  // 只看請求鏈算出來的那個缸，換缸之後畫面上唯一變的是「儀表板收起來了」——
+  // 缸名、色塊、水質數字全是上一個缸的，持續一整個往返。使用者會以為沒點到
+  // 而再點一次。缸清單在手上就算得出新缸是哪一個，沒有理由等。
+  it('換缸之後頁首立刻改成新缸，不等內容回來', async () => {
+    state.tanks = [MAIN_TANK, SECOND_TANK]
+
+    const page = await mountHome()
+
+    await page.get('[data-testid="tank-switch"]').trigger('click')
+    await page.get('[data-testid="tank-menu"]').findAll('[role="option"]')[1]!.trigger('click')
+
+    // 這一刻 /api/tanks/tank-2/home 還沒回來
+    expect(page.get('h1').text()).toContain(SECOND_TANK.name)
   })
 })
 
@@ -1399,14 +1421,29 @@ describe('首頁 — 訪客沙盒準備中', () => {
 
   // 準備失敗要看得見，而且要留下出口。停在「正在準備」上的話，
   // 那句話會從「請稍候」慢慢變成謊話，而使用者沒有任何辦法。
-  it('準備失敗時顯示載入失敗與重試，而不是一直轉圈', async () => {
+  it('準備失敗時顯示提示與重試，而不是一直轉圈', async () => {
     state.failSandbox = true
 
     const page = await mountHome()
 
     expect(page.find('[data-testid="home-preparing"]').exists()).toBe(false)
-    expect(page.find('[data-testid="load-error"]').exists()).toBe(true)
-    expect(page.find('[data-testid="load-error-retry"]').exists()).toBe(true)
+    expect(page.find('[data-testid="sandbox-error"]').exists()).toBe(true)
+    expect(page.find('[data-testid="sandbox-error-retry"]').exists()).toBe(true)
+  })
+
+  // ⚠ 這一條是這一段的重點：**補建失敗不能把建立缸的出口一起拆掉。**
+  //
+  // 整頁的 LoadErrorState 刻意沒有任何連出去的入口（#132），把補建失敗也畫成它，
+  // 代價是真的沒有缸的人被鎖在門外——Google 使用者的缸清單明明拿得到，
+  // 卻只因為一支訪客專屬的 API 掛了就完全無法建立第一個缸。
+  it('準備失敗時空狀態與「建立我的第一個缸」照常在', async () => {
+    state.failSandbox = true
+
+    const page = await mountHome()
+
+    expect(page.find('[data-testid="load-error"]').exists()).toBe(false)
+    expect(page.find('[data-testid="tank-empty"]').exists()).toBe(true)
+    expect(page.get('[data-testid="tank-empty-action"]').attributes('href')).toBe('/tanks/new')
   })
 
   it('按下重試會再問一次，成功後換成示範缸的內容', async () => {
@@ -1416,15 +1453,15 @@ describe('首頁 — 訪客沙盒準備中', () => {
 
     state.failSandbox = false
 
-    await page.get('[data-testid="load-error-retry"]').trigger('click')
+    await page.get('[data-testid="sandbox-error-retry"]').trigger('click')
 
-    // 重試要走完「再問一次 → 複製 → 重取整頁」三段，等它落地再驗
+    // 等正面訊號（缸名出現），不是等提示消失——按下重試的那一瞬間提示就先不見了，
+    // 而那時請求還在路上。這與 E2E 那邊的 #129 是同一個道理。
     await vi.waitFor(() => {
-      expect(page.find('[data-testid="home-preparing"]').exists()).toBe(false)
+      expect(page.get('h1').text()).toContain(MAIN_TANK.name)
     })
 
-    expect(page.find('[data-testid="load-error"]').exists()).toBe(false)
-    expect(page.get('h1').text()).toContain(MAIN_TANK.name)
+    expect(page.find('[data-testid="sandbox-error"]').exists()).toBe(false)
   })
 
   // 成功那條路會 reload()，data 因此再變一次、watcher 又醒過來。
@@ -1437,6 +1474,23 @@ describe('首頁 — 訪客沙盒準備中', () => {
 
     expect(state.sandboxCalls).toBe(1)
     expect(page.get('h1').text()).toContain(MAIN_TANK.name)
+  })
+
+  // ⚠ 真正會無限重打的是**這一條**：POST 回來清單仍然是空的（模板沒 seed、
+  // 或這位根本不是訪客）。ensureSandbox 成功時會 reload()，data 因此再變一次、
+  // watcher 又醒過來——閘門一旦失效，每一次都是一支會寫入的 API。
+  // 上面那條「只問一次」走的是「POST 之後就有缸」，守不到這裡。
+  it('補建之後仍然沒有缸時，也只問一次', async () => {
+    state.sandboxAlreadySeeded = true
+    state.sandboxFilledByOther = false
+
+    const page = await mountHome()
+
+    await flushPromises()
+    await flushPromises()
+
+    expect(state.sandboxCalls).toBe(1)
+    expect(page.find('[data-testid="tank-empty"]').exists()).toBe(true)
   })
 
   it('本來就有缸的話完全不問', async () => {

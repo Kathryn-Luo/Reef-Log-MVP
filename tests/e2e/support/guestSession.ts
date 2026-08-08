@@ -1,5 +1,5 @@
 import { expect, test as base } from '@playwright/test'
-import type { Page } from '@playwright/test'
+import type { Page, Response } from '@playwright/test'
 
 // 需要登入才跑得完的 spec 共用的進站方式（issue #80）。
 //
@@ -50,56 +50,60 @@ import type { Page } from '@playwright/test'
 export const GUEST_LOGIN_NAV_TIMEOUT_MS = 45_000
 
 /**
- * 等示範資料真的備妥（issue #144）。
+ * 等首頁上的示範資料真的備妥（issue #144）。
  *
  * ⚠ 網址變成 `/` 只代表**登入**完成，示範資料可能還在複製。
  *
  * #144 把複製從 `/auth/guest` 搬到首頁掛載之後的 `POST /api/guest-sandbox`，302 因此
- * 發得比從前早得多（實測 14.8 秒 → 約 2.8 秒）。代價是 `toHaveURL('/')` 通過的那一刻
+ * 發得比從前早得多（實測 14.8 秒 → 約 1.3 秒）。代價是 `toHaveURL('/')` 通過的那一刻
  * `/api/tanks` 可能還是空的——少了這一句，接著 `goto('/log')` 或直接打 API 的 spec
- * 會看到「還沒有任何缸」。
+ * 會看到「還沒有任何缸」，而失敗訊息會長得像畫面壞了，跟真正的原因一點關係都看不出來。
  *
- * ── 為什麼自己打 API，而不是等首頁去打 ──
+ * ⚠ **等首頁自己那一次請求，不要自己再打一次。**
  *
- * 第一版等的是首頁的 `home-sticky-header`。它會動，但**壞掉的時候什麼都不會說**：
- * 逾時訊息一律是「找不到那個元素」，而真正的原因可能是登入沒成功、沙盒那支 API 回 500、
- * 模板沒 seed、或首頁沒在對的時機呼叫——四者在畫面上長得一模一樣。E2E 一輪要 45 分鐘，
- * 一個講不出原因的逾時等於白跑一輪（實際踩過：run 31169806875，138 條裡除了不需登入的
- * 4 條以外全紅，而 run 撞上 45 分鐘上限，連報表都沒產出）。
+ * 自己打 POST 的話會與首頁那一次**併發**：後到的那一支卡在 `sandboxSeededAt` 那一列的
+ * row lock 上，直到前一支交易提交為止，也就是兩條連線各被佔住約 11.5 秒。
+ * playwright.config.ts 是 fullyParallel，每個 worker 的尖峰連線需求因此翻倍，而
+ * 交易的 maxWait 只有 10 秒——Neon 連線吃緊時最先炸的會是首頁自己那一支，
+ * 畫面翻成 load-error，測試以「找不到元素」的形式偶發失敗，正是這支 fixture 要避免的。
  *
- * 現在直接呼叫 `POST /api/guest-sandbox` 並確認 `/api/tanks` 真的有東西：拿得到狀態碼
- * 與回應本文，失敗訊息因此直接指向出問題的那一層。fixture 的職責本來就是
- * 「給我一位有資料的訪客」，不是「確認首頁畫好了」——後者是 home 那一支自己的題目。
+ * 改等首頁那一次還多驗到一件事：**首頁真的有在對的時機呼叫它**。
  *
- * 預算沿用登入那一個常數：搬家之後這 11.5 秒還在，只是換了個地方等。
+ * @param sandbox 首頁那一次補建請求（在 click 之前掛好的 `page.waitForResponse`）。
+ *   省略時只輪詢缸清單——那對「補建是誰觸發的」不表態，適合已經在站內的呼叫端。
  */
-export async function waitForSandbox(page: Page): Promise<void> {
-  const { request } = page.context()
+export async function waitForSandbox(page: Page, sandbox?: Promise<Response>): Promise<void> {
+  if (sandbox) {
+    const response = await sandbox
+    const body = await response.text()
 
-  // 自己打，不等首頁去打。
-  //
-  // 這支 API 是冪等的（server/utils/guestSandbox.ts 的 claim），所以與首頁自己那一次
-  // 併發也只會複製一份——最壞情況是兩邊各等一次同一個交易。
-  const response = await request.post('/api/guest-sandbox', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
-  const body = await response.text()
+    expect(response.status(), `POST /api/guest-sandbox 回了 ${response.status()}：${body}`).toBe(200)
+  }
 
-  expect(response.status(), `POST /api/guest-sandbox 回了 ${response.status()}：${body}`).toBe(200)
+  // 等的是**正面訊號**（缸真的在清單裡），不是「準備中消失」：#129 的教訓——
+  // SPA 下「某個東西不存在」在還沒開始渲染時同樣成立，那種等待會提早通過。
+  await expect
+    .poll(async () => {
+      const tanks = await page.context().request.get('/api/tanks')
 
-  // 補建說成功了，資料就該真的在。這一句分得出「API 說它做了」與「東西真的在」——
-  // 模板沒 seed 過時前者照樣是 200，而 copied 會是 0
-  const tanks = await request.get('/api/tanks')
-  const tanksBody = await tanks.text()
-
-  expect(tanks.status(), `GET /api/tanks 回了 ${tanks.status()}：${tanksBody}`).toBe(200)
-  expect(
-    (JSON.parse(tanksBody) as { tanks: unknown[] }).tanks.length,
-    `沙盒是空的。補建回的是：${body}——preview 的資料庫可能沒跑過 pnpm db:seed`,
-  ).toBeGreaterThan(0)
+      return tanks.ok() ? ((await tanks.json()) as { tanks: unknown[] }).tanks.length : -1
+    }, {
+      message: '示範資料一直沒有出現在缸清單裡——preview 的資料庫可能沒跑過 pnpm db:seed',
+      timeout: GUEST_LOGIN_NAV_TIMEOUT_MS,
+    })
+    .toBeGreaterThan(0)
 }
 
 /** 走一遍登入頁上的「以訪客身分瀏覽」，回來時人已經在首頁上、示範資料也已經在手上。 */
 export async function loginAsGuest(page: Page): Promise<void> {
   await page.goto('/login')
+
+  // 掛在 click 之前：補建那一次請求是首頁掛載後立刻發的，事後才掛會錯過它
+  const sandbox = page.waitForResponse(
+    response => response.url().includes('/api/guest-sandbox'),
+    { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS },
+  )
+
   await page.getByTestId('login-action-guest').click()
 
   // 停在首頁才算數：登入失敗時這支路由會把人留在 /login，
@@ -107,7 +111,7 @@ export async function loginAsGuest(page: Page): Promise<void> {
   // 看起來像是畫面壞了，而不是沒登入。
   await expect(page).toHaveURL('/', { timeout: GUEST_LOGIN_NAV_TIMEOUT_MS })
 
-  await waitForSandbox(page)
+  await waitForSandbox(page, sandbox)
 }
 
 /**

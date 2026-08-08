@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import type { GuestSandboxResponse } from '#shared/types/guestSandbox'
 import type { CreatureCategoryKey, TankHomeData, TankOption } from '#shared/types/home'
 import {
   CREATURE_CATEGORY_LABELS,
@@ -96,105 +95,25 @@ const loading = computed(() =>
 /**
  * 訪客的示範資料還在複製中（issue #144）。
  *
- * 為什麼首頁得管這件事：複製要 11.5 秒，原本卡在 /auth/guest 的 302 之前，訪客只能
- * 對著登入頁乾等。搬出來之後訪客會**先進到這一頁**，而此刻 `/api/tanks` 回的是空清單
- * ——與「這個帳號真的沒有缸」在畫面上一模一樣。分不開的話，訪客會看到
- * 「建立我的第一個缸」並照著按下去，然後示範資料才突然冒出來。
- *
- * 分辨的方式是問伺服器：POST /api/guest-sandbox 只在「這位使用者欠著一份沙盒」時
- * 才真的複製（冪等鎖見 server/utils/guestSandbox.ts），並回報它做了什麼。
- *
- *   'unknown'   還沒問過。**空清單在這一態也算準備中**——否則從「載入完成、0 個缸」
- *               到「開始準備」之間會閃一次空狀態，等於換個地方犯同樣的錯。
- *   'preparing' 正在複製。畫面上要有明確在跑的訊號，不是一片骨架：這一段長達十幾秒，
- *               看不出在跑的話使用者會以為當掉了。
- *   'settled'   問過了，沒有欠著的沙盒。空清單此刻才真的是「你還沒有缸」。
- *   'failed'    複製失敗。走 LoadErrorState 的重試，不會把人留在空狀態上。
+ * 狀態住在 useGuestSandbox（跨頁共用）而不是這一頁：複製要 11.5 秒，使用者在那段時間
+ * 可以從底部的 tab 列走去別頁。只有首頁認得這一態的話，切到「趨勢」看到的會是
+ * 「還沒有任何缸」——而首頁同一時間正說著「正在為你準備」。理由詳見該 composable。
  */
-const sandboxState = ref<'unknown' | 'preparing' | 'settled' | 'failed'>('unknown')
-
-/**
- * 補建沙盒這一次請求的時間預算（毫秒）。
- *
- * 這支端點背後是一個 30 秒上限的交易加上 10 秒等連線，所以它**可以**合法地跑很久。
- * 但「跑很久」與「再也不回來」在畫面上長得一樣：少了這個上限，請求掛住時 promise
- * 不會 reject，畫面就永遠停在「正在準備示範資料」，而那一態刻意沒有任何出口。
- * 45 秒 ＝ 端點自己的上限（30 + 10）再加一點餘裕：真的還在跑就別打斷它，
- * 真的死了就要有人說出來。
- */
-const SANDBOX_TIMEOUT_MS = 45_000
+const { preparing: sandboxPreparing, failed: sandboxFailed, retrying: retryingSandbox, ensure, retry }
+  = useGuestSandbox()
 
 const tanksEmpty = computed(() => !!data.value && data.value.tanks.length === 0)
 
-const preparing = computed(() =>
-  !loadFailed.value && tanksEmpty.value
-  && (sandboxState.value === 'unknown' || sandboxState.value === 'preparing'),
-)
+const preparing = computed(() => !loadFailed.value && tanksEmpty.value && sandboxPreparing.value)
 
-async function ensureSandbox() {
-  sandboxState.value = 'preparing'
-
-  try {
-    await $api<GuestSandboxResponse>('/api/guest-sandbox', {
-      method: 'POST',
-      timeout: SANDBOX_TIMEOUT_MS,
-    })
-
-    // ⚠ 不管回的是什麼都要重新取一次，**不能只在 alreadySeeded 為 false 時才取**。
-    //
-    // 複製可能是別人做的：冪等鎖（server/utils/guestSandbox.ts）保證只有一個呼叫者
-    // 真的複製，另一個分頁、或先前一次還在路上的請求，都會拿到 alreadySeeded: true
-    // ——而那一刻資料其實已經進來了。只在 false 時重取的話，這一頁會永遠停在
-    // 「還沒有任何缸」，而同一時間 /api/tanks 明明回得出缸。
-    //
-    // 代價是真的沒有缸的帳號（例如 Google 使用者）會多打一次 /api/tanks。
-    // 那是一次很便宜的讀取，換掉的是一個沒有出口的死畫面。
-    // 實際踩過（PR #145 的 E2E，畫面等了 34 次輪詢仍是空狀態）。
-    await reload()
-
-    sandboxState.value = 'settled'
-  }
-  catch {
-    sandboxState.value = 'failed'
-  }
-}
-
-/**
- * 空清單就問一次伺服器——只問一次。
- *
- * `sandboxState !== 'unknown'` 這道閘門不能省：ensureSandbox 成功時會 reload()，
- * data 因此再變一次，watcher 於是又醒過來。少了它，沙盒真的空著的帳號
- * （模板沒 seed 過的環境）會無限重打這支 API。
- */
+/** 空清單就問一次伺服器。「只問一次」那道閘門在 composable 裡，全站共用。 */
 watch(data, () => {
-  if (tanksEmpty.value && sandboxState.value === 'unknown') {
-    void ensureSandbox()
+  if (tanksEmpty.value) {
+    void ensure(reload)
   }
 }, { immediate: true })
 
-/**
- * 重新補建一次示範資料。
- *
- * 與整頁的 retryLoad 分開：兩者失敗的東西不同，能給的出路也不同（見下方 showError）。
- * `retryingSandbox` 讓按鈕在請求進行中按不下去——與 useLoadFailure 的 retrying 同一個
- * 用意（#132），少了它同一個 tick 內連點兩下就會送出兩次寫入。
- */
-const retryingSandbox = ref(false)
-
-async function retrySandbox() {
-  if (retryingSandbox.value) {
-    return
-  }
-
-  retryingSandbox.value = true
-
-  try {
-    await ensureSandbox()
-  }
-  finally {
-    retryingSandbox.value = false
-  }
-}
+const retrySandbox = () => retry(reload)
 
 /**
  * 整頁給不出內容——**只有取缸清單失敗才算**。
@@ -211,9 +130,6 @@ async function retrySandbox() {
  * 比把人鎖在門外便宜得多，而且提示本身說得出發生了什麼。
  */
 const showError = computed(() => loadFailed.value)
-
-/** 補建失敗：示範資料沒來，但這一頁其餘部分照常運作 */
-const sandboxFailed = computed(() => sandboxState.value === 'failed')
 
 const creatures = computed(() => home.value?.creatures ?? [])
 const counts = computed(() => countCreaturesByCategory(creatures.value))
@@ -353,33 +269,11 @@ const cards = computed(() =>
       而且沒有任何連出去的入口——尤其不能有「建立我的第一個缸」，
       那顆按鈕在這一刻按下去，等於在示範資料落地的路上多插一個空缸。
     -->
-    <div
-      v-else-if="preparing"
-      data-testid="home-preparing"
-      role="status"
-      class="px-4 py-16 text-center"
-    >
-      <div
-        class="mx-auto grid size-20 place-items-center rounded-full border border-dashed border-primary/40"
-        aria-hidden="true"
-      >
-        <UIcon
-          name="i-lucide-loader-circle"
-          class="size-8 animate-spin text-primary motion-reduce:animate-none"
-        />
-      </div>
-
-      <p
-        data-testid="home-preparing-title"
-        class="mt-6 text-2xl font-semibold"
-      >
-        正在為你準備示範資料
-      </p>
-
-      <p class="mx-auto mt-3 max-w-xs text-balance text-muted">
-        我們正在複製一份示範缸給你，這需要幾秒鐘。完成後這裡就會出現水質、生物與保養記錄。
-      </p>
-    </div>
+    <!--
+      訪客的示範資料還在複製中（issue #144）。文案與樣式住在元件裡，五頁共用一份——
+      使用者在這十幾秒內可以切 tab，各頁各寫一份的話他會看到兩種說法。
+    -->
+    <SandboxPreparingState v-else-if="preparing" />
 
     <div
       v-else-if="!currentTank"

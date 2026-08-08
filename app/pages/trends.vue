@@ -96,6 +96,27 @@ const { data, status, refresh: reload } = useAsyncData('trends', async () => {
  */
 const { failed: loadFailed, retrying, retry: retryLoad } = useLoadFailure([status], reload)
 
+/**
+ * 訪客的示範資料還在複製中（issue #144）。
+ *
+ * 複製要 11.5 秒，而使用者在那段時間可以從底部的 tab 列走到這一頁。只有首頁認得
+ * 這一態的話，這裡會畫成「還沒有任何缸」——而首頁同一時間正說著「正在為你準備」。
+ *
+ * 這一頁也負責觸發：書籤直接開這裡的訪客，首頁根本沒掛載，補建那支 API 一次都不會
+ * 被呼叫，他會永遠等不到資料。
+ */
+const { preparing: sandboxPreparing, ensure } = useGuestSandbox()
+
+const tanksEmpty = computed(() => !!data.value && !data.value.tank)
+
+const preparing = computed(() => !loadFailed.value && tanksEmpty.value && sandboxPreparing.value)
+
+watch(data, () => {
+  if (tanksEmpty.value) {
+    void ensure(reload)
+  }
+}, { immediate: true })
+
 // 骨架只給「第一次、還沒有任何資料」的那一段。換範圍時 data 還在，走的是下面的
 // refreshing——整張圖消失再長回來比等一下更難看懂（issue #123 第 4-3 節）。
 const loading = computed(() =>
@@ -216,6 +237,15 @@ const change = computed(() => {
       <div class="h-10 animate-pulse rounded-2xl bg-elevated/60" />
       <span class="sr-only">載入中</span>
     </div>
+
+    <!--
+      訪客的示範資料還在複製中（issue #144）。排在「沒有缸」之前：兩者在這一頁上
+      長得一樣（都是空的），先問的那一個說了算，而此刻為真的是「還在路上」。
+    -->
+    <SandboxPreparingState
+      v-else-if="preparing"
+      title-tag="p"
+    />
 
     <!-- 趨勢是某一個缸的趨勢，沒有缸就沒有東西可畫 -->
     <div

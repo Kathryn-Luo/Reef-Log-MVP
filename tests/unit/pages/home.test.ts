@@ -185,6 +185,10 @@ beforeEach(() => {
   // useAsyncData 的結果會留在 payload 上，測試之間必須清掉才不會拿到上一題的缸
   clearNuxtData()
 
+  // 沙盒的狀態 #144 之後住在 useState（跨頁共用），它不歸 clearNuxtData 管——
+  // 少了這一句，上一題問完之後的 'settled' 會讓下一題連問都不問
+  clearNuxtState()
+
   // scrollY 是掛在共用的 window 上的，上一題捲到哪裡會被下一題的頁面在掛載時讀到
   Object.defineProperty(window, 'scrollY', { value: 0, configurable: true })
 
@@ -216,7 +220,7 @@ async function mountHome(route = '/') {
   // 缸清單空著時還要多等一段：首頁會去問 /api/guest-sandbox「這是準備中還是真的沒有缸」
   // （issue #144），在答案回來之前畫面停在「正在準備示範資料」上。
   const settling = () => page.find('[data-testid="home-loading"]').exists()
-    || page.find('[data-testid="home-preparing"]').exists()
+    || page.find('[data-testid="sandbox-preparing"]').exists()
 
   for (let attempt = 0; attempt < 10 && settling(); attempt++) {
     await flushPromises()
@@ -1385,8 +1389,8 @@ describe('首頁 — 訪客沙盒準備中', () => {
 
     await flushPromises()
 
-    expect(page.find('[data-testid="home-preparing"]').exists()).toBe(true)
-    expect(page.get('[data-testid="home-preparing-title"]').text()).toBe('正在為你準備示範資料')
+    expect(page.find('[data-testid="sandbox-preparing"]').exists()).toBe(true)
+    expect(page.get('[data-testid="sandbox-preparing-title"]').text()).toBe('正在為你準備示範資料')
   })
 
   // 準備中不能有任何連出去的入口，「建立我的第一個缸」尤其不行：
@@ -1403,7 +1407,7 @@ describe('首頁 — 訪客沙盒準備中', () => {
   it('複製完成後換成示範缸的內容', async () => {
     const page = await mountHome()
 
-    expect(page.find('[data-testid="home-preparing"]').exists()).toBe(false)
+    expect(page.find('[data-testid="sandbox-preparing"]').exists()).toBe(false)
     expect(page.get('h1').text()).toContain(MAIN_TANK.name)
   })
 
@@ -1414,7 +1418,7 @@ describe('首頁 — 訪客沙盒準備中', () => {
 
     const page = await mountHome()
 
-    expect(page.find('[data-testid="home-preparing"]').exists()).toBe(false)
+    expect(page.find('[data-testid="sandbox-preparing"]').exists()).toBe(false)
     expect(page.find('[data-testid="tank-empty"]').exists()).toBe(true)
     expect(page.find('[data-testid="tank-empty-action"]').exists()).toBe(true)
   })
@@ -1426,7 +1430,7 @@ describe('首頁 — 訪客沙盒準備中', () => {
 
     const page = await mountHome()
 
-    expect(page.find('[data-testid="home-preparing"]').exists()).toBe(false)
+    expect(page.find('[data-testid="sandbox-preparing"]').exists()).toBe(false)
     expect(page.find('[data-testid="sandbox-error"]').exists()).toBe(true)
     expect(page.find('[data-testid="sandbox-error-retry"]').exists()).toBe(true)
   })

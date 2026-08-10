@@ -11,6 +11,8 @@ import { getCreatureDetail, updateCreatureStatus } from '../../../server/utils/c
 const ROW = {
   id: 'f5',
   tankId: 'tank-1',
+  // 詳情頁要畫「所在缸」，缸名跟著這一列一起查回來（issue #120）
+  tank: { name: '主缸' },
   name: '火焰仙',
   scientificName: 'Centropyge loriculus',
   category: 'FISH',
@@ -57,6 +59,7 @@ describe('getCreatureDetail', () => {
 
     expect(client.creature.findFirst).toHaveBeenCalledWith({
       where: { id: 'f5', tank: { userId: 'user-1', archivedAt: null } },
+      include: { tank: { select: { name: true } } },
     })
   })
 
@@ -67,6 +70,8 @@ describe('getCreatureDetail', () => {
 
     expect(creature).toEqual({
       id: 'f5',
+      tankId: 'tank-1',
+      tankName: '主缸',
       name: '火焰仙',
       scientificName: 'Centropyge loriculus',
       category: 'FISH',
@@ -80,6 +85,19 @@ describe('getCreatureDetail', () => {
       causeOfDeath: 'JUMPED',
       deathNote: '半夜跳出主缸，早上發現已乾。',
     })
+  })
+
+  // issue #120：詳情頁要畫「所在缸」，也要判斷「名下還有沒有別的缸」。
+  // 回應形狀因此補上所在缸的識別與顯示名稱——不動 schema，只是把已經在同一列上的
+  // tankId 與關聯缸的 name 一起送出去。
+  it('帶上所在缸的 id 與缸名', async () => {
+    const creature = await getCreatureDetail(
+      fakeClient({ ...ROW, tankId: 'tank-9', tank: { name: '珊瑚缸' } }),
+      'f5',
+      'user-1',
+    )
+
+    expect(creature).toMatchObject({ tankId: 'tank-9', tankName: '珊瑚缸' })
   })
 
   it('找不到（或不屬於這位使用者）時回傳 null', async () => {
@@ -112,6 +130,8 @@ describe('updateCreatureStatus', () => {
         causeOfDeath: 'JUMPED',
         deathNote: '半夜跳出主缸，早上發現已乾。',
       },
+      // 回傳的形狀與 GET 一致，所在缸的缸名同樣要跟著回來（issue #120）
+      include: { tank: { select: { name: true } } },
     })
   })
 
@@ -138,6 +158,7 @@ describe('updateCreatureStatus', () => {
         causeOfDeath: null,
         deathNote: null,
       },
+      include: { tank: { select: { name: true } } },
     })
 
     expect(creature).toMatchObject({

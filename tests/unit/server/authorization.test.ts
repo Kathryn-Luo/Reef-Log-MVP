@@ -204,27 +204,36 @@ function fakeClient() {
       })),
     },
     creature: {
-      // where: { id, tank: { userId, archivedAt: null } }——歸屬要透過缸才看得到
-      findFirst: vi.fn(({ where }: { where: { id: string, tank: { userId: string, archivedAt: null } } }) => {
+      // where: { id, tank: { userId, archivedAt: null } }——歸屬要透過缸才看得到。
+      // include 有帶時把缸名一起回來（詳情頁的「所在缸」，issue #120），與 Prisma 一致
+      findFirst: vi.fn(({ where, include }: { where: { id: string, tank: { userId: string, archivedAt: null } }, include?: { tank?: unknown } }) => {
         const creature = creatures.find(candidate => candidate.id === where.id)
         const tank = creature
           ? ownedTank({ id: creature.tankId, ...where.tank })
           : null
 
-        return Promise.resolve(tank ? creature : null)
+        if (!tank || !creature) {
+          return Promise.resolve(null)
+        }
+
+        return Promise.resolve(include?.tank ? { ...creature, tank: { name: tank.name } } : creature)
       }),
       findMany: vi.fn(({ where }: { where: { tankId: string } }) => Promise.resolve(
         creatures.filter(creature => creature.tankId === where.tankId),
       )),
       // where 也帶歸屬條件（見 updateCreatureStatus）：對不上任何一列時
       // Prisma 丟的是 P2025，替身照做，否則「寫入時歸屬已經不成立」就沒得測
-      update: vi.fn(({ where, data }: { where: { id: string, tank?: { userId: string, archivedAt: null } }, data: Record<string, unknown> }) => {
+      update: vi.fn(({ where, data, include }: { where: { id: string, tank?: { userId: string, archivedAt: null } }, data: Record<string, unknown>, include?: { tank?: unknown } }) => {
         const creature = creatures.find(candidate => candidate.id === where.id)
         const tank = creature ? ownedTank({ id: creature.tankId, ...where.tank }) : null
 
-        return creature && tank
-          ? Promise.resolve({ ...creature, ...data })
-          : Promise.reject(recordNotFound())
+        if (!creature || !tank) {
+          return Promise.reject(recordNotFound())
+        }
+
+        const updated = { ...creature, ...data }
+
+        return Promise.resolve(include?.tank ? { ...updated, tank: { name: tank.name } } : updated)
       }),
     },
     waterLog: {

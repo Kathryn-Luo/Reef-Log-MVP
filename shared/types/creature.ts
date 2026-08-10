@@ -40,6 +40,17 @@ export interface CreatureDetailDto extends CreatureListItemDto {
   subCategory: string | null
   /** 死亡記錄區塊專用的備註，不是通用飼養備註（見 schema.prisma 的註解） */
   deathNote: string | null
+
+  /**
+   * 所在缸（issue #120）。庫存列表與首頁卡片都是「從某一缸點進去的」，所以那兩張畫面
+   * 不必問這件事；詳情頁是唯一手上只有 creatureId 的入口，而「移動到其他缸」要先畫得出
+   * 「現在在哪」，也要能把目前這一缸從目標清單裡濾掉。
+   *
+   * 兩個欄位都在 Creature 那一列的射程內（tankId 是自己的欄位，缸名是關聯缸的 name），
+   * 不動 schema，也不是新的授權面——查得到這一隻就查得到它的缸。
+   */
+  tankId: string
+  tankName: string
 }
 
 /**

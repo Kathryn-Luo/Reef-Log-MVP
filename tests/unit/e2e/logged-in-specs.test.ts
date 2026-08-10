@@ -51,6 +51,8 @@ const LOGGED_IN_SPECS = [
   ['tests/e2e/water-log.spec.ts', 5],
   // 保養提醒（#125）。勾選 / 取消會寫進自己的沙盒，同樣要有身分。
   ['tests/e2e/maintenance.spec.ts', 5],
+  // 移動到其他缸（#120）。真的把生物換到另一個缸，寫入同樣落在自己的沙盒裡。
+  ['tests/e2e/creature-move.spec.ts', 2],
 ] as const
 
 /**

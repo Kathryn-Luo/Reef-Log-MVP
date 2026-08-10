@@ -34,13 +34,21 @@ function writeScripts(root: string, scripts: Record<string, string>) {
   writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts }))
 }
 
-function writeDiscovery(root: string, files: string[]) {
-  const report = join(root, 'vitest-files.json')
-  writeFileSync(report, JSON.stringify(files.map((file, index) => ({
-    name: `test case ${index + 1}`,
-    file: join(root, file),
-    location: { line: 1, column: 1 },
-  }))))
+function writeResult(root: string, files: string[]) {
+  const report = join(root, 'vitest-result.json')
+  writeFileSync(report, JSON.stringify({
+    numTotalTests: files.length,
+    success: true,
+    testResults: files.map((file, index) => ({
+      name: join(root, file),
+      status: 'passed',
+      assertionResults: [{
+        fullName: `test case ${index + 1}`,
+        status: 'passed',
+        title: `test case ${index + 1}`,
+      }],
+    })),
+  }))
   return report
 }
 
@@ -52,7 +60,7 @@ function verifyReport(root: string, report: string) {
 }
 
 function verify(root: string, discoveredFiles: string[]) {
-  return verifyReport(root, writeDiscovery(root, discoveredFiles))
+  return verifyReport(root, writeResult(root, discoveredFiles))
 }
 
 afterEach(() => {
@@ -72,7 +80,7 @@ describe('Vitest 測試探索守門', () => {
     const result = verify(root, files)
 
     expect(result.status).toBe(0)
-    expect(result.stdout).toContain('Vitest 已收錄全部 2 支 unit test files')
+    expect(result.stdout).toContain('Vitest 實際執行 2 個測試案例，涵蓋全部 2 支 unit test files')
   })
 
   it('Vitest 少收任何一支 unit test 時失敗並列出檔名', () => {
@@ -88,25 +96,48 @@ describe('Vitest 測試探索守門', () => {
     expect(result.stderr).toContain('tests/unit/excluded.test.ts')
   })
 
-  it('Vitest 一支 unit test 都沒收到時失敗', () => {
+  it('Vitest 實際執行零個 test case 時失敗', () => {
     const root = projectWith(['tests/unit/example.test.ts'])
 
     const result = verify(root, [])
 
     expect(result.status).toBe(1)
-    expect(result.stderr).toContain('Vitest 未收錄 1 支 unit test files')
+    expect(result.stderr).toContain('Vitest 實際執行收到 0 個測試案例')
   })
 
-  it('只有 filesOnly 檔名而沒有實際 test case 時失敗', () => {
+  it('拒絕 vitest list 的陣列格式，避免驗證到另一種 invocation', () => {
     const file = 'tests/unit/example.test.ts'
     const root = projectWith([file])
-    const report = join(root, 'vitest-files.json')
-    writeFileSync(report, JSON.stringify([{ file: join(root, file) }]))
+    const report = join(root, 'vitest-result.json')
+    writeFileSync(report, JSON.stringify([{
+      name: 'test case 1',
+      file: join(root, file),
+    }]))
 
     const result = verifyReport(root, report)
 
     expect(result.status).toBe(1)
-    expect(result.stderr).toContain('實際 test cases')
+    expect(result.stderr).toContain('Vitest JSON reporter result')
+  })
+
+  it('只有 skipped test cases 而沒有實際執行案例時失敗', () => {
+    const file = 'tests/unit/example.test.ts'
+    const root = projectWith([file])
+    const report = join(root, 'vitest-result.json')
+    writeFileSync(report, JSON.stringify({
+      numTotalTests: 1,
+      success: true,
+      testResults: [{
+        name: join(root, file),
+        status: 'passed',
+        assertionResults: [{ status: 'pending', title: 'skipped case' }],
+      }],
+    }))
+
+    const result = verifyReport(root, report)
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('實際執行收到 0 個測試案例')
   })
 
   it.each([

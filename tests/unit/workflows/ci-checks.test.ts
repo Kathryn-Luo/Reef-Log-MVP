@@ -58,6 +58,12 @@ function runOf(step: string): string {
   return collected.join('\n')
 }
 
+/** 區塊 run 中逐行執行的命令，不含 YAML 的 `|`。 */
+const commandsOf = (step: string) => runOf(step)
+  .split('\n')
+  .map(line => line.trim())
+  .filter(line => line !== '' && line !== '|')
+
 /**
  * 這個步驟有沒有執行某個 pnpm script。
  * `(\s|$)` 的邊界是必要的：少了它，`pnpm test:e2e` 會被誤認成 `pnpm test`。
@@ -73,6 +79,7 @@ const stepNamed = (name: string) => steps().find(step => step.startsWith(`name: 
 
 /** 這支 workflow 必須無條件跑完的檢查。build 見 issue #44。 */
 const CHECKS = ['lint', 'typecheck', 'test', 'build'] as const
+const SINGLE_COMMAND_CHECKS = ['lint', 'typecheck', 'build'] as const
 
 describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
   it('workflow 檔案存在', () => {
@@ -139,34 +146,29 @@ describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
     expect(code(raw())).not.toContain('continue-on-error')
   })
 
-  // 每一步只跑那一個指令，逐字比對。這一條同時擋掉三種手法：
+  // 除了 test 需要在同一步驗證 JSON result，其餘每一步只跑那一個指令，逐字比對。
+  // 這一條同時擋掉三種手法：
   // - `|| true` / `|| echo`：指令失敗被吞掉，step 仍然回 0
   // - `--passWithNoTests`：vitest 預設在「一個測試都沒收到」時失敗，
   //   加上它會讓「測試檔被整批刪掉」這種最粗暴的作弊變成綠燈
   // - `pnpm test tests/unit/foo.test.ts`：把範圍縮限到剛好會過的那幾個檔
-  it.each(CHECKS)('pnpm %s 步驟只跑那一個指令', (script) => {
+  it.each(SINGLE_COMMAND_CHECKS)('pnpm %s 步驟只跑那一個指令', (script) => {
     expect(runOf(stepRunning(script)!).trim()).toBe(`pnpm ${script}`)
   })
 
   // issue #35：守門測試若被 vitest.config.ts 排除，就沒有機會保護自己。
-  // 因此要在 pnpm test 外部鎖定 package scripts，並確認 tests/unit 每個測試檔
-  // 至少有一個實際 test case。就算 pnpm test 零測試也成功，外部守門仍會先失敗。
-  it('在 unit tests 前確認每個 tests/unit 測試檔都有實際 test case', () => {
-    const discovery = stepNamed('Verify unit test discovery')
-    const all = steps()
+  // JSON 必須由同一次 pnpm test 產生，不能用 list 或另一個 invocation 預先探索。
+  it('以同一次 unit test 執行結果確認每個測試檔都有實際 test case', () => {
+    const unitTests = stepNamed('Unit tests')
 
-    expect(discovery, '找不到 Vitest 測試探索檢查').toBeDefined()
-    expect(discovery).toMatch(/if:\s*\$\{\{\s*!\s*cancelled\(\)\s*\}\}/)
-    expect(discovery).toContain('VITEST_DISCOVERY_FILE: ${{ runner.temp }}/vitest-files.json')
-    expect(runOf(discovery!)).toContain(
-      'pnpm exec vitest list --passWithNoTests --json="$VITEST_DISCOVERY_FILE"',
-    )
-    expect(runOf(discovery!)).not.toContain('--filesOnly')
-    expect(runOf(discovery!)).not.toContain('--static-parse')
-    expect(runOf(discovery!)).toContain(
-      'node .github/scripts/assert-vitest-discovery.mjs "$VITEST_DISCOVERY_FILE"',
-    )
-    expect(all.indexOf(discovery!)).toBeLessThan(all.indexOf(stepRunning('test')!))
+    expect(unitTests, '找不到 Unit tests 步驟').toBeDefined()
+    expect(unitTests).toMatch(/if:\s*\$\{\{\s*!\s*cancelled\(\)\s*\}\}/)
+    expect(unitTests).toContain('VITEST_RESULT_FILE: ${{ runner.temp }}/vitest-result.json')
+    expect(commandsOf(unitTests!)).toEqual([
+      'pnpm test --reporter=default --reporter=json --outputFile.json="$VITEST_RESULT_FILE"',
+      'node .github/scripts/assert-vitest-discovery.mjs "$VITEST_RESULT_FILE"',
+    ])
+    expect(code(raw())).not.toContain('vitest list')
   })
 
   // ── 以下是權限面 ──

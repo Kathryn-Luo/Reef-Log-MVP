@@ -4,6 +4,7 @@ import { readdirSync, readFileSync, realpathSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 const TEST_FILE_PATTERN = /\.(?:test|spec)\.[cm]?[jt]sx?$/
+const EXECUTED_TEST_STATUSES = new Set(['passed', 'failed'])
 const EXPECTED_PACKAGE_SCRIPTS = {
   test: 'vitest run',
   lint: 'eslint .',
@@ -39,19 +40,37 @@ function unitTestFiles(directory, root) {
   return files.sort()
 }
 
-function unitTestFilesWithCases(report, root) {
+function vitestRunResult(report, root) {
   const parsed = JSON.parse(readFileSync(report, 'utf8'))
-  if (!Array.isArray(parsed) || parsed.some(entry => (
-    typeof entry?.name !== 'string' || typeof entry?.file !== 'string'
-  ))) {
-    throw new TypeError('Vitest discovery report 必須是含 name 與 file 欄位的實際 test cases 陣列')
+  if (
+    typeof parsed !== 'object'
+    || parsed === null
+    || Array.isArray(parsed)
+    || !Number.isInteger(parsed.numTotalTests)
+    || parsed.numTotalTests < 0
+    || !Array.isArray(parsed.testResults)
+    || parsed.testResults.some(result => (
+      typeof result?.name !== 'string' || !Array.isArray(result?.assertionResults)
+    ))
+  ) {
+    throw new TypeError('報告必須是含 numTotalTests 與 testResults 的 Vitest JSON reporter result')
   }
 
-  return [...new Set(parsed.flatMap(({ file }) => {
-    const absolute = realpathSync(isAbsolute(file) ? file : resolve(root, file))
+  const executedResults = parsed.testResults.map(({ name, assertionResults }) => ({
+    name,
+    assertions: assertionResults.filter(assertion => EXECUTED_TEST_STATUSES.has(assertion?.status)),
+  }))
+  const executedTests = executedResults.reduce((total, result) => total + result.assertions.length, 0)
+
+  const files = [...new Set(executedResults.flatMap(({ name, assertions }) => {
+    if (assertions.length === 0) return []
+
+    const absolute = realpathSync(isAbsolute(name) ? name : resolve(root, name))
     const path = relative(root, absolute).split(sep).join('/')
     return path.startsWith('tests/unit/') && TEST_FILE_PATTERN.test(path) ? [path] : []
   }))].sort()
+
+  return { executedTests, files }
 }
 
 function fail(message, details = []) {
@@ -62,27 +81,32 @@ function fail(message, details = []) {
 
 const report = process.argv[2]
 if (!report) {
-  fail('用法：assert-vitest-discovery.mjs <vitest discovery JSON>')
+  fail('用法：assert-vitest-discovery.mjs <vitest run JSON reporter result>')
 }
 else {
   try {
     const root = realpathSync(process.cwd())
     assertPackageScripts(root)
     const expected = unitTestFiles(resolve(root, 'tests/unit'), root)
-    const discovered = unitTestFilesWithCases(resolve(root, report), root)
+    const result = vitestRunResult(resolve(root, report), root)
 
-    if (expected.length === 0) {
+    if (result.executedTests === 0) {
+      fail('Vitest 實際執行收到 0 個測試案例，必須大於 0')
+    }
+    else if (expected.length === 0) {
       fail('tests/unit 中沒有任何 unit test files')
     }
     else {
-      const discoveredSet = new Set(discovered)
+      const discoveredSet = new Set(result.files)
       const missing = expected.filter(file => !discoveredSet.has(file))
 
       if (missing.length > 0) {
         fail(`Vitest 未收錄 ${missing.length} 支 unit test files`, missing)
       }
       else {
-        console.log(`Vitest 已收錄全部 ${expected.length} 支 unit test files`)
+        console.log(
+          `Vitest 實際執行 ${result.executedTests} 個測試案例，涵蓋全部 ${expected.length} 支 unit test files`,
+        )
       }
     }
   }

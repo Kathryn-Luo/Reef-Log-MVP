@@ -156,36 +156,21 @@ async function move() {
       body: { tankId: target.id },
     })
 
-    // 換缸不該動到「狀態」區還沒儲存的編輯。
-    //
-    // 底下的 reload() 會換掉 creature，而讓表單跟著伺服器對齊的那個 watch
-    // （見 reset 上方的註解）會無條件把舊值蓋回來——改到一半的狀態、日期與備註
-    // 就這樣沒了，連 dirty 都跟著變 false，儲存鈕一起消失，畫面上不會留下
-    // 任何「你剛剛改過東西」的痕跡。
-    //
-    // 修法放在這裡而不是給那個 watch 加 `!dirty` 的守衛：「改回存活」儲存時，
-    // 使用者填過的死亡日仍留在 form 裡而伺服器回的是 null，那一刻 dirty 正是 true，
-    // 加了守衛就會跳過 reset，被清掉的死亡欄位不會從畫面上消失——那正是那個 watch
-    // 存在的理由。所以只在換缸這條路上接住再放回去。
-    const pending = dirty.value ? { ...form } : null
+    keepUnsavedEdits()
 
     // 不做樂觀更新：重新取一次詳情，「所在缸」一律由伺服器的答案決定。
     // 成功之後才收起 sheet——資料還沒對齊就關掉的話，畫面會閃過一次舊的缸名。
     await reload()
 
-    if (pending) {
-      // 等那個 watch 先跑完（flush: 'pre'）再放回去，否則會被它蓋掉
-      await nextTick()
-      Object.assign(form, pending)
-    }
-
     moveOpen.value = false
     resetMove()
   }
   catch (cause) {
-    const failure = describeMoveFailure(apiErrorStatus(cause), {
+    const status = apiErrorStatus(cause)
+
+    const failure = describeMoveFailure(status, {
       creatureName: source.name,
-      // 失敗時生物仍在原本的缸，訊息裡指的就是這一個
+      // 404 的訊息會說「牠仍留在這一缸」，指的就是這一個。400 不用它——理由見下。
       currentTankName: source.tankName,
       targetTankName: target.name,
     })
@@ -200,6 +185,15 @@ async function move() {
     // 可以重送的那一種（離線、5xx）則留著選取，「重試」才有東西可以重送。
     if (failure.action === 'choose-other') {
       selectedTankId.value = null
+    }
+
+    // 400 ＝「來源與目標是同一個缸」，而目前所在的缸不會列進清單——所以收到它就代表
+    // **這一頁的資料已經過期**：牠已經被別的分頁或別台裝置移走了，而且正好移到這裡選中
+    // 的這一缸。此時畫面上的「所在缸」是錯的，重新取一次讓它變成真的；那個缸也會跟著
+    // 從目標清單掉出去，不必另外處理 dropTarget。
+    if (status === 400) {
+      keepUnsavedEdits()
+      await reload()
     }
   }
   finally {
@@ -242,6 +236,8 @@ const form = reactive({
   deathNote: '',
 })
 
+type StatusForm = typeof form
+
 const error = ref<string | null>(null)
 const saving = ref(false)
 
@@ -260,11 +256,44 @@ function reset(source: CreatureDetailDto) {
   error.value = null
 }
 
+/**
+ * 換缸期間代為保管的「還沒儲存的狀態編輯」。
+ *
+ * 換缸成功後會 reload() 重取詳情，而底下那個 watch 會拿伺服器的值把表單蓋回去——
+ * 改到一半的狀態、日期與備註就這樣沒了，連 dirty 都跟著變 false，儲存鈕一起消失，
+ * 畫面上不留任何「你剛剛改過東西」的痕跡。
+ *
+ * 為什麼不是給那個 watch 加 `!dirty` 的守衛：「改回存活」儲存時，使用者填過的死亡日
+ * 仍留在 form 裡而伺服器回的是 null，那一刻 dirty 正是 true，加了守衛就會跳過 reset，
+ * 被清掉的死亡欄位不會從畫面上消失——那正是那個 watch 存在的理由。
+ *
+ * 為什麼是一個 ref 而不是 move() 裡的區域變數：`refresh()` 失敗時**不會 reject**，
+ * 它把錯誤寫進 state、把 data 清成預設值就正常 resolve（見 Nuxt 的 asyncData）。
+ * 於是 reload 失敗那一次，creature 變成 null、watch 被 `if (!value)` 擋掉，
+ * 而區域變數版本會把值寫回一張已經被 LoadErrorState 換掉、看不見的表單，
+ * 接著使用者按「重試」成功時 watch 才真的把它蓋掉——只保到第一次 reload，跨不過 retry。
+ * 交給 ref 之後，快照留到**真的成功同步過一次**才清掉。
+ */
+const pendingEdits = ref<StatusForm | null>(null)
+
+/** 在任何一次 reload() 之前呼叫：把還沒儲存的編輯交給 pendingEdits 保管 */
+function keepUnsavedEdits() {
+  pendingEdits.value = dirty.value ? { ...form } : null
+}
+
 // 儲存成功後 data 會換成後端回來的那一份，這個 watch 讓表單跟著對齊：
 // 「改回存活」時被清掉的死亡欄位，畫面上也要一起消失。
 watch(creature, (value) => {
-  if (value) {
-    reset(value)
+  // 取資料失敗（data 被清成預設值）：這時沒有東西可以對齊，快照也要原封不動留著
+  if (!value) {
+    return
+  }
+
+  reset(value)
+
+  if (pendingEdits.value) {
+    Object.assign(form, pendingEdits.value)
+    pendingEdits.value = null
   }
 }, { immediate: true })
 

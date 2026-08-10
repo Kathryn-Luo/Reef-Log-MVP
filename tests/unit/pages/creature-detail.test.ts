@@ -60,6 +60,10 @@ const state = {
    * null 代表照常回應——「這一隻不存在」仍然是把 state.creature 設成 null。
    */
   getFailure: null as number | null,
+  /** GET /api/creatures/f5 被呼叫幾次（issue #120：400 之後要重新取一次詳情） */
+  getCalls: 0,
+  /** 換缸成功之後讓緊接著的那次 GET 失敗，用來走「reload 失敗 → 重試」那條路 */
+  failGetAfterMove: false,
   /** 這一輪 PATCH 收到的 body */
   body: null as Record<string, unknown> | null,
   patchCalls: 0,
@@ -86,6 +90,8 @@ interface MockNodeEvent {
 registerEndpoint('/api/creatures/f5', {
   method: 'GET',
   handler: () => {
+    state.getCalls += 1
+
     if (state.getFailure !== null) {
       throw createError({ statusCode: state.getFailure, statusMessage: 'Internal Server Error' })
     }
@@ -143,6 +149,11 @@ registerEndpoint('/api/creatures/f5/move', {
       // 換缸只改歸屬，其餘欄位原樣留著——重新取回的詳情因此只有「所在缸」不同
       state.creature = { ...state.creature!, tankId: target.id, tankName: target.name }
 
+      // 換缸寫進去了，但緊接著重取詳情的那一次要壞掉
+      if (state.failGetAfterMove) {
+        state.getFailure = 500
+      }
+
       return { creatureId: 'f5', tankId: target.id }
     }
 
@@ -160,6 +171,8 @@ beforeEach(() => {
 
   state.creature = creature()
   state.getFailure = null
+  state.getCalls = 0
+  state.failGetAfterMove = false
   state.body = null
   state.patchCalls = 0
   state.fail = false
@@ -867,6 +880,41 @@ describe('生物詳情 — 確認移動', () => {
     expect(state.patchCalls).toBe(0)
   })
 
+  // 換缸成功、但緊接著重取詳情失敗的那條路（Codex review 的 P2）。
+  //
+  // useAsyncData 的 refresh() 失敗時**不會 reject**——它把錯誤寫進 state、把 data 清成
+  // 預設值就正常 resolve。所以那一刻畫面翻成 load-error，快照要原封不動留著，
+  // 等使用者按「重試」成功之後才放回去。快照若只保到第一次 reload，重試那一次的
+  // watch 就會把它蓋掉，最後還是無聲地掉資料。
+  it('換缸後重取詳情失敗，重試成功時還沒儲存的編輯仍在', async () => {
+    state.failGetAfterMove = true
+
+    const page = await open()
+
+    await statusOption(page, 'SICK').trigger('click')
+    await page.get('input[name="ailment"]').setValue('白點')
+
+    await openMoveSheet(page)
+    await selectTank(page, 'tank-2')
+    await confirmMove(page)
+
+    // 重取失敗：整頁翻成載入失敗，表單此刻根本不在畫面上
+    expect(page.get('[data-testid="load-error"]').exists()).toBe(true)
+
+    state.getFailure = null
+
+    await page.get('[data-testid="load-error-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(page.find('[data-testid="load-error"]').exists()).toBe(false)
+    expect(page.get('[data-testid="creature-current-tank"]').text()).toContain('珊瑚缸')
+
+    // 改到一半的東西撐過了「失敗 → 重試」這一趟
+    expect(statusOption(page, 'SICK').attributes('aria-pressed')).toBe('true')
+    expect((page.get('input[name="ailment"]').element as HTMLInputElement).value).toBe('白點')
+    expect(page.find('[data-testid="creature-save"]').exists()).toBe(true)
+  })
+
   // 反面：沒有改任何東西時，換缸後表單照樣跟著伺服器走，不會多出一顆儲存鈕
   it('沒有未儲存的編輯時，換缸後儲存鈕不會冒出來', async () => {
     const page = await open()
@@ -935,8 +983,8 @@ describe('生物詳情 — 移動失敗', () => {
   // Given API 回傳 400 或 404 / When 畫面收到錯誤
   // Then sheet 上出現錯誤卡片，說明原因並指名該目標缸
   // And 訊息明說後果：生物仍在原本的缸，沒有被移動
-  it.each([[404], [400]])('回 %s 時出現錯誤卡片，指名目標缸並說明生物沒有被移動', async (status) => {
-    state.moveFailure = status
+  it('回 404 時出現錯誤卡片，指名目標缸並說明生物沒有被移動', async () => {
+    state.moveFailure = 404
 
     const page = await open()
 
@@ -950,6 +998,57 @@ describe('生物詳情 — 移動失敗', () => {
     expect(card.text()).toContain('火焰仙')
     expect(card.text()).toContain('主缸')
     expect(card.text()).toContain('未被移動')
+  })
+
+  // 400 ＝「來源與目標相同」，而目前所在的缸不會列進清單——收到它就代表這一頁的資料
+  // 已經過期：牠已經被別處移走，而且正好移到這裡選中的這一缸。此時說「仍留在主缸，
+  // 未被移動」是假的（Codex review 的 P2）。
+  it('回 400 時說的是「這一頁的資料過期了」，不宣稱生物仍在原本的缸', async () => {
+    state.moveFailure = 400
+
+    const page = await open()
+
+    await openMoveSheet(page)
+    await selectTank(page, 'tank-2')
+    await confirmMove(page)
+
+    const card = page.get('[data-testid="creature-move-error"]')
+    expect(card.text()).toContain('移動失敗')
+    expect(card.text()).toContain('珊瑚缸')
+    expect(card.text()).toContain('不是最新的')
+    expect(card.text()).not.toContain('未被移動')
+  })
+
+  // 過期的是「所在缸」本身，所以要重新取一次讓畫面變成真的
+  it('回 400 時重新取一次詳情', async () => {
+    state.moveFailure = 400
+
+    const page = await open()
+
+    await openMoveSheet(page)
+    await selectTank(page, 'tank-2')
+
+    const before = state.getCalls
+
+    await confirmMove(page)
+
+    expect(state.getCalls).toBe(before + 1)
+  })
+
+  // 404 是「那個缸不在了」，這一頁自己的資料沒有過期，沒有理由多打一次
+  it('回 404 時不重新取詳情', async () => {
+    state.moveFailure = 404
+
+    const page = await open()
+
+    await openMoveSheet(page)
+    await selectTank(page, 'tank-2')
+
+    const before = state.getCalls
+
+    await confirmMove(page)
+
+    expect(state.getCalls).toBe(before)
   })
 
   // And 不把 UI 樂觀更新成已移動（詳情頁的「所在缸」仍是原本的缸）

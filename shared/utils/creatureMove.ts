@@ -40,7 +40,12 @@ export interface MoveFailureView {
 
 export interface MoveFailureContext {
   creatureName: string
-  /** 生物**現在**所在的缸。畫面不做樂觀更新，所以這裡永遠是原本那一個 */
+  /**
+   * 這一頁**以為**牠所在的缸。畫面不做樂觀更新，所以正常情況下就是原本那一個。
+   *
+   * 只有 404 與「送不出去」那兩支用得到它。400 不用——那一支的成因正是這個值已經過期
+   * （見底下的註解），拿它去講「仍留在這一缸」會講出一句假話。
+   */
   currentTankName: string
   targetTankName: string
 }
@@ -71,9 +76,14 @@ export function describeMoveFailure(
   if (status === 400) {
     return {
       action: 'choose-other',
-      // 400 是「來源與目標相同」。UI 走不到這條路（目前所在的缸不在清單裡），
-      // 但它仍是 API 那一側的最後防線，收到時要說得出人話。
-      message: `無法移動到「${targetTankName}」，這個目標不接受這次移動（400）。${consequence}`,
+      // 400 是「來源與目標相同」，而目前所在的缸不會列進清單——所以收到它就代表
+      // **這一頁的資料已經過期**：牠已經被別的分頁或別台裝置移走了，而且正好移到
+      // 這裡選中的這一缸。
+      //
+      // 所以這一句刻意**不接 consequence**。「仍留在 <舊缸>」在這個情境下是假的：
+      // 資料庫裡牠正在目標缸。寧可說「這一頁的資料過期了」，也不要講一句可能為假的話。
+      message: `無法移動到「${targetTankName}」（400）。這一頁的資料可能已經不是最新的，`
+        + `已重新載入，請確認${creatureName}目前在哪一缸。`,
       dropTarget: false,
     }
   }

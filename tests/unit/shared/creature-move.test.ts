@@ -83,13 +83,24 @@ describe('describeMoveFailure — 404 目標缸不存在', () => {
   })
 })
 
-describe('describeMoveFailure — 400 這個目標不行', () => {
-  it('同樣指名目標缸並明說後果', () => {
+describe('describeMoveFailure — 400 這一頁的資料過期了', () => {
+  it('指名目標缸，並說明這一頁的資料可能不是最新的', () => {
     const failure = describeMoveFailure(400, CONTEXT)
 
     expect(failure.message).toContain('珊瑚缸')
     expect(failure.message).toContain('400')
-    expect(failure.message).toContain('未被移動')
+    expect(failure.message).toContain('不是最新的')
+  })
+
+  // 400 的成因是「來源與目標相同」，而目前所在的缸不會列進清單——所以收到它就代表
+  // 這一頁以為的所在缸已經過期：牠已經被別處移走，而且正好移到這裡選中的這一缸。
+  // 此時說「仍留在主缸，未被移動」是假的，資料庫裡牠正在珊瑚缸。
+  it('不宣稱生物仍在這一頁以為的那一缸', () => {
+    const failure = describeMoveFailure(400, CONTEXT)
+
+    expect(failure.message).not.toContain('主缸')
+    expect(failure.message).not.toContain('未被移動')
+    expect(failure.message).not.toContain('仍留在')
   })
 
   // 400 是「來源與目標相同」，重送一次只會再收到一次 400

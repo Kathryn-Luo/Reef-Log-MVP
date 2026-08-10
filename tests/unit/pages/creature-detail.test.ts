@@ -840,6 +840,44 @@ describe('生物詳情 — 確認移動', () => {
     expect(page.find('[data-testid="creature-move-sheet"]').exists()).toBe(false)
   })
 
+  // 「狀態」區改到一半還沒儲存時換缸，那些輸入不能無聲消失（Codex review 的 P1）。
+  //
+  // 成功後的 reload() 會換掉 creature，而讓表單與伺服器對齊的那個 watch 會把舊值
+  // 蓋回來——連 dirty 一起變 false，儲存鈕跟著收起來，畫面上不留任何痕跡。
+  it('換缸成功不會清掉「狀態」區還沒儲存的編輯', async () => {
+    const page = await open()
+
+    // 先改到一半：狀態切成生病、填上症狀，不按儲存
+    await statusOption(page, 'SICK').trigger('click')
+    await page.get('input[name="ailment"]').setValue('白點')
+
+    await openMoveSheet(page)
+    await selectTank(page, 'tank-2')
+    await confirmMove(page)
+
+    // 缸換了
+    expect(page.get('[data-testid="creature-current-tank"]').text()).toContain('珊瑚缸')
+
+    // 改到一半的東西還在，儲存鈕也還在——存得下去
+    expect(statusOption(page, 'SICK').attributes('aria-pressed')).toBe('true')
+    expect((page.get('input[name="ailment"]').element as HTMLInputElement).value).toBe('白點')
+    expect(page.find('[data-testid="creature-save"]').exists()).toBe(true)
+
+    // 而且換缸本身沒有順手把狀態寫進去：那是「儲存」才會做的事
+    expect(state.patchCalls).toBe(0)
+  })
+
+  // 反面：沒有改任何東西時，換缸後表單照樣跟著伺服器走，不會多出一顆儲存鈕
+  it('沒有未儲存的編輯時，換缸後儲存鈕不會冒出來', async () => {
+    const page = await open()
+
+    await openMoveSheet(page)
+    await selectTank(page, 'tank-2')
+    await confirmMove(page)
+
+    expect(page.find('[data-testid="creature-save"]').exists()).toBe(false)
+  })
+
   // 移動之後「其他缸」換人：原本的主缸變成可選的目標，珊瑚缸不再列出
   it('再次開啟 sheet 時，清單改成排除新的所在缸', async () => {
     const page = await open()

@@ -156,9 +156,28 @@ async function move() {
       body: { tankId: target.id },
     })
 
+    // 換缸不該動到「狀態」區還沒儲存的編輯。
+    //
+    // 底下的 reload() 會換掉 creature，而讓表單跟著伺服器對齊的那個 watch
+    // （見 reset 上方的註解）會無條件把舊值蓋回來——改到一半的狀態、日期與備註
+    // 就這樣沒了，連 dirty 都跟著變 false，儲存鈕一起消失，畫面上不會留下
+    // 任何「你剛剛改過東西」的痕跡。
+    //
+    // 修法放在這裡而不是給那個 watch 加 `!dirty` 的守衛：「改回存活」儲存時，
+    // 使用者填過的死亡日仍留在 form 裡而伺服器回的是 null，那一刻 dirty 正是 true，
+    // 加了守衛就會跳過 reset，被清掉的死亡欄位不會從畫面上消失——那正是那個 watch
+    // 存在的理由。所以只在換缸這條路上接住再放回去。
+    const pending = dirty.value ? { ...form } : null
+
     // 不做樂觀更新：重新取一次詳情，「所在缸」一律由伺服器的答案決定。
     // 成功之後才收起 sheet——資料還沒對齊就關掉的話，畫面會閃過一次舊的缸名。
     await reload()
+
+    if (pending) {
+      // 等那個 watch 先跑完（flush: 'pre'）再放回去，否則會被它蓋掉
+      await nextTick()
+      Object.assign(form, pending)
+    }
 
     moveOpen.value = false
     resetMove()

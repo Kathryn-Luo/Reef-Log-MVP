@@ -110,6 +110,20 @@ jobs:
       #
       # E2E 不在這裡：需要瀏覽器與 Vercel preview URL，是另一條流程（見 #23）。
       # vitest.config.ts 已 exclude tests/e2e/**，所以 pnpm test 不會誤收 Playwright spec。
+      #
+      # issue #35：測試套件內的斷言守不住「整套測試都沒被 Vitest 收到」。先從
+      # pnpm script 外部列出 Vitest 實際探索到的檔案，再與 tests/unit 逐一比對；
+      # 這也能抓到只排除部分 unit tests 的設定，不需要維護固定數量門檻。
+      # list 的 --passWithNoTests 只為了讓零檔案時仍寫出空 JSON，交給下一行產生明確
+      # 錯誤；真正跑測試的 pnpm test 仍由 ci-checks.test.ts 禁止使用這個旗標。
+      - name: Verify unit test discovery
+        if: ${{ !cancelled() }}
+        env:
+          VITEST_DISCOVERY_FILE: ${{ runner.temp }}/vitest-files.json
+        run: |
+          pnpm exec vitest list --filesOnly --static-parse --passWithNoTests --json="$VITEST_DISCOVERY_FILE"
+          node .github/scripts/assert-vitest-discovery.mjs "$VITEST_DISCOVERY_FILE"
+
       - name: Unit tests
         if: ${{ !cancelled() }}
         run: pnpm test

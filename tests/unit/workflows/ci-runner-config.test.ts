@@ -67,8 +67,8 @@ function code(text: string): string {
   return out
 }
 
-/** package.json 的 scripts.test。 */
-const testScript = (text: string): unknown => JSON.parse(text).scripts?.test
+/** package.json 的指定 script。 */
+const packageScript = (text: string, name: string): unknown => JSON.parse(text).scripts?.[name]
 
 /** 從 `{` 的位置做括號配對，回傳大括號之間的文字；配不起來回 null。 */
 function braceBody(text: string, open: number): string | null {
@@ -192,7 +192,16 @@ describe('package.json：pnpm test 就是 vitest run', () => {
   // --passWithNoTests 之外，`vitest run tests/unit/foo.test.ts`（縮限範圍）、
   // `vitest run || true`（吞掉失敗）走的都是同一個洞。
   it('scripts.test 逐字是 vitest run，沒有附加旗標', () => {
-    expect(testScript(read('package.json'))).toBe('vitest run')
+    expect(packageScript(read('package.json'), 'test')).toBe('vitest run')
+  })
+
+  // issue #35：ci.yml 雖然逐字執行 pnpm lint / pnpm typecheck，真正展開的內容仍由
+  // package.json 決定。測試探索守門補上後，這兩條不會再和其他守門測試一起消失。
+  it.each([
+    ['lint', 'eslint .'],
+    ['typecheck', 'nuxt typecheck'],
+  ])('scripts.%s 逐字是 %s', (name, command) => {
+    expect(packageScript(read('package.json'), name)).toBe(command)
   })
 })
 
@@ -258,7 +267,7 @@ describe('變異：改壞了就要抓到', () => {
     'vitest run || true',
   ])('scripts.test 被改成 %s → 上面那條不成立', (mutation) => {
     const mutated = JSON.stringify({ scripts: { test: mutation } })
-    expect(testScript(mutated)).not.toBe('vitest run')
+    expect(packageScript(mutated, 'test')).not.toBe('vitest run')
   })
 
   // Given 有人在 exclude 加入會排除 tests/unit 的樣式 → Then 必須有測試失敗

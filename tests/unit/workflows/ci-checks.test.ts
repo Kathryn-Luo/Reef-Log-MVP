@@ -68,6 +68,9 @@ const runsScript = (step: string, script: string) =>
 /** 找出「執行某個 pnpm script」的步驟。 */
 const stepRunning = (script: string) => steps().find(step => runsScript(step, script))
 
+/** 依 name 找出步驟。 */
+const stepNamed = (name: string) => steps().find(step => step.startsWith(`name: ${name}`))
+
 /** 這支 workflow 必須無條件跑完的檢查。build 見 issue #44。 */
 const CHECKS = ['lint', 'typecheck', 'test', 'build'] as const
 
@@ -143,6 +146,24 @@ describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
   // - `pnpm test tests/unit/foo.test.ts`：把範圍縮限到剛好會過的那幾個檔
   it.each(CHECKS)('pnpm %s 步驟只跑那一個指令', (script) => {
     expect(runOf(stepRunning(script)!).trim()).toBe(`pnpm ${script}`)
+  })
+
+  // issue #35：守門測試若被 vitest.config.ts 排除，就沒有機會保護自己。
+  // 因此要在 pnpm test 外部先列出 Vitest 實際收到的檔案，再與 tests/unit 比對。
+  it('在 unit tests 前確認 Vitest 收錄全部 tests/unit 測試檔', () => {
+    const discovery = stepNamed('Verify unit test discovery')
+    const all = steps()
+
+    expect(discovery, '找不到 Vitest 測試探索檢查').toBeDefined()
+    expect(discovery).toMatch(/if:\s*\$\{\{\s*!\s*cancelled\(\)\s*\}\}/)
+    expect(discovery).toContain('VITEST_DISCOVERY_FILE: ${{ runner.temp }}/vitest-files.json')
+    expect(runOf(discovery!)).toContain(
+      'pnpm exec vitest list --filesOnly --static-parse --passWithNoTests --json="$VITEST_DISCOVERY_FILE"',
+    )
+    expect(runOf(discovery!)).toContain(
+      'node .github/scripts/assert-vitest-discovery.mjs "$VITEST_DISCOVERY_FILE"',
+    )
+    expect(all.indexOf(discovery!)).toBeLessThan(all.indexOf(stepRunning('test')!))
   })
 
   // ── 以下是權限面 ──

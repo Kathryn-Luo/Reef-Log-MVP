@@ -6,6 +6,9 @@ name: Epic Breakdown
 # 觸發用的 label 必須由「真人」貼上：claude-code-action 會拒絕 bot 觸發的 run，
 # 而且是在人工核准之後才失敗（＝白燒一次核准）。environment 的核准同樣只有真人按得動，
 # 且手機 App 不支援、要用瀏覽器。詳見 CLAUDE.md「只有真人做得到的兩件事」。
+# 核准前先比對 run 的 commit SHA 與 main head：workflow 定義在 run 建立當下就固定；
+# 若不一致，取消舊 run 並重貼 label，不要核准舊流程。
+# 詳見 CLAUDE.md「核准前先確認 workflow run 不是舊版」。
 on:
   issues:
     types: [labeled]

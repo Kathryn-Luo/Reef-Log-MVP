@@ -17,6 +17,11 @@ name: Schema Design
 # 觸發用的 label 必須由「真人」貼上：claude-code-action 會拒絕 bot 觸發的 run，
 # 而且是在人工核准之後才失敗（＝白燒一次核准）。environment 的核准同樣只有真人按得動，
 # 且手機 App 不支援、要用瀏覽器。詳見 CLAUDE.md「只有真人做得到的兩件事」。
+# 核准前先確認 run 不是舊版：workflow 定義在 run 建立當下就固定。
+# issues 觸發比對 commit SHA 與 main head；pull_request_review 的 SHA 是 PR 分支，應比對
+# run 建立時間與 main 的 schema-design.yml 更新時間。若已過時，取消舊 run，
+# 重貼 label 或重送 Request changes。
+# 詳見 CLAUDE.md「核准前先確認 workflow run 不是舊版」。
 on:
   issues:
     types: [labeled]

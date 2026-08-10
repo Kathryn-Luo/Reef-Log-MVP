@@ -13,6 +13,14 @@ function projectWith(testFiles: string[]) {
   const root = mkdtempSync(join(tmpdir(), 'reef-log-vitest-discovery-'))
   temporaryDirectories.push(root)
 
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    scripts: {
+      test: 'vitest run',
+      lint: 'eslint .',
+      typecheck: 'nuxt typecheck',
+    },
+  }))
+
   for (const file of testFiles) {
     const path = join(root, file)
     mkdirSync(resolve(path, '..'), { recursive: true })
@@ -20,6 +28,10 @@ function projectWith(testFiles: string[]) {
   }
 
   return root
+}
+
+function writeScripts(root: string, scripts: Record<string, string>) {
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts }))
 }
 
 function writeDiscovery(root: string, files: string[]) {
@@ -76,5 +88,25 @@ describe('Vitest 測試探索守門', () => {
 
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('Vitest 未收錄 1 支 unit test files')
+  })
+
+  it.each([
+    ['test', 'vitest run definitely-no-such-test --passWithNoTests'],
+    ['lint', 'eslint app'],
+    ['typecheck', 'echo skipped'],
+  ])('package.json 的 scripts.%s 被縮限或略過時失敗', (script, command) => {
+    const files = ['tests/unit/example.test.ts']
+    const root = projectWith(files)
+    writeScripts(root, {
+      test: 'vitest run',
+      lint: 'eslint .',
+      typecheck: 'nuxt typecheck',
+      [script]: command,
+    })
+
+    const result = verify(root, files)
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain(`scripts.${script}`)
   })
 })

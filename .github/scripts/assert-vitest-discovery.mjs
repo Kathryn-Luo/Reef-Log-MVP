@@ -4,6 +4,24 @@ import { readdirSync, readFileSync, realpathSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 const TEST_FILE_PATTERN = /\.(?:test|spec)\.[cm]?[jt]sx?$/
+const EXPECTED_PACKAGE_SCRIPTS = {
+  test: 'vitest run',
+  lint: 'eslint .',
+  typecheck: 'nuxt typecheck',
+}
+
+function assertPackageScripts(root) {
+  const packageJson = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
+
+  for (const [name, expected] of Object.entries(EXPECTED_PACKAGE_SCRIPTS)) {
+    const actual = packageJson.scripts?.[name]
+    if (actual !== expected) {
+      throw new Error(
+        `package.json 的 scripts.${name} 必須是 ${JSON.stringify(expected)}，目前是 ${JSON.stringify(actual)}`,
+      )
+    }
+  }
+}
 
 function unitTestFiles(directory, root) {
   const files = []
@@ -47,6 +65,7 @@ if (!report) {
 else {
   try {
     const root = realpathSync(process.cwd())
+    assertPackageScripts(root)
     const expected = unitTestFiles(resolve(root, 'tests/unit'), root)
     const discovered = discoveredUnitTestFiles(resolve(root, report), root)
 

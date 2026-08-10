@@ -149,8 +149,19 @@ describe('fetch-issue-images.sh', () => {
   it('N 張截圖全部下載成功', () => {
     const result = run(bodyWith(3))
     expect(result.status, result.stderr).toBe(0)
-    expect(result.images).toEqual(['screen-1.png', 'screen-2.png', 'screen-3.png'])
+    expect(result.images).toEqual(['screen-01.png', 'screen-02.png', 'screen-03.png'])
     expect(result.body).toContain('# Epic')
+  })
+
+  // Given Epic 內文含有 12 張截圖附件
+  // When  截圖下載步驟執行
+  // Then  檔名補零後的字典序必須與內文順序一致
+  it('12 張截圖以補零檔名維持原始順序', () => {
+    const result = run(bodyWith(12))
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.images).toEqual(
+      Array.from({ length: 12 }, (_, index) => `screen-${String(index + 1).padStart(2, '0')}.png`),
+    )
   })
 
   // Given gh issue view 因 API 或權限問題失敗
@@ -202,7 +213,7 @@ describe('fetch-issue-images.sh', () => {
   it('重複的 URL 會去重', () => {
     const result = run(`${bodyWith(2)}\n再貼一次：<img src="${url(1)}">\n`)
     expect(result.status, result.stderr).toBe(0)
-    expect(result.images).toEqual(['screen-1.png', 'screen-2.png'])
+    expect(result.images).toEqual(['screen-01.png', 'screen-02.png'])
   })
 
   // 防守用：curl 回 0 卻沒真的產出檔案時，數量斷言要接住。
@@ -242,6 +253,16 @@ describe('三支 workflow 都改用共用 script', () => {
     const text = read(name)
     expect(text).not.toContain('user-attachments/assets')
     expect(text).not.toMatch(/curl -sSLf -o/)
+  })
+
+  // #33：prompt 若仍教 agent 找 screen-1.png，腳本補零後反而會讓 agent 找不到素材。
+  it.each(workflows)('%s 使用補零後的截圖檔名格式', (name) => {
+    const text = read(name)
+    expect(text).toContain('screen-01.png')
+    expect(text).toContain('screen-02.png')
+    expect(text).not.toContain('screen-1.png')
+    expect(text).not.toContain('screen-2.png')
+    expect(text).not.toMatch(/screen-[1-9](?:\.png|、|…)/)
   })
 
   // 少了 exec bit，workflow 的 `run: .github/scripts/…sh` 會直接 permission denied。

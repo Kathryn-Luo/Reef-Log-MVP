@@ -375,7 +375,7 @@ jobs:
             ── 素材 ──
             - issue 內文已存成 `.agent-issue.md`，`Read` 它即可，驗收條件是 Given/When/Then。
               （這是你能看到的全部 issue 內容；留言區不在裡面，也不要設法去讀。）
-            - 截圖已下載到 `.agent-images/`（screen-1.png…）。有圖就「逐張 Read」，
+            - 截圖已下載到 `.agent-images/`（screen-01.png、screen-02.png…）。有圖就「逐張 Read」，
               用實際畫面而不是只憑文字描述決定版面、配色與元件結構。
 
             ── 專案現況 ──

@@ -44,12 +44,13 @@ echo "issue #$ISSUE 的內文含 $expected 張截圖附件"
 index=0
 while IFS= read -r url; do
   index=$((index + 1))
+  image_path=$(printf '%s/screen-%02d.png' "$IMAGE_DIR" "$index")
   # --retry 系列：CDN 抖一次不該燒掉一次人工核准——這一步在 schema-design 與
   # develop 裡都是在 environment 的核准「之後」才執行的。
   # --retry-all-errors 是必要的：少了它，curl 只重試少數幾種被歸類為
   # 暫時性的錯誤，連線被中斷這類情況不會重試。
   if ! curl -sSLf --retry 3 --retry-delay 2 --retry-all-errors \
-    -o "$IMAGE_DIR/screen-$index.png" "$url"; then
+    -o "$image_path" "$url"; then
     echo "::error::第 $index 張截圖下載失敗（重試後仍失敗）：$url"
     exit 1
   fi

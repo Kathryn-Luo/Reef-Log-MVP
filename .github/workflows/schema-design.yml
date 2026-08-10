@@ -300,7 +300,7 @@ jobs:
             1. Epic 的內文已存成 `.agent-issue.md`，`Read` 它即可
                （這是你能看到的全部 Epic 內容；留言區不在裡面，也不要設法去讀）。
                接著「逐張 Read」`.agent-images/` 下的所有截圖
-               （screen-1.png、screen-2.png…）。
+               （screen-01.png、screen-02.png…）。
                這些就是全部的畫面——本流程跑在子 issue 拆解之前，此時還沒有子 issue，
                你必須直接從截圖與 Epic 內文推導，一次綜覽全部畫面。
 
@@ -319,7 +319,7 @@ jobs:
 
             4. 在 ${{ env.BRANCH }} 上 commit schema 草稿並 push，開一個 PR
                （已存在則更新）。PR 內文要包含一份「畫面 ↔ model 對照表」：
-               以截圖編號（screen-1、screen-2…）為列，列出每個畫面分別用到
+               以截圖編號（screen-01、screen-02…）為列，列出每個畫面分別用到
                哪些 model 與欄位。這份對照表是後續拆解子 issue 的依據。
 
             規則（務必遵守）：

@@ -149,9 +149,9 @@ describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
   })
 
   // issue #35：守門測試若被 vitest.config.ts 排除，就沒有機會保護自己。
-  // 因此要在 pnpm test 外部鎖定 package scripts，並將 Vitest 實際收到的檔案與
-  // tests/unit 比對。就算 pnpm test 被改成零測試也成功，外部守門仍會先失敗。
-  it('在 unit tests 前確認 Vitest 收錄全部 tests/unit 測試檔', () => {
+  // 因此要在 pnpm test 外部鎖定 package scripts，並確認 tests/unit 每個測試檔
+  // 至少有一個實際 test case。就算 pnpm test 零測試也成功，外部守門仍會先失敗。
+  it('在 unit tests 前確認每個 tests/unit 測試檔都有實際 test case', () => {
     const discovery = stepNamed('Verify unit test discovery')
     const all = steps()
 
@@ -159,8 +159,10 @@ describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
     expect(discovery).toMatch(/if:\s*\$\{\{\s*!\s*cancelled\(\)\s*\}\}/)
     expect(discovery).toContain('VITEST_DISCOVERY_FILE: ${{ runner.temp }}/vitest-files.json')
     expect(runOf(discovery!)).toContain(
-      'pnpm exec vitest list --filesOnly --static-parse --passWithNoTests --json="$VITEST_DISCOVERY_FILE"',
+      'pnpm exec vitest list --passWithNoTests --json="$VITEST_DISCOVERY_FILE"',
     )
+    expect(runOf(discovery!)).not.toContain('--filesOnly')
+    expect(runOf(discovery!)).not.toContain('--static-parse')
     expect(runOf(discovery!)).toContain(
       'node .github/scripts/assert-vitest-discovery.mjs "$VITEST_DISCOVERY_FILE"',
     )

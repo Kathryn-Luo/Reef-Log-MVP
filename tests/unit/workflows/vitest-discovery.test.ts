@@ -36,16 +36,23 @@ function writeScripts(root: string, scripts: Record<string, string>) {
 
 function writeDiscovery(root: string, files: string[]) {
   const report = join(root, 'vitest-files.json')
-  writeFileSync(report, JSON.stringify(files.map(file => ({ file: join(root, file) }))))
+  writeFileSync(report, JSON.stringify(files.map((file, index) => ({
+    name: `test case ${index + 1}`,
+    file: join(root, file),
+    location: { line: 1, column: 1 },
+  }))))
   return report
 }
 
-function verify(root: string, discoveredFiles: string[]) {
-  const report = writeDiscovery(root, discoveredFiles)
+function verifyReport(root: string, report: string) {
   return spawnSync(process.execPath, [scriptPath, report], {
     cwd: root,
     encoding: 'utf8',
   })
+}
+
+function verify(root: string, discoveredFiles: string[]) {
+  return verifyReport(root, writeDiscovery(root, discoveredFiles))
 }
 
 afterEach(() => {
@@ -88,6 +95,18 @@ describe('Vitest 測試探索守門', () => {
 
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('Vitest 未收錄 1 支 unit test files')
+  })
+
+  it('只有 filesOnly 檔名而沒有實際 test case 時失敗', () => {
+    const file = 'tests/unit/example.test.ts'
+    const root = projectWith([file])
+    const report = join(root, 'vitest-files.json')
+    writeFileSync(report, JSON.stringify([{ file: join(root, file) }]))
+
+    const result = verifyReport(root, report)
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('實際 test cases')
   })
 
   it.each([

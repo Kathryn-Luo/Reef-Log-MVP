@@ -39,10 +39,12 @@ function unitTestFiles(directory, root) {
   return files.sort()
 }
 
-function discoveredUnitTestFiles(report, root) {
+function unitTestFilesWithCases(report, root) {
   const parsed = JSON.parse(readFileSync(report, 'utf8'))
-  if (!Array.isArray(parsed) || parsed.some(entry => typeof entry?.file !== 'string')) {
-    throw new TypeError('Vitest discovery report 必須是含 file 欄位的陣列')
+  if (!Array.isArray(parsed) || parsed.some(entry => (
+    typeof entry?.name !== 'string' || typeof entry?.file !== 'string'
+  ))) {
+    throw new TypeError('Vitest discovery report 必須是含 name 與 file 欄位的實際 test cases 陣列')
   }
 
   return [...new Set(parsed.flatMap(({ file }) => {
@@ -67,7 +69,7 @@ else {
     const root = realpathSync(process.cwd())
     assertPackageScripts(root)
     const expected = unitTestFiles(resolve(root, 'tests/unit'), root)
-    const discovered = discoveredUnitTestFiles(resolve(root, report), root)
+    const discovered = unitTestFilesWithCases(resolve(root, report), root)
 
     if (expected.length === 0) {
       fail('tests/unit 中沒有任何 unit test files')

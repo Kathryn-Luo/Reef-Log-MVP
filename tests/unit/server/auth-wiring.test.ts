@@ -53,6 +53,31 @@ describe('Google 登入路由', () => {
     expect(read(GOOGLE_ROUTE)).toContain('defineOAuthGoogleEventHandler')
   })
 
+  it('去程以安全 cookie 保存每次請求的 state，並傳給 Google', () => {
+    const source = read(GOOGLE_ROUTE)
+
+    expect(source).toContain('createOAuthState()')
+    expect(source).toContain('setCookie(event, OAUTH_STATE_COOKIE')
+    expect(source).toContain('authorizationParams: { state }')
+    expect(source).toMatch(/httpOnly:\s*true/)
+    expect(source).toMatch(/sameSite:\s*'lax'/)
+    expect(source).toMatch(/maxAge:\s*10 \* 60/)
+    expect(source).toMatch(/path:\s*'\/auth\/google'/)
+  })
+
+  it('回程先刪除並驗證一次性 state，失敗時不執行 OAuth handler', () => {
+    const source = read(GOOGLE_ROUTE)
+    const verification = source.indexOf('verifyOAuthState(')
+    const handler = source.indexOf('return defineOAuthGoogleEventHandler')
+
+    expect(source).toContain('deleteCookie(event, OAUTH_STATE_COOKIE')
+    expect(verification).toBeGreaterThan(-1)
+    expect(handler).toBeGreaterThan(verification)
+    expect(source.slice(verification, handler)).toContain('return sendRedirect(event, \'/login\')')
+    expect(source.slice(verification, handler)).not.toContain('resolveGoogleLogin')
+    expect(source.slice(verification, handler)).not.toContain('replaceUserSession')
+  })
+
   // Google userinfo 的回應在型別上是 any；先過 toGoogleProfile 再交給 Prisma
   it('profile 先經過 toGoogleProfile，再交給 resolveGoogleLogin 查／建帳號', () => {
     const source = read(GOOGLE_ROUTE)

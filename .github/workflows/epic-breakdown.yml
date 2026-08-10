@@ -164,7 +164,7 @@ jobs:
             將每一個獨立的畫面 / 功能，拆解成一個個別的子 issue。
 
             ── 素材：截圖與已定案的 schema ──
-            - Epic 內的截圖已下載到 `.agent-images/`（screen-1.png、screen-2.png…）。
+            - Epic 內的截圖已下載到 `.agent-images/`（screen-01.png、screen-02.png…）。
               動手前先逐張 `Read`，用實際畫面而不是只憑文字描述判斷畫面邊界。
             - `prisma/schema.prisma` 是「已經由人類 review 定案」的資料模型，先讀過。
               子 issue 的「涉及資料模型」段落必須引用其中真實存在的 model 與欄位，

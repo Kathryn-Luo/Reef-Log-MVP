@@ -1,6 +1,11 @@
 <script setup lang="ts">
-import type { CreatureCategoryKey, CreatureStatusKey } from '#shared/types/home'
-import type { CreatureDetailDto, CreatureDetailResponse, DeathCauseKey } from '#shared/types/creature'
+import type { CreatureCategoryKey, CreatureStatusKey, TankOption } from '#shared/types/home'
+import type {
+  CreatureDetailDto,
+  CreatureDetailResponse,
+  DeathCauseKey,
+  MoveCreatureResponse,
+} from '#shared/types/creature'
 import {
   CREATURE_STATUS_OPTIONS,
   DEATH_CAUSE_OPTIONS,
@@ -9,6 +14,8 @@ import {
   formatTaxonomy,
   parseCreatureStatusInput,
 } from '#shared/utils/creatureDetail'
+import type { MoveFailureView } from '#shared/utils/creatureMove'
+import { describeMoveFailure, formatTankSpec, tankDotColor } from '#shared/utils/creatureMove'
 import { apiErrorMessage, apiErrorStatus } from '#shared/utils/apiError'
 
 // 生物詳情 · 死亡記錄（Epic #1 screen-6，issue #14）。
@@ -62,6 +69,138 @@ const {
 
 const creature = computed<CreatureDetailDto | null>(() => data.value?.creature ?? null)
 
+// ── 所在缸與目標缸清單（issue #120）─────────────────────────────
+//
+// GET /api/tanks 只回目前使用者名下未封存的缸；把生物目前所在的那一個濾掉，
+// 剩下的就是「移動到其他缸」可以選的目標。
+//
+// 這一支的失敗不進 useLoadFailure：拿不到缸清單只代表「這一頁移不了生物」，
+// 詳情本身仍然完整。整頁翻成「載入失敗」會讓人連狀態都改不了。
+const {
+  data: tankList,
+  refresh: refreshTanks,
+} = await useAsyncData('creature-detail:tanks', () => $api<{ tanks: TankOption[] }>('/api/tanks'))
+
+const tanks = computed<TankOption[]>(() => tankList.value?.tanks ?? [])
+
+/** 目前所在的那一個缸。缸清單拿不到時為 null，缸名仍由詳情自己帶著 */
+const currentTank = computed(() => tanks.value.find(tank => tank.id === creature.value?.tankId) ?? null)
+
+/** 所在缸那一列左側的代表色點。缸清單還沒回來時退回主色（見 tankDotColor） */
+const currentTankColor = computed(() => tankDotColor(currentTank.value ?? { colorHex: null }))
+
+const otherTanks = computed(() => tanks.value.filter(tank => tank.id !== creature.value?.tankId))
+
+/**
+ * 名下沒有其他未封存的缸時，「所在缸」整塊連同入口都不出現——不是變成 disabled。
+ * 一顆按下去只能說「沒有缸」的按鈕，不如不要有。
+ */
+const canMove = computed(() => otherTanks.value.length > 0)
+
+const moveOpen = ref(false)
+const selectedTankId = ref<string | null>(null)
+const moving = ref(false)
+const moveFailure = ref<MoveFailureView | null>(null)
+
+/** 404 的目標缸：它已經不在了，留在清單裡只會被再點一次（issue #120 的 3d） */
+const droppedTankIds = ref<string[]>([])
+
+const moveTargets = computed(() =>
+  otherTanks.value.filter(tank => !droppedTankIds.value.includes(tank.id)),
+)
+
+function resetMove() {
+  selectedTankId.value = null
+  moveFailure.value = null
+  droppedTankIds.value = []
+}
+
+async function openMove() {
+  resetMove()
+  moveOpen.value = true
+
+  // 缸清單重新取一次：這一頁可能已經開了很久，中間新增或封存的缸都要算數
+  await refreshTanks()
+}
+
+function closeMove() {
+  moveOpen.value = false
+  resetMove()
+}
+
+function selectTank(tankId: string) {
+  selectedTankId.value = tankId
+}
+
+/** 「選其他缸」：把錯誤卡片收起來，回到選擇狀態 */
+function dismissMoveError() {
+  moveFailure.value = null
+}
+
+async function move() {
+  const source = creature.value
+  const target = moveTargets.value.find(tank => tank.id === selectedTankId.value)
+
+  // 還沒選目標就沒有東西可送（第二步才是送出），送出中也不再送第二次——
+  // 畫面上那顆鈕此刻本來就按不下去，這一條是同一件事在資料流這一側的保險。
+  if (!source || !target || moving.value) {
+    return
+  }
+
+  moving.value = true
+  moveFailure.value = null
+
+  try {
+    await $api<MoveCreatureResponse>(`/api/creatures/${source.id}/move`, {
+      method: 'PATCH',
+      body: { tankId: target.id },
+    })
+
+    keepUnsavedEdits()
+
+    // 不做樂觀更新：重新取一次詳情，「所在缸」一律由伺服器的答案決定。
+    // 成功之後才收起 sheet——資料還沒對齊就關掉的話，畫面會閃過一次舊的缸名。
+    await reload()
+
+    moveOpen.value = false
+    resetMove()
+  }
+  catch (cause) {
+    const status = apiErrorStatus(cause)
+
+    const failure = describeMoveFailure(status, {
+      creatureName: source.name,
+      // 404 的訊息會說「牠仍留在這一缸」，指的就是這一個。400 不用它——理由見下。
+      currentTankName: source.tankName,
+      targetTankName: target.name,
+    })
+
+    moveFailure.value = failure
+
+    if (failure.dropTarget) {
+      droppedTankIds.value = [...droppedTankIds.value, target.id]
+    }
+
+    // 「這個目標不行」時把選取一併清掉：接下來唯一走得下去的動作是換一個目標。
+    // 可以重送的那一種（離線、5xx）則留著選取，「重試」才有東西可以重送。
+    if (failure.action === 'choose-other') {
+      selectedTankId.value = null
+    }
+
+    // 400 ＝「來源與目標是同一個缸」，而目前所在的缸不會列進清單——所以收到它就代表
+    // **這一頁的資料已經過期**：牠已經被別的分頁或別台裝置移走了，而且正好移到這裡選中
+    // 的這一缸。此時畫面上的「所在缸」是錯的，重新取一次讓它變成真的；那個缸也會跟著
+    // 從目標清單掉出去，不必另外處理 dropTarget。
+    if (status === 400) {
+      keepUnsavedEdits()
+      await reload()
+    }
+  }
+  finally {
+    moving.value = false
+  }
+}
+
 // 沒有照片時的預設圖示（screen-6 的照片區是一格斜線佔位）。
 // 依分類換圖示，看一眼就知道這是魚還是珊瑚。
 const PLACEHOLDER_ICONS: Record<CreatureCategoryKey, string> = {
@@ -97,6 +236,8 @@ const form = reactive({
   deathNote: '',
 })
 
+type StatusForm = typeof form
+
 const error = ref<string | null>(null)
 const saving = ref(false)
 
@@ -115,11 +256,44 @@ function reset(source: CreatureDetailDto) {
   error.value = null
 }
 
+/**
+ * 換缸期間代為保管的「還沒儲存的狀態編輯」。
+ *
+ * 換缸成功後會 reload() 重取詳情，而底下那個 watch 會拿伺服器的值把表單蓋回去——
+ * 改到一半的狀態、日期與備註就這樣沒了，連 dirty 都跟著變 false，儲存鈕一起消失，
+ * 畫面上不留任何「你剛剛改過東西」的痕跡。
+ *
+ * 為什麼不是給那個 watch 加 `!dirty` 的守衛：「改回存活」儲存時，使用者填過的死亡日
+ * 仍留在 form 裡而伺服器回的是 null，那一刻 dirty 正是 true，加了守衛就會跳過 reset，
+ * 被清掉的死亡欄位不會從畫面上消失——那正是那個 watch 存在的理由。
+ *
+ * 為什麼是一個 ref 而不是 move() 裡的區域變數：`refresh()` 失敗時**不會 reject**，
+ * 它把錯誤寫進 state、把 data 清成預設值就正常 resolve（見 Nuxt 的 asyncData）。
+ * 於是 reload 失敗那一次，creature 變成 null、watch 被 `if (!value)` 擋掉，
+ * 而區域變數版本會把值寫回一張已經被 LoadErrorState 換掉、看不見的表單，
+ * 接著使用者按「重試」成功時 watch 才真的把它蓋掉——只保到第一次 reload，跨不過 retry。
+ * 交給 ref 之後，快照留到**真的成功同步過一次**才清掉。
+ */
+const pendingEdits = ref<StatusForm | null>(null)
+
+/** 在任何一次 reload() 之前呼叫：把還沒儲存的編輯交給 pendingEdits 保管 */
+function keepUnsavedEdits() {
+  pendingEdits.value = dirty.value ? { ...form } : null
+}
+
 // 儲存成功後 data 會換成後端回來的那一份，這個 watch 讓表單跟著對齊：
 // 「改回存活」時被清掉的死亡欄位，畫面上也要一起消失。
 watch(creature, (value) => {
-  if (value) {
-    reset(value)
+  // 取資料失敗（data 被清成預設值）：這時沒有東西可以對齊，快照也要原封不動留著
+  if (!value) {
+    return
+  }
+
+  reset(value)
+
+  if (pendingEdits.value) {
+    Object.assign(form, pendingEdits.value)
+    pendingEdits.value = null
   }
 }, { immediate: true })
 
@@ -488,6 +662,83 @@ async function save() {
           儲存
         </UButton>
       </div>
+
+      <!--
+        所在缸與「移動到其他缸」（issue #120）。
+
+        落在「狀態」與「入缸日」之間：先讓人看到現在在哪，再提供移動。不放頁首
+        （被「編輯」佔住）也不放底部（保留給「儲存」），語意連貫且不與兩顆主鈕打架。
+
+        名下沒有其他未封存的缸時整塊不出現——連「所在缸」的資訊一起收掉。
+      -->
+      <div
+        v-if="canMove"
+        data-testid="creature-tank-section"
+        class="mt-7 px-4"
+      >
+        <p class="text-sm tracking-widest text-dimmed">
+          所在缸
+        </p>
+
+        <div class="mt-2.5 rounded-2xl border border-default">
+          <div
+            data-testid="creature-current-tank"
+            class="flex items-center gap-3 border-b border-default px-4 py-4"
+          >
+            <span
+              class="size-5 shrink-0 rounded-[7px]"
+              :style="{ backgroundColor: currentTankColor }"
+              aria-hidden="true"
+            />
+
+            <span class="truncate text-lg font-bold">{{ creature.tankName }}</span>
+
+            <span
+              v-if="currentTank"
+              class="truncate font-mono text-sm text-dimmed"
+            >
+              {{ formatTankSpec(currentTank) }}
+            </span>
+          </div>
+
+          <button
+            data-testid="creature-move-open"
+            type="button"
+            class="flex w-full items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-elevated/40"
+            @click="openMove"
+          >
+            <UIcon
+              name="i-lucide-log-out"
+              class="size-5 shrink-0 text-primary"
+              aria-hidden="true"
+            />
+
+            <span class="min-w-0 flex-1 truncate text-lg font-semibold text-primary">
+              移動到其他缸
+            </span>
+
+            <UIcon
+              name="i-lucide-chevron-right"
+              class="size-5 shrink-0 text-dimmed"
+              aria-hidden="true"
+            />
+          </button>
+        </div>
+      </div>
+
+      <CreatureMoveSheet
+        :open="moveOpen"
+        :creature-name="creature.name"
+        :current-tank-name="creature.tankName"
+        :tanks="moveTargets"
+        :selected-tank-id="selectedTankId"
+        :moving="moving"
+        :failure="moveFailure"
+        @close="closeMove"
+        @select="selectTank"
+        @confirm="move"
+        @dismiss-error="dismissMoveError"
+      />
 
       <!-- 入缸日與在缸天數：兩者都是推算值，schema 不存（見 schema.prisma 檔頭） -->
       <dl class="mt-8 px-4">

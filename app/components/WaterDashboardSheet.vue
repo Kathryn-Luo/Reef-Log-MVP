@@ -48,169 +48,17 @@ function statusClass(status: ReadingStatus | null): string {
 // CSS 的鎖只擋得住滾輪與捲軸，iOS 的手指還要靠下面 touchmove 的 preventDefault。
 useScrollLock(computed(() => props.open))
 
-/** 唯一捲得動的那一段：六列數據。標題區塊與底部的「記錄水質」不在裡面 */
-const SCROLL_AREA = '[data-testid="water-dashboard-scroll"]'
-
-function isInsideScrollArea(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest(SCROLL_AREA) !== null
-}
-
 // ── 向下拖曳關閉 ─────────────────────────────────────────────
 //
-// 拖到這個距離放開才算「要關掉」。太短會讓輕輕一碰就關掉，
-// 太長則要拖過半個畫面，兩者都很難用。
-const DRAG_CLOSE_DISTANCE = 60
-
-const dragStartY = ref<number | null>(null)
-const dragOffset = ref(0)
-
-// 拖曳中才寫 inline style：沒在拖的時候留著 transform 會蓋掉升起 / 收合的過場
-const panelStyle = computed(() =>
-  dragOffset.value > 0 ? { transform: `translateY(${dragOffset.value}px)` } : undefined,
-)
-
-function beginDrag(clientY: number) {
-  dragStartY.value = clientY
-  dragOffset.value = 0
-}
-
-function trackDrag(clientY: number) {
-  if (dragStartY.value === null) {
-    return
-  }
-
-  // 只跟著往下走。往上拖沒有對應的動作，跟上去只會把面板拉出畫面上緣
-  dragOffset.value = Math.max(0, clientY - dragStartY.value)
-}
-
-function finishDrag(clientY: number) {
-  const startY = dragStartY.value
-
-  dragStartY.value = null
-  dragOffset.value = 0
-
-  if (startY !== null && clientY - startY >= DRAG_CLOSE_DISTANCE) {
-    emit('close')
-  }
-}
-
-/** 拖曳被系統收走（來電、手勢接管）時當作沒拖過，不要留在半路 */
-function abandonDrag() {
-  dragStartY.value = null
-  dragOffset.value = 0
-}
-
-// ── 觸控與滑鼠走兩條路 ─────────────────────────────────────────
+// 手勢本身在 app/composables/useSheetDrag.ts：pointer 與 touch 的分流、iOS 上
+// 那些坑，以及「數據區以外的 touchmove 一律攔下」都在那裡（issue #120 抽出共用，
+// 「移動到其他缸」用的是同一組）。
 //
-// 只綁 pointer events 的話，iPhone Safari 拖不動：WebKit 的手勢辨識器一旦認定
-// 這段垂直位移屬於捲動，就會收走觸控指標並補一個 pointercancel，
-// 手指還在螢幕上，拖曳卻已經無聲地結束了。滑鼠不走那條路，所以桌機三個瀏覽器都正常。
-//
-// 因此觸控改由 touch events 驅動（iOS 上不會被這樣收走），pointer events 只留給
-// 滑鼠與觸控筆。兩條路徑互不重疊，也就不會有「一次拖曳關兩次」的問題，
-// 而 WebKit 送來的 pointercancel 也再也打斷不了正在進行的觸控拖曳。
-
-function isTouch(event: PointerEvent) {
-  return event.pointerType === 'touch'
-}
-
-function startPointerDrag(event: PointerEvent) {
-  if (isTouch(event)) {
-    return
-  }
-
-  beginDrag(event.clientY)
-}
-
-function movePointerDrag(event: PointerEvent) {
-  if (isTouch(event)) {
-    return
-  }
-
-  trackDrag(event.clientY)
-}
-
-function endPointerDrag(event: PointerEvent) {
-  if (isTouch(event)) {
-    return
-  }
-
-  finishDrag(event.clientY)
-}
-
-function cancelPointerDrag(event: PointerEvent) {
-  if (isTouch(event)) {
-    return
-  }
-
-  abandonDrag()
-}
-
-// 追蹤的那一根手指。多點觸控時後落下的手指不該把座標換過去
-const dragTouchId = ref<number | null>(null)
-
-function trackedTouch(event: TouchEvent): Touch | undefined {
-  if (dragTouchId.value === null) {
-    return undefined
-  }
-
-  return Array.from(event.changedTouches).find(touch => touch.identifier === dragTouchId.value)
-}
-
-function startTouchDrag(event: TouchEvent) {
-  const touch = event.changedTouches[0]
-
-  if (!touch || dragTouchId.value !== null) {
-    return
-  }
-
-  dragTouchId.value = touch.identifier
-  beginDrag(touch.clientY)
-}
-
-function moveTouchDrag(event: TouchEvent) {
-  const touch = trackedTouch(event)
-
-  // cancelable 為 false 代表瀏覽器已經決定要捲，攔也沒用
-  if (!touch) {
-    // 沒在拖曳的手指：只有數據區那一段該滑得動（欄位變多時仍要捲得到最後一列）。
-    // 其餘位置的垂直位移在 iOS 上會被接力去捲背景頁面——`overflow: hidden` 攔不住它，
-    // 只有在這裡 preventDefault 才停得下來。
-    if (!isInsideScrollArea(event.target) && event.cancelable) {
-      event.preventDefault()
-    }
-
-    return
-  }
-
-  // 拖曳區上的 touch-action: none 只擋住手勢的起點；不在這裡攔下原生行為，
-  // Safari 還是會把這段位移拿去捲頁面或做邊緣回彈。
-  if (event.cancelable) {
-    event.preventDefault()
-  }
-
-  trackDrag(touch.clientY)
-}
-
-function endTouchDrag(event: TouchEvent) {
-  const touch = trackedTouch(event)
-
-  if (!touch) {
-    return
-  }
-
-  dragTouchId.value = null
-  finishDrag(touch.clientY)
-}
-
-function cancelTouchDrag(event: TouchEvent) {
-  if (!trackedTouch(event)) {
-    return
-  }
-
-  dragTouchId.value = null
-  abandonDrag()
-}
+// 唯一捲得動的那一段：六列數據。標題區塊與底部的「記錄水質」不在裡面。
+const { panelStyle, surfaceHandlers, handleHandlers } = useSheetDrag({
+  onClose: () => emit('close'),
+  scrollArea: '[data-testid="water-dashboard-scroll"]',
+})
 
 // ── 焦點 ─────────────────────────────────────────────────────
 //
@@ -252,12 +100,7 @@ watch(() => props.open, async (open) => {
     data-testid="water-dashboard"
     tabindex="-1"
     class="fixed inset-0 z-[60] outline-none"
-    @pointermove="movePointerDrag"
-    @pointerup="endPointerDrag"
-    @pointercancel="cancelPointerDrag"
-    @touchmove="moveTouchDrag"
-    @touchend="endTouchDrag"
-    @touchcancel="cancelTouchDrag"
+    v-on="surfaceHandlers"
     @keydown.esc="emit('close')"
   >
     <!-- 背景首頁變暗但仍可見：半透明而不是實心 -->
@@ -285,8 +128,7 @@ watch(() => props.open, async (open) => {
       <div
         data-testid="water-dashboard-drag-zone"
         class="shrink-0 touch-none select-none"
-        @pointerdown="startPointerDrag"
-        @touchstart="startTouchDrag"
+        v-on="handleHandlers"
       >
         <div
           data-testid="water-dashboard-handle"

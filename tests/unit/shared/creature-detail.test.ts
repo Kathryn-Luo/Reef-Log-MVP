@@ -21,6 +21,8 @@ function creature(
 ): CreatureDetailDto {
   return {
     id: 'f5',
+    tankId: 'tank-1',
+    tankName: '主缸',
     name: '火焰仙',
     scientificName: 'Centropyge loriculus',
     category: 'FISH',

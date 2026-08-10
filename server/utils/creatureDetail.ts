@@ -19,10 +19,22 @@ function toDate(value: string | null): Date | null {
   return value === null ? null : new Date(`${value}T00:00:00.000Z`)
 }
 
+/**
+ * 詳情頁要的是「這一隻」加上「牠在哪一缸」，所以兩支查詢都一起把缸名取回來。
+ *
+ * select 只點名 name：整個 Tank 拉回來會把開缸日、水量、代表色一併送進回應，
+ * 而詳情頁一個都用不到（缸的其餘欄位由 GET /api/tanks 提供）。
+ */
+const WITH_TANK_NAME = { include: { tank: { select: { name: true } } } } as const
+
+type CreatureWithTankName = Creature & { tank: { name: string } }
+
 /** 詳情頁比庫存列表多要 subCategory 與 deathNote；price 不送（見 CreatureDetailDto 的註解） */
-function toCreatureDetail(creature: Creature): CreatureDetailDto {
+function toCreatureDetail(creature: CreatureWithTankName): CreatureDetailDto {
   return {
     id: creature.id,
+    tankId: creature.tankId,
+    tankName: creature.tank.name,
     name: creature.name,
     scientificName: creature.scientificName,
     category: creature.category,
@@ -52,6 +64,7 @@ export async function getCreatureDetail(
 ): Promise<CreatureDetailDto | null> {
   const creature = await client.creature.findFirst({
     where: { id: creatureId, tank: { userId, archivedAt: null } },
+    ...WITH_TANK_NAME,
   })
 
   return creature ? toCreatureDetail(creature) : null
@@ -97,6 +110,7 @@ export async function updateCreatureStatus(
         causeOfDeath: input.causeOfDeath,
         deathNote: input.deathNote,
       },
+      ...WITH_TANK_NAME,
     })
 
     return toCreatureDetail(creature)

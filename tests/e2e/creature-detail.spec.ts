@@ -139,6 +139,18 @@ test('切換狀態並儲存後，列表的樣式跟著改變', async ({ page }) 
   await page.getByTestId('status-option').filter({ hasText: '存活' }).click()
   await page.getByTestId('creature-save').click()
 
+  // ⚠ 這一句要排在最前面：它是這一段唯一等得到「PATCH 真的回來了」的斷言。
+  //
+  // 儲存成功 → data 換成後端回來的那一份 → dirty 變 false → 儲存鈕自己收起來
+  // （unit 這一側由「儲存成功後儲存按鈕收起來」驗）。
+  //
+  // 底下那兩句看的都是**本地表單狀態**：點下「存活」的那一拍 form.status 就變了，
+  // death-record 立刻被 v-if 收掉、aria-pressed 立刻是 true。請求成不成功、
+  // 甚至有沒有送出去，它們的結果一模一樣——少了這一句，接著的 goto 會在請求還在
+  // 飛的時候把它取消掉，而失敗要等到下一頁的 data-status 才浮出來，
+  // 錯誤訊息只說得出「列表上是 DEAD」（issue #146 的同一課：斷言在操作完成之前就成立）。
+  await expect(page.getByTestId('creature-save')).toHaveCount(0)
+
   await expect(page.getByTestId('death-record')).toHaveCount(0)
   await expect(page.getByTestId('status-option').first()).toHaveAttribute('aria-pressed', 'true')
 
@@ -156,7 +168,12 @@ test('切換狀態並儲存後，列表的樣式跟著改變', async ({ page }) 
   await page.getByTestId('death-cause-option').filter({ hasText: '跳缸' }).click()
   await page.getByTestId('creature-save').click()
 
+  // 同上：`death-record` 可見一樣是本地狀態，等的是儲存鈕收起來。
+  // `creature-error` 排在前面是為了診斷——真的被擋下來時，要先看到那句訊息，
+  // 而不是一句「儲存鈕還在」。
   await expect(page.getByTestId('creature-error')).toHaveCount(0)
+  await expect(page.getByTestId('creature-save')).toHaveCount(0)
+
   await expect(page.getByTestId('death-record')).toBeVisible()
 
   await page.goto('/creatures')

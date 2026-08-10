@@ -197,6 +197,23 @@ agent 可以「建議你貼」，不能代貼。已經踩過一次，見 issue #
 > 人類把關是機制性的，不是自律。拿掉之後整條流程就變成 agent 自己觸發自己、自己核准自己。
 > 若將來真有需要（例如排程觸發），另開 issue 討論，不要順手做掉。
 
+### 核准前先確認 workflow run 不是舊版
+
+GitHub Actions 的 workflow 定義在 run 建立當下就固定，不會在按下
+`Review deployments` 核准時重新讀取 `main`。因此，一支等待核准數小時的 run
+即使之後正常成功、產出 PR、CI 全綠，仍可能跑的是這段期間已被取代的舊流程。
+
+判斷方式依觸發事件不同：
+
+| 觸發事件 | 核准前檢查 | 發現舊版時 |
+|---|---|---|
+| `issues`（貼 label） | run 的分支是 `main`；比對 run 頁面的 **commit SHA** 與 `main` 目前的 head | 取消舊 run，再重貼 label |
+| `pull_request_review`（Schema Design 的 Request changes） | run 的 SHA 指向 schema PR 分支，不可拿它和 `main` 比。改比對 **run 建立時間**，確認 `main` 的 `.github/workflows/schema-design.yml` 沒有在那之後更新 | 取消舊 run，再於 schema 草稿 PR 重送 Request changes |
+
+這項檢查特別重要於等待期間合併過 `.github/workflows/` 變更時。舊 run 的成功狀態
+不代表它驗證到了後來的 workflow 修正；以新的觸發事件建立 run，才會取得 `main`
+上的最新定義。
+
 ## 提交規範
 - 分支命名：`feat/<issue-number>-<slug>`、`fix/<issue-number>-<slug>`
 - 每個 PR 對應一個子 issue，PR 內文連回該 issue

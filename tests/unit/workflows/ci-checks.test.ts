@@ -58,6 +58,12 @@ function runOf(step: string): string {
   return collected.join('\n')
 }
 
+/** 區塊 run 中逐行執行的命令，不含 YAML 的 `|`。 */
+const commandsOf = (step: string) => runOf(step)
+  .split('\n')
+  .map(line => line.trim())
+  .filter(line => line !== '' && line !== '|')
+
 /**
  * 這個步驟有沒有執行某個 pnpm script。
  * `(\s|$)` 的邊界是必要的：少了它，`pnpm test:e2e` 會被誤認成 `pnpm test`。
@@ -68,8 +74,12 @@ const runsScript = (step: string, script: string) =>
 /** 找出「執行某個 pnpm script」的步驟。 */
 const stepRunning = (script: string) => steps().find(step => runsScript(step, script))
 
+/** 依 name 找出步驟。 */
+const stepNamed = (name: string) => steps().find(step => step.startsWith(`name: ${name}`))
+
 /** 這支 workflow 必須無條件跑完的檢查。build 見 issue #44。 */
 const CHECKS = ['lint', 'typecheck', 'test', 'build'] as const
+const SINGLE_COMMAND_CHECKS = ['lint', 'typecheck', 'build'] as const
 
 describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
   it('workflow 檔案存在', () => {
@@ -136,13 +146,29 @@ describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
     expect(code(raw())).not.toContain('continue-on-error')
   })
 
-  // 每一步只跑那一個指令，逐字比對。這一條同時擋掉三種手法：
+  // 除了 test 需要在同一步驗證 JSON result，其餘每一步只跑那一個指令，逐字比對。
+  // 這一條同時擋掉三種手法：
   // - `|| true` / `|| echo`：指令失敗被吞掉，step 仍然回 0
   // - `--passWithNoTests`：vitest 預設在「一個測試都沒收到」時失敗，
   //   加上它會讓「測試檔被整批刪掉」這種最粗暴的作弊變成綠燈
   // - `pnpm test tests/unit/foo.test.ts`：把範圍縮限到剛好會過的那幾個檔
-  it.each(CHECKS)('pnpm %s 步驟只跑那一個指令', (script) => {
+  it.each(SINGLE_COMMAND_CHECKS)('pnpm %s 步驟只跑那一個指令', (script) => {
     expect(runOf(stepRunning(script)!).trim()).toBe(`pnpm ${script}`)
+  })
+
+  // issue #35：守門測試若被 vitest.config.ts 排除，就沒有機會保護自己。
+  // JSON 必須由同一次 pnpm test 產生，不能用 list 或另一個 invocation 預先探索。
+  it('以同一次 unit test 執行結果確認每個測試檔都有實際 test case', () => {
+    const unitTests = stepNamed('Unit tests')
+
+    expect(unitTests, '找不到 Unit tests 步驟').toBeDefined()
+    expect(unitTests).toMatch(/if:\s*\$\{\{\s*!\s*cancelled\(\)\s*\}\}/)
+    expect(unitTests).toContain('VITEST_RESULT_FILE: ${{ runner.temp }}/vitest-result.json')
+    expect(commandsOf(unitTests!)).toEqual([
+      'pnpm test --reporter=default --reporter=json --outputFile.json="$VITEST_RESULT_FILE"',
+      'node .github/scripts/assert-vitest-discovery.mjs "$VITEST_RESULT_FILE"',
+    ])
+    expect(code(raw())).not.toContain('vitest list')
   })
 
   // ── 以下是權限面 ──

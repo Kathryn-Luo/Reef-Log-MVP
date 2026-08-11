@@ -44,5 +44,5 @@ test('從詳情頁編輯俗名後，詳情與庫存同步更新', async ({ page 
 
   await page.goto('/creatures')
   await expect(page.getByTestId('creature-name').filter({ hasText: renamed })).toBeVisible()
-  await expect(page.getByTestId('creature-name').filter({ hasText: '藍倒吊' })).toHaveCount(0)
+  await expect(page.getByTestId('creature-name').filter({ hasText: /^藍倒吊$/ })).toHaveCount(0)
 })

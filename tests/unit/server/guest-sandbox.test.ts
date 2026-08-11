@@ -88,6 +88,7 @@ const TEMPLATE_TANK = {
       name: '換水 10%',
       intervalDays: 7,
       startOn: new Date('2026-05-02'),
+      createdOn: new Date('2026-07-01'),
       isActive: true,
       displayOrder: 0,
       note: null,
@@ -391,6 +392,7 @@ describe('copyTemplateSandbox — 複製鏈的每一層', () => {
       name: '換水 10%',
       intervalDays: 7,
       startOn: TEMPLATE_TANK.maintenanceTasks[0]!.startOn,
+      createdOn: TEMPLATE_TANK.maintenanceTasks[0]!.createdOn,
       isActive: true,
       displayOrder: 0,
     })

@@ -33,6 +33,7 @@ interface TaskRow {
   name: string
   intervalDays: number
   startOn: Date | null
+  createdOn: Date | null
   isActive: boolean
   displayOrder: number
   createdAt: Date
@@ -42,12 +43,12 @@ const date = (text: string) => new Date(`${text}T00:00:00.000Z`)
 
 /** A 的缸有四個任務（含一個停用的），B 的缸有一個 */
 const TASKS: TaskRow[] = [
-  { id: 'task-feed', tankId: 'tank-a1', name: '餵食', intervalDays: 1, startOn: null, isActive: true, displayOrder: 1, createdAt: new Date('2026-05-01T02:00:00.000Z') },
-  { id: 'task-water', tankId: 'tank-a1', name: '換水 10%', intervalDays: 7, startOn: date('2026-04-01'), isActive: true, displayOrder: 0, createdAt: new Date('2026-05-01T01:00:00.000Z') },
+  { id: 'task-feed', tankId: 'tank-a1', name: '餵食', intervalDays: 1, startOn: null, createdOn: null, isActive: true, displayOrder: 1, createdAt: new Date('2026-05-01T02:00:00.000Z') },
+  { id: 'task-water', tankId: 'tank-a1', name: '換水 10%', intervalDays: 7, startOn: date('2026-04-01'), createdOn: date('2026-05-01'), isActive: true, displayOrder: 0, createdAt: new Date('2026-05-01T01:00:00.000Z') },
   // displayOrder 與 task-feed 相同：次要排序鍵（createdAt）才有東西可測
-  { id: 'task-prefilter', tankId: 'tank-a1', name: '洗前置棉', intervalDays: 7, startOn: null, isActive: true, displayOrder: 1, createdAt: new Date('2026-05-01T03:00:00.000Z') },
-  { id: 'task-retired', tankId: 'tank-a1', name: '已停用的任務', intervalDays: 7, startOn: null, isActive: false, displayOrder: 2, createdAt: new Date('2026-05-01T04:00:00.000Z') },
-  { id: 'task-b', tankId: 'tank-b1', name: 'B 的任務', intervalDays: 7, startOn: null, isActive: true, displayOrder: 0, createdAt: new Date('2026-05-01T05:00:00.000Z') },
+  { id: 'task-prefilter', tankId: 'tank-a1', name: '洗前置棉', intervalDays: 7, startOn: null, createdOn: date('2026-08-12'), isActive: true, displayOrder: 1, createdAt: new Date('2026-08-11T16:30:00.000Z') },
+  { id: 'task-retired', tankId: 'tank-a1', name: '已停用的任務', intervalDays: 7, startOn: null, createdOn: date('2026-05-01'), isActive: false, displayOrder: 2, createdAt: new Date('2026-05-01T04:00:00.000Z') },
+  { id: 'task-b', tankId: 'tank-b1', name: 'B 的任務', intervalDays: 7, startOn: null, createdOn: date('2026-05-01'), isActive: true, displayOrder: 0, createdAt: new Date('2026-05-01T05:00:00.000Z') },
 ]
 
 /** 「換水 10%」做過兩次，「餵食」一次；洗前置棉從未完成過 */
@@ -202,6 +203,13 @@ describe('getMaintenancePage', () => {
     const { tasks } = await getMaintenancePage(fakeClient(), 'tank-a1')
 
     expect(tasks.find(task => task.id === 'task-prefilter')).toMatchObject({ startOn: null, lastCompletion: null })
+  })
+
+  it('優先回傳保存的使用者當地建立日，legacy null 才退回 UTC createdAt', async () => {
+    const { tasks } = await getMaintenancePage(fakeClient(), 'tank-a1')
+
+    expect(tasks.find(task => task.id === 'task-prefilter')?.createdOn).toBe('2026-08-12')
+    expect(tasks.find(task => task.id === 'task-feed')?.createdOn).toBe('2026-05-01')
   })
 
   // 只取最後一筆：整份履歷是保養歷史頁的事，那一頁還不存在。撈回來再取最後一筆的話，

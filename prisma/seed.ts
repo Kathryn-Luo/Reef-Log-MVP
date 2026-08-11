@@ -358,6 +358,7 @@ async function main() {
         intervalDays: task.intervalDays,
         displayOrder: task.displayOrder,
         startOn: dateOnly(new Date(now.getTime() - 90 * DAY)),
+        createdOn: dateOnly(now),
       },
     })
 

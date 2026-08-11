@@ -7,7 +7,8 @@ import LogPage from '../../../app/pages/log.vue'
 import TrendsPage from '../../../app/pages/trends.vue'
 import CreaturesPage from '../../../app/pages/creatures/index.vue'
 import NewCreaturePage from '../../../app/pages/creatures/new.vue'
-import MaintenancePage from '../../../app/pages/maintenance.vue'
+import MaintenancePage from '../../../app/pages/maintenance/index.vue'
+import NewMaintenanceTaskPage from '../../../app/pages/maintenance/tasks/new.vue'
 import NewTankPage from '../../../app/pages/tanks/new.vue'
 import { signedInUserSession } from '../support/session'
 import { PROTECTED_PAGES } from '../../e2e/support/protectedPages'
@@ -72,6 +73,7 @@ function dueTodayTask(): MaintenanceTaskDto {
     startOn: addDays(TODAY, -7),
     createdOn: addDays(TODAY, -90),
     displayOrder: 0,
+    isActive: true,
     lastCompletion: null,
   }
 }
@@ -133,6 +135,7 @@ const PAGE_COMPONENTS: Record<string, Component> = {
   '/creatures': CreaturesPage,
   '/creatures/new': NewCreaturePage,
   '/maintenance': MaintenancePage,
+  '/maintenance/tasks/new': NewMaintenanceTaskPage,
   '/tanks/new': NewTankPage,
 }
 

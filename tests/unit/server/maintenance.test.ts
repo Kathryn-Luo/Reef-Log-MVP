@@ -180,6 +180,7 @@ describe('getMaintenancePage', () => {
       // 前端算不出 nextDueOn
       createdOn: '2026-05-01',
       displayOrder: 0,
+      isActive: true,
       // completedOn 最大的那一筆，不是最早的那一筆
       lastCompletion: { completedAt: '2026-07-01T00:20:00.000Z', completedOn: '2026-07-01' },
     })

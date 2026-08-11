@@ -62,6 +62,8 @@ export const PROTECTED_PAGES: readonly ProtectedPage[] = [
   // 真的有一天連一個任務都排不進來，這條會以「找不到 today-section」失敗——
   // 那時要修的是示範資料，不是退回只驗網址。
   { path: '/maintenance', marker: 'today-section' },
+  // 新增保養任務會先讀取缸清單；成功且有缸時才畫出共用表單
+  { path: '/maintenance/tasks/new', marker: 'maintenance-task-form' },
   // 靜態表單，沒有任何 GET。頁面渲染得出來就有它
   { path: '/tanks/new', marker: 'tank-form' },
 ]

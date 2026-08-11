@@ -11,6 +11,7 @@ import { parseCreatureStatusInput } from '#shared/utils/creatureDetail'
 import { parseCreatureProfileInput } from '#shared/utils/creatureForm'
 // completedOn 的規則與保養頁共用同一份（issue #122，與 parseWaterLogInput 同一個作法）
 import { parseCompletedOn, parseCompletedOnInput } from '#shared/utils/maintenance'
+import { parseCreateMaintenanceTaskInput, parseMaintenanceTaskInput } from '#shared/utils/maintenanceTaskForm'
 import { parseTankInput } from '#shared/utils/tankForm'
 // 時間範圍的規則住在 shared：#123 的畫面用的是同一份四個選項（issue #126）
 import { parseTrendRange } from '#shared/utils/trend'
@@ -21,7 +22,14 @@ import { getTankCreatures } from './creatureList'
 import { ensureGuestSandbox } from './guestSandbox'
 import { createTimer } from './requestTiming'
 import { getTankHome, listTankOptions } from './homeData'
-import { clearCompletion, completeTask, findOwnedMaintenanceTask, getMaintenancePage } from './maintenance'
+import {
+  clearCompletion,
+  completeTask,
+  createMaintenanceTask,
+  findOwnedMaintenanceTask,
+  getMaintenancePage,
+  updateMaintenanceTask,
+} from './maintenance'
 import { createTank } from './tankWrite'
 import { getTrendPage } from './trendData'
 import { createWaterLog, getWaterLogPage } from './waterLog'
@@ -414,6 +422,75 @@ export async function resolveMaintenancePage(
   }
 
   return { ok: true, value: await getMaintenancePage(client, owned.value) }
+}
+
+/** GET /api/maintenance-tasks/:id —— 編輯頁直接載入目前任務。 */
+export async function resolveMaintenanceTask(
+  client: PrismaClient,
+  user: SessionUser | null,
+  taskId: string | undefined,
+): Promise<Authorized<MaintenanceTaskResponse>> {
+  const owned = await requireOwnedMaintenanceTask(client, user, taskId)
+
+  return owned.ok
+    ? { ok: true, value: { task: owned.value } }
+    : owned
+}
+
+/** POST /api/tanks/:id/maintenance-tasks —— 在目前缸建立一個任務。 */
+export async function createOwnedMaintenanceTask(
+  client: PrismaClient,
+  user: SessionUser | null,
+  tankId: string | undefined,
+  readBody: BodyReader,
+  now: Date = new Date(),
+): Promise<Authorized<MaintenanceTaskResponse>> {
+  const owned = await requireOwnedTank(client, user, tankId)
+
+  if (!owned.ok) {
+    return owned
+  }
+
+  const parsed = parseCreateMaintenanceTaskInput(await readBody(), now)
+
+  if (!parsed.ok) {
+    return { ok: false, error: invalidInput('Invalid maintenance task input', parsed.message) }
+  }
+
+  return { ok: true, value: { task: await createMaintenanceTask(client, owned.value, parsed.value) } }
+}
+
+/** PATCH /api/maintenance-tasks/:id —— 編輯週期、起算日或停用任務。 */
+export async function updateOwnedMaintenanceTask(
+  client: PrismaClient,
+  user: SessionUser | null,
+  taskId: string | undefined,
+  readBody: BodyReader,
+): Promise<Authorized<MaintenanceTaskResponse>> {
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  const owned = await requireOwnedMaintenanceTask(client, user, taskId)
+
+  if (!owned.ok) {
+    return owned
+  }
+
+  const parsed = parseMaintenanceTaskInput(await readBody(), {
+    fallbackStartOn: owned.value.createdOn,
+    lastCompletedOn: owned.value.lastCompletion?.completedOn,
+  })
+
+  if (!parsed.ok) {
+    return { ok: false, error: invalidInput('Invalid maintenance task input', parsed.message) }
+  }
+
+  const task = await updateMaintenanceTask(client, owned.value.id, user.id, parsed.value)
+
+  return task
+    ? { ok: true, value: { task } }
+    : { ok: false, error: MAINTENANCE_TASK_NOT_FOUND }
 }
 
 /**

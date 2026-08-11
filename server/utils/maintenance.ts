@@ -1,5 +1,5 @@
 import type { MaintenanceCompletion, MaintenanceTask, PrismaClient } from '@prisma/client'
-import type { MaintenancePageData, MaintenanceTaskDto } from '#shared/types/maintenance'
+import type { CreateMaintenanceTaskInput, MaintenancePageData, MaintenanceTaskDto, MaintenanceTaskInput } from '#shared/types/maintenance'
 
 // 保養提醒的資料層（issue #122，畫面是 #15 的 screen-7）。
 //
@@ -31,7 +31,13 @@ function toDateOnly(value: Date): string {
   return value.toISOString().slice(0, 10)
 }
 
-function toDto(task: TaskWithCompletions): MaintenanceTaskDto {
+function toDate(value: string): Date
+function toDate(value: string | null): Date | null
+function toDate(value: string | null): Date | null {
+  return value === null ? null : new Date(`${value}T00:00:00.000Z`)
+}
+
+export function toMaintenanceTaskDto(task: TaskWithCompletions): MaintenanceTaskDto {
   const last = task.completions[0]
 
   return {
@@ -43,6 +49,7 @@ function toDto(task: TaskWithCompletions): MaintenanceTaskDto {
     // 那一態才退回 createdAt 的 UTC 日期，不假設無法從資料證明的使用者時區。
     createdOn: toDateOnly(task.createdOn ?? task.createdAt),
     displayOrder: task.displayOrder,
+    isActive: task.isActive,
     // 從未完成過就是 null，不是假的日期、也不是 0——畫面因此分得出「還沒做過」
     lastCompletion: last
       ? { completedAt: last.completedAt.toISOString(), completedOn: toDateOnly(last.completedOn) }
@@ -66,7 +73,7 @@ export async function getMaintenancePage(client: PrismaClient, tankId: string): 
     include: LAST_COMPLETION,
   })
 
-  return { tasks: tasks.map(toDto) }
+  return { tasks: tasks.map(toMaintenanceTaskDto) }
 }
 
 /**
@@ -88,7 +95,74 @@ export async function findOwnedMaintenanceTask(
     include: LAST_COMPLETION,
   })
 
-  return task ? toDto(task) : null
+  return task ? toMaintenanceTaskDto(task) : null
+}
+
+/** 在已通過歸屬檢查的缸中建立任務，新任務接在既有排序最後。 */
+export async function createMaintenanceTask(
+  client: PrismaClient,
+  tankId: string,
+  input: CreateMaintenanceTaskInput,
+): Promise<MaintenanceTaskDto> {
+  const last = await client.maintenanceTask.findFirst({
+    where: { tankId },
+    orderBy: [{ displayOrder: 'desc' }, { createdAt: 'desc' }],
+    select: { displayOrder: true },
+  })
+
+  const task = await client.maintenanceTask.create({
+    data: {
+      tankId,
+      name: input.name,
+      intervalDays: input.intervalDays,
+      startOn: toDate(input.startOn),
+      // createdOn 保存瀏覽器的當地建立日；startOn 留白時仍維持 null。
+      createdOn: toDate(input.localCreatedOn),
+      isActive: input.isActive,
+      displayOrder: (last?.displayOrder ?? -1) + 1,
+    },
+    include: LAST_COMPLETION,
+  })
+
+  return toMaintenanceTaskDto(task)
+}
+
+function isRecordNotFound(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2025'
+}
+
+/** 更新任務定義；不對 MaintenanceCompletion 做任何寫入。 */
+export async function updateMaintenanceTask(
+  client: PrismaClient,
+  taskId: string,
+  userId: string,
+  input: MaintenanceTaskInput,
+): Promise<MaintenanceTaskDto | null> {
+  try {
+    const task = await client.maintenanceTask.update({
+      where: {
+        id: taskId,
+        isActive: true,
+        tank: { userId, archivedAt: null },
+      },
+      data: {
+        name: input.name,
+        intervalDays: input.intervalDays,
+        startOn: toDate(input.startOn),
+        isActive: input.isActive,
+      },
+      include: LAST_COMPLETION,
+    })
+
+    return toMaintenanceTaskDto(task)
+  }
+  catch (error) {
+    if (isRecordNotFound(error)) {
+      return null
+    }
+
+    throw error
+  }
 }
 
 /**

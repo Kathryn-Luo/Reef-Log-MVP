@@ -96,11 +96,12 @@ function toRow(task: MaintenanceTaskDto, today: string): MaintenanceRow {
 }
 
 /**
- * 把任務分成畫面上的兩區，並算出標題旁的徽章數字。
+ * 把任務分成畫面上的三區，並算出標題旁的徽章數字。
  *
  * 分區規則（issue #122 第 4-3 節）：
  *   今天該做 ＝ nextDueOn 不晚於今天 **或** 今天已完成
  *   即將到期 ＝ 明天起 UPCOMING_WINDOW_DAYS 天內，依到期日由近到遠
+ *   其他任務 ＝ 到期日在顯示窗口以後，仍保留可達的編輯入口
  *   徽章     ＝ 今天該做之中今天尚未完成的數量
  *
  * ⚠「今天已完成」也留在今天該做區，這一條很容易做錯。#15 明文寫著「餵食」每天一次、
@@ -116,6 +117,7 @@ function toRow(task: MaintenanceTaskDto, today: string): MaintenanceRow {
 export function buildMaintenanceSections(tasks: MaintenanceTaskDto[], now: Date): {
   today: MaintenanceRow[]
   upcoming: MaintenanceRow[]
+  later: MaintenanceRow[]
   dueCount: number
 } {
   const today = toLocalDateOnly(now)
@@ -131,9 +133,14 @@ export function buildMaintenanceSections(tasks: MaintenanceTaskDto[], now: Date)
     .filter(row => !row.completedToday && row.nextDueOn > today && row.dueInDays <= UPCOMING_WINDOW_DAYS)
     .sort((left, right) => left.nextDueOn.localeCompare(right.nextDueOn))
 
+  const later = rows
+    .filter(row => !row.completedToday && row.dueInDays > UPCOMING_WINDOW_DAYS)
+    .sort((left, right) => left.nextDueOn.localeCompare(right.nextDueOn))
+
   return {
     today: dueToday,
     upcoming,
+    later,
     dueCount: dueToday.filter(row => !row.completedToday).length,
   }
 }

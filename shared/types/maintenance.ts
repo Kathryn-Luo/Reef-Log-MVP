@@ -24,8 +24,24 @@ export interface MaintenanceTaskDto {
   /** YYYY-MM-DD。task 的建立日，schema 註解定的最後一層 fallback */
   createdOn: string
   displayOrder: number
+  isActive: boolean
   /** completedOn 最大的那一筆；從未完成過則為 null */
   lastCompletion: MaintenanceCompletionDto | null
+}
+
+/** 新增與編輯保養任務共用的請求內容。 */
+export interface MaintenanceTaskInput {
+  name: string
+  intervalDays: number
+  /** YYYY-MM-DD；null 代表從建立當天起算。 */
+  startOn: string | null
+  isActive: boolean
+}
+
+/** 建立任務時額外帶上瀏覽器的當地日曆日，避免從 UTC createdAt 猜錯日期。 */
+export interface CreateMaintenanceTaskInput extends MaintenanceTaskInput {
+  /** YYYY-MM-DD；只接受 server UTC 日期前後一天。 */
+  localCreatedOn: string
 }
 
 /**

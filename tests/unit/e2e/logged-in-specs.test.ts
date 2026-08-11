@@ -55,6 +55,8 @@ const LOGGED_IN_SPECS = [
   ['tests/e2e/creature-move.spec.ts', 2],
   // 新增／編輯生物基本資料（#16）。兩條都會寫進各自的訪客沙盒。
   ['tests/e2e/creature-form.spec.ts', 2],
+  // 新增／編輯／停用保養任務（#17）。每條都會寫進各自的訪客沙盒。
+  ['tests/e2e/maintenance-task-form.spec.ts', 3],
 ] as const
 
 /**

@@ -3,7 +3,18 @@
 // 與 shared/types/home.ts 同一個原則：Prisma 的 Decimal 與 Date 一律在
 // server/utils/creatureList.ts 轉成 number / 字串之後才送出。
 
-import type { CreatureDto, CreatureStatusKey } from './home'
+import type { CreatureCategoryKey, CreatureDto, CreatureStatusKey } from './home'
+
+/** 新增與編輯生物基本資料共用的請求內容。 */
+export interface CreatureProfileInput {
+  name: string
+  scientificName: string | null
+  category: CreatureCategoryKey
+  subCategory: string | null
+  /** YYYY-MM-DD（Prisma 的 @db.Date） */
+  addedOn: string
+  price: number | null
+}
 
 /** 對應 schema.prisma 的 enum DeathCause */
 export type DeathCauseKey = 'DISEASE' | 'WATER_QUALITY' | 'PREDATION' | 'JUMPED' | 'STARVATION' | 'UNKNOWN'
@@ -33,13 +44,14 @@ export interface TankCreaturesData {
  * 同樣用 extends：三張畫面指的是同一個 Creature，形狀分家的話
  * daysInTank / buildInventoryRows 這類共用函式會開始要求各自的型別。
  *
- * 沒有 price——schema 有這個欄位，但 Epic #1 的 7 張截圖都沒有顯示或輸入價格的位置
- * （見 issue #14 的「已知缺口」），詳情頁不呈現它，也就不送到前端。
+ * price 由新增／編輯基本資料表單使用；詳情頁目前不呈現，但共用的 GET 回應仍帶回，
+ * 編輯頁才能顯示原值。
  */
 export interface CreatureDetailDto extends CreatureListItemDto {
   subCategory: string | null
   /** 死亡記錄區塊專用的備註，不是通用飼養備註（見 schema.prisma 的註解） */
   deathNote: string | null
+  price: number | null
 
   /**
    * 所在缸（issue #120）。庫存列表與首頁卡片都是「從某一缸點進去的」，所以那兩張畫面
@@ -75,6 +87,9 @@ export interface UpdateCreatureStatusInput {
 export interface CreatureDetailResponse {
   creature: CreatureDetailDto
 }
+
+/** POST /api/tanks/:id/creatures 與 PATCH /api/creatures/:id/profile 的回應。 */
+export type CreatureProfileResponse = CreatureDetailResponse
 
 /** PATCH /api/creatures/:id/move 的回應，只回傳畫面重新取資料所需的識別資訊。 */
 export interface MoveCreatureResponse {

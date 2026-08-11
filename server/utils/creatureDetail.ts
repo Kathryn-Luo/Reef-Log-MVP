@@ -1,5 +1,5 @@
 import type { Creature, PrismaClient } from '@prisma/client'
-import type { CreatureDetailDto, UpdateCreatureStatusInput } from '#shared/types/creature'
+import type { CreatureDetailDto, CreatureProfileInput, UpdateCreatureStatusInput } from '#shared/types/creature'
 
 // 生物詳情 · 死亡記錄（screen-6）的查詢與寫入。
 //
@@ -29,8 +29,8 @@ const WITH_TANK_NAME = { include: { tank: { select: { name: true } } } } as cons
 
 type CreatureWithTankName = Creature & { tank: { name: string } }
 
-/** 詳情頁比庫存列表多要 subCategory 與 deathNote；price 不送（見 CreatureDetailDto 的註解） */
-function toCreatureDetail(creature: CreatureWithTankName): CreatureDetailDto {
+/** 詳情頁與基本資料表單共用的 API 形狀。 */
+export function toCreatureDetail(creature: CreatureWithTankName): CreatureDetailDto {
   return {
     id: creature.id,
     tankId: creature.tankId,
@@ -47,6 +47,61 @@ function toCreatureDetail(creature: CreatureWithTankName): CreatureDetailDto {
     diedOn: toDateOnly(creature.diedOn),
     causeOfDeath: creature.causeOfDeath,
     deathNote: creature.deathNote,
+    price: creature.price === null ? null : Number(creature.price),
+  }
+}
+
+/** 在已通過歸屬檢查的缸建立一隻生物；status 刻意交給 schema 的 ALIVE 預設值。 */
+export async function createCreatureProfile(
+  client: PrismaClient,
+  tankId: string,
+  input: CreatureProfileInput,
+): Promise<CreatureDetailDto> {
+  const creature = await client.creature.create({
+    data: {
+      tankId,
+      name: input.name,
+      scientificName: input.scientificName,
+      category: input.category,
+      subCategory: input.subCategory,
+      addedOn: toDate(input.addedOn)!,
+      price: input.price,
+    },
+    ...WITH_TANK_NAME,
+  })
+
+  return toCreatureDetail(creature)
+}
+
+/** 只更新基本資料；狀態與死亡／生病記錄不在 data 中。 */
+export async function updateCreatureProfile(
+  client: PrismaClient,
+  creatureId: string,
+  userId: string,
+  input: CreatureProfileInput,
+): Promise<CreatureDetailDto | null> {
+  try {
+    const creature = await client.creature.update({
+      where: { id: creatureId, tank: { userId, archivedAt: null } },
+      data: {
+        name: input.name,
+        scientificName: input.scientificName,
+        category: input.category,
+        subCategory: input.subCategory,
+        addedOn: toDate(input.addedOn)!,
+        price: input.price,
+      },
+      ...WITH_TANK_NAME,
+    })
+
+    return toCreatureDetail(creature)
+  }
+  catch (error) {
+    if (isRecordNotFound(error)) {
+      return null
+    }
+
+    throw error
   }
 }
 

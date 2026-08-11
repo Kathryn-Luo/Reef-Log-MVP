@@ -53,6 +53,8 @@ const LOGGED_IN_SPECS = [
   ['tests/e2e/maintenance.spec.ts', 5],
   // 移動到其他缸（#120）。真的把生物換到另一個缸，寫入同樣落在自己的沙盒裡。
   ['tests/e2e/creature-move.spec.ts', 2],
+  // 新增／編輯生物基本資料（#16）。兩條都會寫進各自的訪客沙盒。
+  ['tests/e2e/creature-form.spec.ts', 2],
 ] as const
 
 /**

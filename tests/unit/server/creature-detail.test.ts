@@ -64,7 +64,7 @@ describe('getCreatureDetail', () => {
   })
 
   // Then 顯示照片、俗名、學名，以及「<分類> · <細分類>」標籤
-  // 詳情頁比庫存列表多要 subCategory 與 deathNote，@db.Date 一樣轉成 YYYY-MM-DD
+  // 詳情頁比庫存列表多要 subCategory、deathNote 與編輯表單的 price，@db.Date 一樣轉成 YYYY-MM-DD
   it('回傳詳情需要的欄位，日期轉成 YYYY-MM-DD', async () => {
     const creature = await getCreatureDetail(fakeClient(ROW), 'f5', 'user-1')
 
@@ -84,6 +84,7 @@ describe('getCreatureDetail', () => {
       diedOn: '2026-05-20',
       causeOfDeath: 'JUMPED',
       deathNote: '半夜跳出主缸，早上發現已乾。',
+      price: 3200,
     })
   })
 

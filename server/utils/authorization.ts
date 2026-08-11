@@ -1,5 +1,5 @@
 import type { PrismaClient, User } from '@prisma/client'
-import type { CreatureDetailDto, CreatureDetailResponse, MoveCreatureResponse, TankCreaturesData } from '#shared/types/creature'
+import type { CreatureDetailDto, CreatureDetailResponse, CreatureProfileResponse, MoveCreatureResponse, TankCreaturesData } from '#shared/types/creature'
 import type { GuestSandboxResponse } from '#shared/types/guestSandbox'
 import type { Timer } from './requestTiming'
 import type { TankHomeData, TankOption } from '#shared/types/home'
@@ -8,6 +8,7 @@ import type { CreateTankResponse } from '#shared/types/tank'
 import type { TrendPageData } from '#shared/types/trend'
 import type { CreateWaterLogResponse, WaterLogPageData } from '#shared/types/waterLog'
 import { parseCreatureStatusInput } from '#shared/utils/creatureDetail'
+import { parseCreatureProfileInput } from '#shared/utils/creatureForm'
 // completedOn 的規則與保養頁共用同一份（issue #122，與 parseWaterLogInput 同一個作法）
 import { parseCompletedOn, parseCompletedOnInput } from '#shared/utils/maintenance'
 import { parseTankInput } from '#shared/utils/tankForm'
@@ -15,7 +16,7 @@ import { parseTankInput } from '#shared/utils/tankForm'
 import { parseTrendRange } from '#shared/utils/trend'
 // parseWaterLogInput 與記錄水質的表單共用同一份規則，所以它住在 shared（issue #124）
 import { parseWaterLogInput } from '#shared/utils/waterLog'
-import { getCreatureDetail, moveCreature, updateCreatureStatus } from './creatureDetail'
+import { createCreatureProfile, getCreatureDetail, moveCreature, updateCreatureProfile, updateCreatureStatus } from './creatureDetail'
 import { getTankCreatures } from './creatureList'
 import { ensureGuestSandbox } from './guestSandbox'
 import { createTimer } from './requestTiming'
@@ -514,6 +515,29 @@ export async function resolveTankCreatures(
   return { ok: true, value: { creatures: await getTankCreatures(client, owned.value) } }
 }
 
+/** POST /api/tanks/:id/creatures —— 在目前使用者的缸建立一隻生物。 */
+export async function createOwnedCreature(
+  client: PrismaClient,
+  user: SessionUser | null,
+  tankId: string | undefined,
+  readBody: BodyReader,
+  now: Date = new Date(),
+): Promise<Authorized<CreatureProfileResponse>> {
+  const owned = await requireOwnedTank(client, user, tankId)
+
+  if (!owned.ok) {
+    return owned
+  }
+
+  const parsed = parseCreatureProfileInput(await readBody(), now)
+
+  if (!parsed.ok) {
+    return { ok: false, error: invalidInput('Invalid creature profile input', parsed.message) }
+  }
+
+  return { ok: true, value: { creature: await createCreatureProfile(client, owned.value, parsed.value) } }
+}
+
 /** GET /api/creatures/:id —— screen-6 生物詳情 */
 export async function resolveCreatureDetail(
   client: PrismaClient,
@@ -566,6 +590,37 @@ export async function applyCreatureStatus(
 
   // null＝查到之後、寫入之前歸屬變了。回與「查不到」完全相同的 404：
   // 那正是此刻為真的事，而且與其他路徑一個字都不差（見 CREATURE_NOT_FOUND）。
+  return creature
+    ? { ok: true, value: { creature } }
+    : { ok: false, error: CREATURE_NOT_FOUND }
+}
+
+/** PATCH /api/creatures/:id/profile —— 編輯俗名、分類、入缸日與價格等基本資料。 */
+export async function updateOwnedCreatureProfile(
+  client: PrismaClient,
+  user: SessionUser | null,
+  creatureId: string | undefined,
+  readBody: BodyReader,
+  now: Date = new Date(),
+): Promise<Authorized<CreatureProfileResponse>> {
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  const owned = await requireOwnedCreature(client, user, creatureId)
+
+  if (!owned.ok) {
+    return owned
+  }
+
+  const parsed = parseCreatureProfileInput(await readBody(), now)
+
+  if (!parsed.ok) {
+    return { ok: false, error: invalidInput('Invalid creature profile input', parsed.message) }
+  }
+
+  const creature = await updateCreatureProfile(client, owned.value.id, user.id, parsed.value)
+
   return creature
     ? { ok: true, value: { creature } }
     : { ok: false, error: CREATURE_NOT_FOUND }

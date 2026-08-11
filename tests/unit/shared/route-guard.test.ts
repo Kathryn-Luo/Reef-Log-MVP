@@ -24,6 +24,7 @@ const PROTECTED_PATHS = [
   '/trends',
   '/maintenance',
   '/creatures',
+  '/creatures/new',
   '/creatures/f5',
   '/tanks/new',
 ]

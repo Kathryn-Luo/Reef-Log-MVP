@@ -26,12 +26,18 @@ export type ParseCreatureProfileResult
   = | { ok: true, value: CreatureProfileInput }
     | { ok: false, message: string }
 
+export interface CreatureProfileDateLimits {
+  observedSickOn?: string | null
+  diedOn?: string | null
+}
+
 function toTrimmedText(raw: unknown): string {
   return typeof raw === 'string' ? raw.trim() : ''
 }
 
-function utcDateOnly(now: Date): string {
-  return now.toISOString().slice(0, 10)
+/** 以 `Date#getTimezoneOffset()` 的符號規則取得該時區的 YYYY-MM-DD。 */
+export function dateOnlyAtTimeZoneOffset(now: Date, timeZoneOffsetMinutes: number): string {
+  return new Date(now.getTime() - timeZoneOffsetMinutes * 60_000).toISOString().slice(0, 10)
 }
 
 function parsePrice(raw: unknown): { ok: true, value: number | null } | { ok: false, message: string } {
@@ -61,6 +67,7 @@ function parsePrice(raw: unknown): { ok: true, value: number | null } | { ok: fa
 export function parseCreatureProfileInput(
   raw: unknown,
   now: Date = new Date(),
+  dateLimits: CreatureProfileDateLimits = {},
 ): ParseCreatureProfileResult {
   const source = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
 
@@ -90,8 +97,27 @@ export function parseCreatureProfileInput(
     return { ok: false, message: '入缸日請選擇一個實際存在的日期。' }
   }
 
-  if (addedOn > utcDateOnly(now)) {
+  const timeZoneOffsetMinutes = source.timeZoneOffsetMinutes
+
+  if (
+    typeof timeZoneOffsetMinutes !== 'number'
+    || !Number.isInteger(timeZoneOffsetMinutes)
+    || timeZoneOffsetMinutes < -840
+    || timeZoneOffsetMinutes > 720
+  ) {
+    return { ok: false, message: '時區資訊不正確，請重新整理後再試。' }
+  }
+
+  if (addedOn > dateOnlyAtTimeZoneOffset(now, timeZoneOffsetMinutes)) {
     return { ok: false, message: '入缸日不能晚於今天。' }
+  }
+
+  if (dateLimits.observedSickOn && addedOn > dateLimits.observedSickOn) {
+    return { ok: false, message: '入缸日不能晚於發病日。' }
+  }
+
+  if (dateLimits.diedOn && addedOn > dateLimits.diedOn) {
+    return { ok: false, message: '入缸日不能晚於死亡日。' }
   }
 
   const price = parsePrice(source.price)

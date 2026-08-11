@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { TankOption } from '#shared/types/home'
-import type { CreatureProfileInput, CreatureProfileResponse } from '#shared/types/creature'
+import type { CreatureProfileRequest, CreatureProfileResponse } from '#shared/types/creature'
 import { apiErrorMessage } from '#shared/utils/apiError'
 
 useSeoMeta({ title: '新增生物 · ReefLog' })
@@ -22,7 +22,7 @@ const submitting = ref(false)
 const error = ref<string | null>(null)
 const { failed: loadFailed, retrying, retry } = useLoadFailure([status], refresh)
 
-async function submit(input: CreatureProfileInput) {
+async function submit(input: CreatureProfileRequest) {
   if (!currentTank.value) {
     error.value = '找不到可加入生物的缸。'
     return

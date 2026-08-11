@@ -613,7 +613,10 @@ export async function updateOwnedCreatureProfile(
     return owned
   }
 
-  const parsed = parseCreatureProfileInput(await readBody(), now)
+  const parsed = parseCreatureProfileInput(await readBody(), now, {
+    observedSickOn: owned.value.observedSickOn,
+    diedOn: owned.value.diedOn,
+  })
 
   if (!parsed.ok) {
     return { ok: false, error: invalidInput('Invalid creature profile input', parsed.message) }

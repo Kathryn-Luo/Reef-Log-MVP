@@ -21,6 +21,7 @@ const VALID_BODY = {
   subCategory: '神仙',
   addedOn: '2026-08-01',
   price: '1280.50',
+  timeZoneOffsetMinutes: -480,
 }
 
 const tanks = [
@@ -44,6 +45,40 @@ const creatures = [
     ailment: null,
     diedOn: null,
     causeOfDeath: null,
+    deathNote: null,
+  },
+  {
+    id: 'creature-sick',
+    tankId: 'tank-a',
+    name: '生病的魚',
+    scientificName: null,
+    category: 'FISH',
+    subCategory: null,
+    photoUrl: null,
+    addedOn: new Date('2026-07-01T00:00:00.000Z'),
+    price: null,
+    status: 'SICK',
+    observedSickOn: new Date('2026-08-05T00:00:00.000Z'),
+    ailment: '白點',
+    diedOn: null,
+    causeOfDeath: null,
+    deathNote: null,
+  },
+  {
+    id: 'creature-dead',
+    tankId: 'tank-a',
+    name: '死亡的魚',
+    scientificName: null,
+    category: 'FISH',
+    subCategory: null,
+    photoUrl: null,
+    addedOn: new Date('2026-07-01T00:00:00.000Z'),
+    price: null,
+    status: 'DEAD',
+    observedSickOn: null,
+    ailment: null,
+    diedOn: new Date('2026-08-05T00:00:00.000Z'),
+    causeOfDeath: 'UNKNOWN',
     deathNote: null,
   },
   {
@@ -200,6 +235,26 @@ describe('PATCH /api/creatures/:id/profile', () => {
     expect(client.creature.update).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['creature-sick', '發病日'],
+    ['creature-dead', '死亡日'],
+  ])('拒絕將 %s 的入缸日改到既有%s之後', async (creatureId, dateLabel) => {
+    const client = fakeClient()
+    const result = await updateOwnedCreatureProfile(
+      client,
+      USER_A,
+      creatureId,
+      bodyReader({ ...VALID_BODY, addedOn: '2026-08-06' }),
+      NOW,
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { statusCode: 400, data: { message: `入缸日不能晚於${dateLabel}。` } },
+    })
+    expect(client.creature.update).not.toHaveBeenCalled()
+  })
+
   it('只更新基本資料並回傳正規化後的內容', async () => {
     const client = fakeClient()
     const result = await updateOwnedCreatureProfile(client, USER_A, 'creature-a', bodyReader(VALID_BODY), NOW)
@@ -208,7 +263,16 @@ describe('PATCH /api/creatures/:id/profile', () => {
       ok: true,
       value: { creature: { id: 'creature-a', name: '火焰仙', status: 'ALIVE', price: 1280.5 } },
     })
-    expect(client.creature.update.mock.calls[0]![0].data).toEqual({
+    const update = client.creature.update.mock.calls[0]![0]
+    expect(update.where).toEqual({
+      id: 'creature-a',
+      tank: { userId: 'user-a', archivedAt: null },
+      AND: [
+        { OR: [{ observedSickOn: null }, { observedSickOn: { gte: new Date('2026-08-01T00:00:00.000Z') } }] },
+        { OR: [{ diedOn: null }, { diedOn: { gte: new Date('2026-08-01T00:00:00.000Z') } }] },
+      ],
+    })
+    expect(update.data).toEqual({
       name: '火焰仙',
       scientificName: 'Centropyge loriculus',
       category: 'FISH',

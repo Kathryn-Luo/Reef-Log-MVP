@@ -16,6 +16,12 @@ export interface CreatureProfileInput {
   price: number | null
 }
 
+/** 寫入 API 額外需要的使用者時區；不會存入 Creature。 */
+export interface CreatureProfileRequest extends CreatureProfileInput {
+  /** `Date#getTimezoneOffset()` 的分鐘數，範圍涵蓋 UTC+14 到 UTC-12。 */
+  timeZoneOffsetMinutes: number
+}
+
 /** 對應 schema.prisma 的 enum DeathCause */
 export type DeathCauseKey = 'DISEASE' | 'WATER_QUALITY' | 'PREDATION' | 'JUMPED' | 'STARVATION' | 'UNKNOWN'
 

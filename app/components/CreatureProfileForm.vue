@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { CreatureCategoryKey } from '#shared/types/home'
-import type { CreatureProfileInput } from '#shared/types/creature'
-import { CREATURE_CATEGORY_OPTIONS, parseCreatureProfileInput } from '#shared/utils/creatureForm'
+import type { CreatureProfileRequest } from '#shared/types/creature'
+import { CREATURE_CATEGORY_OPTIONS, dateOnlyAtTimeZoneOffset, parseCreatureProfileInput } from '#shared/utils/creatureForm'
 
 interface CreatureProfileInitialValue {
   name: string
@@ -21,7 +21,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  submit: [value: CreatureProfileInput]
+  submit: [value: CreatureProfileRequest]
 }>()
 
 const form = reactive<CreatureProfileInitialValue>({
@@ -41,13 +41,8 @@ const canSubmit = computed(() =>
   && form.addedOn.trim().length > 0,
 )
 
-const today = (() => {
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = `${now.getMonth() + 1}`.padStart(2, '0')
-  const day = `${now.getDate()}`.padStart(2, '0')
-  return `${year}-${month}-${day}`
-})()
+const initialNow = new Date()
+const today = dateOnlyAtTimeZoneOffset(initialNow, initialNow.getTimezoneOffset())
 
 function chooseCategory(category: CreatureCategoryKey) {
   form.category = category
@@ -55,7 +50,8 @@ function chooseCategory(category: CreatureCategoryKey) {
 }
 
 function submit() {
-  const parsed = parseCreatureProfileInput(form)
+  const timeZoneOffsetMinutes = new Date().getTimezoneOffset()
+  const parsed = parseCreatureProfileInput({ ...form, timeZoneOffsetMinutes })
 
   if (!parsed.ok) {
     localError.value = parsed.message
@@ -63,7 +59,7 @@ function submit() {
   }
 
   localError.value = null
-  emit('submit', parsed.value)
+  emit('submit', { ...parsed.value, timeZoneOffsetMinutes })
 }
 </script>
 

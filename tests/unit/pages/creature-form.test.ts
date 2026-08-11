@@ -128,6 +128,7 @@ describe('/creatures/new', () => {
       subCategory: '神仙',
       addedOn: '2026-08-01',
       price: 1280.5,
+      timeZoneOffsetMinutes: new Date().getTimezoneOffset(),
     })
     expect(navigateToMock).toHaveBeenCalledWith('/creatures/creature-new')
   })

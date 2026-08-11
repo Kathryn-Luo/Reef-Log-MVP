@@ -80,15 +80,24 @@ export async function updateCreatureProfile(
   userId: string,
   input: CreatureProfileInput,
 ): Promise<CreatureDetailDto | null> {
+  const addedOn = toDate(input.addedOn)!
+
   try {
     const creature = await client.creature.update({
-      where: { id: creatureId, tank: { userId, archivedAt: null } },
+      where: {
+        id: creatureId,
+        tank: { userId, archivedAt: null },
+        AND: [
+          { OR: [{ observedSickOn: null }, { observedSickOn: { gte: addedOn } }] },
+          { OR: [{ diedOn: null }, { diedOn: { gte: addedOn } }] },
+        ],
+      },
       data: {
         name: input.name,
         scientificName: input.scientificName,
         category: input.category,
         subCategory: input.subCategory,
-        addedOn: toDate(input.addedOn)!,
+        addedOn,
         price: input.price,
       },
       ...WITH_TANK_NAME,

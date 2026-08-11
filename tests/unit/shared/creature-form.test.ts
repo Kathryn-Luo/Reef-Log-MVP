@@ -15,6 +15,7 @@ const VALID_INPUT = {
   subCategory: ' 神仙 ',
   addedOn: '2026-08-11',
   price: '1280.50',
+  timeZoneOffsetMinutes: -480,
 }
 
 describe('parseCreatureProfileInput', () => {
@@ -66,6 +67,28 @@ describe('parseCreatureProfileInput', () => {
     expect(parseCreatureProfileInput({ ...VALID_INPUT, addedOn: '2026-08-12' }, NOW))
       .toEqual({ ok: false, message: '入缸日不能晚於今天。' })
     expect(parseCreatureProfileInput({ ...VALID_INPUT, addedOn: '2026-08-11' }, NOW).ok).toBe(true)
+  })
+
+  it('以使用者時區判斷今天，台灣午夜後可登錄當地今天', () => {
+    const taipeiMidnight = new Date('2026-08-11T16:30:00.000Z')
+
+    expect(parseCreatureProfileInput({ ...VALID_INPUT, addedOn: '2026-08-12' }, taipeiMidnight).ok).toBe(true)
+    expect(parseCreatureProfileInput({ ...VALID_INPUT, addedOn: '2026-08-12', timeZoneOffsetMinutes: 0 }, taipeiMidnight))
+      .toEqual({ ok: false, message: '入缸日不能晚於今天。' })
+  })
+
+  it.each([undefined, 'bad', -841, 721, 1.5])('拒絕不合法的時區 offset：%s', (timeZoneOffsetMinutes) => {
+    expect(parseCreatureProfileInput({ ...VALID_INPUT, timeZoneOffsetMinutes }, NOW))
+      .toEqual({ ok: false, message: '時區資訊不正確，請重新整理後再試。' })
+  })
+
+  it.each([
+    [{ observedSickOn: '2026-08-05' }, '入缸日不能晚於發病日。'],
+    [{ diedOn: '2026-08-05' }, '入缸日不能晚於死亡日。'],
+  ])('入缸日不得越過既有病亡日期', (dateLimits, message) => {
+    expect(parseCreatureProfileInput({ ...VALID_INPUT, addedOn: '2026-08-06' }, NOW, dateLimits))
+      .toEqual({ ok: false, message })
+    expect(parseCreatureProfileInput({ ...VALID_INPUT, addedOn: '2026-08-05' }, NOW, dateLimits).ok).toBe(true)
   })
 
   it('價格留白與填 0 是不同的值', () => {

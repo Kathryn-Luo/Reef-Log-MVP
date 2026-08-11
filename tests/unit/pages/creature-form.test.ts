@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mockNuxtImport, mountSuspended, registerEndpoint } from '@nuxt/test-utils/runtime'
-import { enableAutoUnmount, flushPromises } from '@vue/test-utils'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import CreatureProfileForm from '../../../app/components/CreatureProfileForm.vue'
 import NewCreaturePage from '../../../app/pages/creatures/new.vue'
 import EditCreaturePage from '../../../app/pages/creatures/[id]/edit.vue'
 import { signedInUserSession } from '../support/session'
@@ -15,6 +16,8 @@ const state = {
   updateBody: null as Record<string, unknown> | null,
   createCalls: 0,
   updateCalls: 0,
+  sandboxCalls: 0,
+  tanksReady: true,
 }
 
 interface MockNodeEvent {
@@ -41,11 +44,22 @@ const CREATURE = {
 } as const
 
 registerEndpoint('/api/tanks', () => ({
-  tanks: [
-    { id: 'tank-1', name: '主缸', sizeSpec: null, volumeLiters: null, setupType: null, colorHex: null },
-    { id: 'tank-2', name: '珊瑚缸', sizeSpec: null, volumeLiters: null, setupType: null, colorHex: null },
-  ],
+  tanks: state.tanksReady
+    ? [
+        { id: 'tank-1', name: '主缸', sizeSpec: null, volumeLiters: null, setupType: null, colorHex: null },
+        { id: 'tank-2', name: '珊瑚缸', sizeSpec: null, volumeLiters: null, setupType: null, colorHex: null },
+      ]
+    : [],
 }))
+
+registerEndpoint('/api/guest-sandbox', {
+  method: 'POST',
+  handler: () => {
+    state.sandboxCalls += 1
+    state.tanksReady = true
+    return { copied: 1, alreadySeeded: false }
+  },
+})
 
 registerEndpoint('/api/tanks/tank-2/creatures', {
   method: 'POST',
@@ -69,12 +83,19 @@ registerEndpoint('/api/creatures/creature-1/profile', {
 
 enableAutoUnmount(afterEach)
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 beforeEach(() => {
   clearNuxtData()
+  clearNuxtState()
   state.createBody = null
   state.updateBody = null
   state.createCalls = 0
   state.updateCalls = 0
+  state.sandboxCalls = 0
+  state.tanksReady = true
   navigateToMock.mockReset()
 })
 
@@ -85,6 +106,19 @@ async function fill(page: Awaited<ReturnType<typeof mountSuspended>>, values: Re
 }
 
 describe('/creatures/new', () => {
+  it('訪客示範資料尚未備妥時先補建並刷新缸清單', async () => {
+    state.tanksReady = false
+
+    const page = await mountSuspended(NewCreaturePage, { route: '/creatures/new' })
+    for (let attempt = 0; attempt < 10 && !page.find('[data-testid="creature-profile-form"]').exists(); attempt++) {
+      await flushPromises()
+    }
+
+    expect(state.sandboxCalls).toBe(1)
+    expect(page.find('[data-testid="creature-profile-form"]').exists()).toBe(true)
+    expect(page.text()).not.toContain('還沒有任何缸')
+  })
+
   it('顯示六個基本資料欄位，不出現照片、狀態或刪除操作', async () => {
     const page = await mountSuspended(NewCreaturePage, { route: '/creatures/new?tank=tank-2' })
 
@@ -143,6 +177,25 @@ describe('/creatures/new', () => {
     expect(state.createCalls).toBe(0)
     expect(page.findAll('[data-testid="creature-profile-error"]')).toHaveLength(1)
     expect(page.get('[data-testid="creature-profile-error"]').text()).toContain('不能晚於今天')
+  })
+})
+
+describe('CreatureProfileForm', () => {
+  it('頁面跨過本地午夜時更新入缸日上限', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 7, 11, 23, 59, 59, 900))
+
+    const form = mount(CreatureProfileForm, {
+      props: { title: '新增生物', backTo: '/creatures' },
+    })
+    await form.vm.$nextTick()
+
+    expect(form.get('[name="addedOn"]').attributes('max')).toBe('2026-08-11')
+
+    await vi.advanceTimersByTimeAsync(200)
+    await form.vm.$nextTick()
+
+    expect(form.get('[name="addedOn"]').attributes('max')).toBe('2026-08-12')
   })
 })
 

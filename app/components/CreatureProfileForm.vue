@@ -41,8 +41,25 @@ const canSubmit = computed(() =>
   && form.addedOn.trim().length > 0,
 )
 
-const initialNow = new Date()
-const today = dateOnlyAtTimeZoneOffset(initialNow, initialNow.getTimezoneOffset())
+const today = ref<string>()
+let todayRefreshTimer: number | undefined
+
+function refreshToday() {
+  const now = new Date()
+  today.value = dateOnlyAtTimeZoneOffset(now, now.getTimezoneOffset())
+
+  const nextMidnight = new Date(now)
+  nextMidnight.setHours(24, 0, 0, 0)
+  todayRefreshTimer = window.setTimeout(refreshToday, nextMidnight.getTime() - now.getTime() + 50)
+}
+
+onMounted(refreshToday)
+
+onBeforeUnmount(() => {
+  if (todayRefreshTimer !== undefined) {
+    window.clearTimeout(todayRefreshTimer)
+  }
+})
 
 function chooseCategory(category: CreatureCategoryKey) {
   form.category = category

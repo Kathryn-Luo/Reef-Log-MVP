@@ -21,6 +21,16 @@ const currentTank = computed(() =>
 const submitting = ref(false)
 const error = ref<string | null>(null)
 const { failed: loadFailed, retrying, retry } = useLoadFailure([status], refresh)
+const { preparing: sandboxPreparing, ensure } = useGuestSandbox()
+
+const tanksEmpty = computed(() => status.value === 'success' && tanks.value.length === 0)
+const preparing = computed(() => !loadFailed.value && tanksEmpty.value && sandboxPreparing.value)
+
+watch(tanks, () => {
+  if (tanksEmpty.value) {
+    void ensure(refresh)
+  }
+}, { immediate: true })
 
 async function submit(input: CreatureProfileRequest) {
   if (!currentTank.value) {
@@ -57,6 +67,8 @@ async function submit(input: CreatureProfileRequest) {
     :retrying="retrying"
     @retry="retry"
   />
+
+  <SandboxPreparingState v-else-if="preparing" />
 
   <section
     v-else-if="!currentTank"

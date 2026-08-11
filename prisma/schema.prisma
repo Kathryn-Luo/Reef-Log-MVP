@@ -444,7 +444,7 @@ enum DeathCause {
 ///
 /// 「上次 07/01」「下次到期」「今天該做 / 3 天後」全部是推算值，不存欄位：
 ///   lastCompletedAt = 最後一筆 MaintenanceCompletion.completedAt
-///   nextDueOn       = (lastCompletedAt 的日期 ?? startOn) + intervalDays
+///   nextDueOn       = (lastCompletedAt 的日期 ?? startOn ?? createdOn) + intervalDays
 model MaintenanceTask {
   id     String @id @default(cuid())
   tankId String
@@ -457,6 +457,16 @@ model MaintenanceTask {
 
   /// 尚無任何完成紀錄時，用來起算第一次到期日；null 則視為建立當天起算
   startOn DateTime? @db.Date
+
+  /// 任務建立當下的使用者當地日曆日，用於 startOn 留白時推算第一次到期日。
+  ///
+  /// 不能從 createdAt 推回：createdAt 是 UTC 時間點，UTC+8 使用者在當地 00:30 建立時，
+  /// UTC 日期仍是前一天。也不能設資料庫 default，因為資料庫不知道使用者時區。
+  ///
+  /// nullable 是 rolling deploy 與既有資料的相容邊界：migration 先上、舊 Vercel instance
+  /// 還在服務時不會因缺欄位而寫入失敗；新建立任務由 API 明確填入。legacy null 由應用層
+  /// 暫時退回 createdAt 的 UTC 日期，不捏造無法從既有資料證明的當地時區。
+  createdOn DateTime? @db.Date
 
   /// 停用而不刪除（保留歷史完成紀錄）
   isActive Boolean @default(true)

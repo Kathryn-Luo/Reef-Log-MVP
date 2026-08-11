@@ -33,6 +33,7 @@ function task(overrides: Partial<MaintenanceTaskDto> & { id: string }): Maintena
     startOn: null,
     createdOn: '2026-06-01',
     displayOrder: 0,
+    isActive: true,
     lastCompletion: null,
     ...overrides,
   }

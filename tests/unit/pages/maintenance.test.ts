@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mockNuxtImport, mountSuspended, registerEndpoint } from '@nuxt/test-utils/runtime'
 import { enableAutoUnmount, flushPromises } from '@vue/test-utils'
-import MaintenancePage from '../../../app/pages/maintenance.vue'
+import MaintenancePage from '../../../app/pages/maintenance/index.vue'
 import { signedInUserSession } from '../support/session'
 import type { TankOption } from '#shared/types/home'
 import type { MaintenanceCompletionDto, MaintenanceTaskDto } from '#shared/types/maintenance'
@@ -52,6 +52,7 @@ function task(overrides: Partial<MaintenanceTaskDto> & { id: string, name: strin
     startOn: null,
     createdOn: addDays(TODAY, -90),
     displayOrder: 0,
+    isActive: true,
     lastCompletion: null,
     ...overrides,
   }
@@ -305,13 +306,25 @@ describe('保養提醒 — 頁首', () => {
     expect(page.get('[data-testid="upcoming-section"]').text()).toContain('即將到期')
   })
 
-  // 4-1：＋ 新增按鈕連向的路由屬於 #17，那一頁還不存在（連過去就是 404）。
-  // 人類的決定是「這一輪先不渲染」，所以這裡守住它沒有被順手加回來。
-  it('這一輪不渲染 ＋ 新增按鈕（#17 的表單還不存在）', async () => {
+  // Given 我正在查看保養提醒 / Then 頁首提供不被勾選狀態影響的新增入口
+  it('頁首新增按鈕連到新增任務表單', async () => {
+    const page = await open()
+    const add = page.get('[data-testid="maintenance-add"]')
+
+    expect(add.attributes('href')).toBe('/maintenance/tasks/new')
+    expect(add.attributes('disabled')).toBeUndefined()
+    expect(add.attributes('aria-label')).toBe('新增保養任務')
+  })
+
+  // Given 清單同時有今天與即將到期的任務 / Then 每列有自己的編輯入口
+  it('今天與即將到期的每列都有獨立編輯連結', async () => {
     const page = await open()
 
-    expect(page.find('[data-testid="maintenance-add"]').exists()).toBe(false)
-    expect(page.findAll('a').map(link => link.attributes('href'))).not.toContain('/maintenance/new')
+    expect(todayRow(page, 'task-water').get('[data-testid="maintenance-edit"]').attributes('href'))
+      .toBe('/maintenance/tasks/task-water/edit')
+    expect(page.get('[data-testid="upcoming-row"][data-task-id="task-floss"]')
+      .get('[data-testid="maintenance-edit"]').attributes('href'))
+      .toBe('/maintenance/tasks/task-floss/edit')
   })
 })
 
@@ -609,13 +622,14 @@ describe('保養提醒 — 空狀態', () => {
   })
 
   // 4-1 既然不渲染 ＋ 按鈕，空狀態這裡也就只有文字、沒有按不動的入口
-  it('空狀態沒有按鈕', async () => {
+  it('空狀態提供新增第一個任務的入口', async () => {
     state.tasks = []
 
     const page = await open()
+    const action = page.get('[data-testid="maintenance-empty-add"]')
 
-    expect(page.get('[data-testid="maintenance-empty"]').findAll('button')).toHaveLength(0)
-    expect(page.get('[data-testid="maintenance-empty"]').findAll('a')).toHaveLength(0)
+    expect(action.attributes('href')).toBe('/maintenance/tasks/new')
+    expect(action.text()).toContain('新增第一個任務')
   })
 
   // 4-4：「今天該做」空、「即將到期」有東西是正常且常見的，這時那一區給一句短句就好，

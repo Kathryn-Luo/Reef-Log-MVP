@@ -12,16 +12,13 @@ import { buildTodayRowViews, buildUpcomingRowViews, formatMaintenanceDate } from
 import { apiErrorMessage } from '#shared/utils/apiError'
 
 // 保養提醒（Epic #1 screen-7，issue #125 ＝ #15 的畫面那一半）。
+// 檔案放在 maintenance/index.vue，讓 /maintenance/tasks/* 不會被誤當成它的巢狀內容。
 //
 // 資料那一半是 #122 / PR #136：GET 回的是**事實**（啟用中的任務 + 每個任務最後一筆完成
 // 紀錄），分區、徽章與 nextDueOn 全部由 #shared/utils/maintenance 的
 // buildMaintenanceSections(tasks, now) 算——那些值都要問一件 server 答不出來的事：
 // 使用者的「今天」是哪一天（server 跑 UTC、使用者在 UTC+8）。
 //
-// ＋ 新增按鈕這一輪刻意不渲染：它連向的表單屬於 #17，那一頁還不存在，現在連過去就是
-// 404。空狀態那句「新增第一個任務」指的也是同一個地方，所以兩處都只有文字（issue #125
-// 第 4-1 節，人類已拍板）。#17 有畫面時再連同它一起加。
-
 useSeoMeta({
   title: '保養提醒 · ReefLog',
 })
@@ -206,17 +203,31 @@ async function toggle(row: MaintenanceTodayRowView) {
 <template>
   <section class="mx-auto max-w-2xl pb-10">
     <!-- 頁首：保養提醒 · <缸名> · <當地的今天>。三態下都留著，人才知道自己在哪一頁 -->
-    <header class="px-4 pt-[calc(1.5rem+env(safe-area-inset-top))]">
-      <h1 class="truncate text-3xl font-bold">
-        保養提醒
-      </h1>
+    <header class="flex items-start justify-between gap-3 px-4 pt-[calc(1.5rem+env(safe-area-inset-top))]">
+      <div class="min-w-0">
+        <h1 class="truncate text-3xl font-bold">
+          保養提醒
+        </h1>
 
-      <p
-        data-testid="maintenance-subtitle"
-        class="mt-1 truncate text-sm text-muted"
-      >
-        {{ subtitle }}
-      </p>
+        <p
+          data-testid="maintenance-subtitle"
+          class="mt-1 truncate text-sm text-muted"
+        >
+          {{ subtitle }}
+        </p>
+      </div>
+
+      <UButton
+        v-if="tank"
+        data-testid="maintenance-add"
+        to="/maintenance/tasks/new"
+        icon="i-lucide-plus"
+        color="primary"
+        variant="soft"
+        size="lg"
+        aria-label="新增保養任務"
+        class="shrink-0 rounded-full"
+      />
     </header>
 
     <!--
@@ -283,10 +294,7 @@ async function toggle(row: MaintenanceTodayRowView) {
       </UButton>
     </div>
 
-    <!--
-      兩區都空：一則空狀態。這裡沒有按鈕——新增任務的表單（#17）還不存在，
-      給一個按了 404 的入口比暫時沒有它更難解釋（issue #125 第 4-1 / 4-4 節）。
-    -->
+    <!-- 兩區都空：一則空狀態，並直接提供新增第一個任務的入口。 -->
     <div
       v-else-if="isEmpty"
       data-testid="maintenance-empty"
@@ -309,6 +317,17 @@ async function toggle(row: MaintenanceTodayRowView) {
       <p class="mx-auto mt-3 max-w-xs text-balance text-muted">
         換水、洗棉、校正折射計這些週期性的工作，新增第一個任務之後就會在這裡提醒你。
       </p>
+
+      <UButton
+        data-testid="maintenance-empty-add"
+        to="/maintenance/tasks/new"
+        icon="i-lucide-plus"
+        color="primary"
+        size="xl"
+        class="mt-8"
+      >
+        新增第一個任務
+      </UButton>
     </div>
 
     <template v-else>
@@ -424,6 +443,16 @@ async function toggle(row: MaintenanceTodayRowView) {
                 />
                 {{ row.statusText }}
               </span>
+
+              <UButton
+                data-testid="maintenance-edit"
+                :to="`/maintenance/tasks/${row.id}/edit`"
+                icon="i-lucide-pencil"
+                color="neutral"
+                variant="ghost"
+                :aria-label="`編輯 ${row.name}`"
+                class="shrink-0 rounded-full"
+              />
             </div>
           </li>
         </ul>
@@ -501,6 +530,16 @@ async function toggle(row: MaintenanceTodayRowView) {
             >
               {{ row.dueText }}
             </span>
+
+            <UButton
+              data-testid="maintenance-edit"
+              :to="`/maintenance/tasks/${row.id}/edit`"
+              icon="i-lucide-pencil"
+              color="neutral"
+              variant="ghost"
+              :aria-label="`編輯 ${row.name}`"
+              class="shrink-0 rounded-full"
+            />
           </li>
         </ul>
 

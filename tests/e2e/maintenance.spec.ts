@@ -87,8 +87,7 @@ test('頁首與兩個區塊', async ({ page }) => {
   await expect(page.getByTestId('today-section')).toContainText('今天該做')
   await expect(page.getByTestId('upcoming-section')).toContainText('即將到期')
 
-  // 4-1：＋ 新增按鈕連向的表單屬於 #17，那一頁還不存在，這一輪刻意不渲染
-  await expect(page.getByTestId('maintenance-add')).toHaveCount(0)
+  await expect(page.getByTestId('maintenance-add')).toHaveAttribute('href', '/maintenance/tasks/new')
 })
 
 // Given 某個任務在今天該做清單中且未完成 / When 我點擊它的 checkbox

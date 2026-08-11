@@ -23,6 +23,8 @@ const PROTECTED_PATHS = [
   '/log',
   '/trends',
   '/maintenance',
+  '/maintenance/tasks/new',
+  '/maintenance/tasks/task-1/edit',
   '/creatures',
   '/creatures/new',
   '/creatures/f5',

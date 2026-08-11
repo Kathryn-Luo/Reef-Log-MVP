@@ -66,6 +66,8 @@ async function submit(input: MaintenanceTaskInput) {
     :key="task.id"
     title="編輯保養任務"
     :initial="initial"
+    :fallback-start-on="task.createdOn"
+    :last-completed-on="task.lastCompletion?.completedOn"
     :submitting="submitting"
     :error="error"
     @submit="submit"

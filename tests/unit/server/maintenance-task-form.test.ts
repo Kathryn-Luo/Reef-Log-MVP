@@ -39,6 +39,7 @@ function fakeClient() {
       name: '換水',
       intervalDays: 7,
       startOn: date('2026-07-01'),
+      createdOn: date('2026-06-30'),
       isActive: true,
       displayOrder: 3,
       note: null,
@@ -51,6 +52,7 @@ function fakeClient() {
       name: '別人的任務',
       intervalDays: 30,
       startOn: null,
+      createdOn: date('2026-07-01'),
       isActive: true,
       displayOrder: 0,
       note: null,
@@ -99,6 +101,7 @@ function fakeClient() {
           name: data.name as string,
           intervalDays: data.intervalDays as number,
           startOn: data.startOn as Date | null,
+          createdOn: data.createdOn as Date | null,
           isActive: data.isActive as boolean,
           displayOrder: data.displayOrder as number,
           note: null,
@@ -178,10 +181,10 @@ describe('保養任務 detail/create/update API', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      value: { task: { id: 'task-new', name: '換活性碳', intervalDays: 60, startOn: '2026-08-11', isActive: true, displayOrder: 4 } },
+      value: { task: { id: 'task-new', name: '換活性碳', intervalDays: 60, startOn: null, createdOn: '2026-08-11', isActive: true, displayOrder: 4 } },
     })
     expect(client.maintenanceTask.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ tankId: 'tank-a', startOn: date('2026-08-11'), isActive: true, displayOrder: 4 }),
+      data: expect.objectContaining({ tankId: 'tank-a', startOn: null, createdOn: date('2026-08-11'), isActive: true, displayOrder: 4 }),
     }))
   })
 
@@ -197,8 +200,27 @@ describe('保養任務 detail/create/update API', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      value: { task: { startOn: '2026-08-12', createdOn: '2026-08-11' } },
+      value: { task: { startOn: null, createdOn: '2026-08-12' } },
     })
+  })
+
+  it('編輯時清空起算日仍保留原始當地建立日', async () => {
+    const client = fakeClient()
+
+    const result = await updateOwnedMaintenanceTask(
+      client,
+      USER_A,
+      'task-a',
+      readBody({ ...VALID_BODY, startOn: null }),
+    )
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: { task: { startOn: null, createdOn: '2026-06-30' } },
+    })
+    expect(client.maintenanceTask.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.not.objectContaining({ createdOn: expect.anything() }),
+    }))
   })
 
   it('建立請求缺少或偽造超出時區範圍的當地建立日時回 400', async () => {
@@ -276,6 +298,24 @@ describe('保養任務 detail/create/update API', () => {
       new Date('2026-08-11T03:00:00.000Z'),
     )).resolves.toMatchObject({ ok: false, error: { statusCode: 400 } })
     await expect(updateOwnedMaintenanceTask(client, USER_A, 'task-a', readBody(oversized)))
+      .resolves.toMatchObject({ ok: false, error: { statusCode: 400 } })
+
+    expect(client.maintenanceTask.create).not.toHaveBeenCalled()
+    expect(client.maintenanceTask.update).not.toHaveBeenCalled()
+  })
+
+  it('POST 與 PATCH 拒絕讓到期日超出四位數年份', async () => {
+    const client = fakeClient()
+    const extendedYear = { ...VALID_BODY, intervalDays: 3_000_000 }
+
+    await expect(createOwnedMaintenanceTask(
+      client,
+      USER_A,
+      'tank-a',
+      readBody({ ...extendedYear, localCreatedOn: '2026-08-11' }),
+      new Date('2026-08-11T03:00:00.000Z'),
+    )).resolves.toMatchObject({ ok: false, error: { statusCode: 400 } })
+    await expect(updateOwnedMaintenanceTask(client, USER_A, 'task-a', readBody(extendedYear)))
       .resolves.toMatchObject({ ok: false, error: { statusCode: 400 } })
 
     expect(client.maintenanceTask.create).not.toHaveBeenCalled()

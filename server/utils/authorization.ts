@@ -477,7 +477,10 @@ export async function updateOwnedMaintenanceTask(
     return owned
   }
 
-  const parsed = parseMaintenanceTaskInput(await readBody())
+  const parsed = parseMaintenanceTaskInput(await readBody(), {
+    fallbackStartOn: owned.value.createdOn,
+    lastCompletedOn: owned.value.lastCompletion?.completedOn,
+  })
 
   if (!parsed.ok) {
     return { ok: false, error: invalidInput('Invalid maintenance task input', parsed.message) }

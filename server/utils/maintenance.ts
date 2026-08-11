@@ -31,6 +31,8 @@ function toDateOnly(value: Date): string {
   return value.toISOString().slice(0, 10)
 }
 
+function toDate(value: string): Date
+function toDate(value: string | null): Date | null
 function toDate(value: string | null): Date | null {
   return value === null ? null : new Date(`${value}T00:00:00.000Z`)
 }
@@ -113,8 +115,9 @@ export async function createMaintenanceTask(
       tankId,
       name: input.name,
       intervalDays: input.intervalDays,
-      // startOn 留白時用瀏覽器的當地建立日，不能從 UTC createdAt 推回使用者日曆日。
-      startOn: toDate(input.startOn ?? input.localCreatedOn),
+      startOn: toDate(input.startOn),
+      // createdOn 保存瀏覽器的當地建立日；startOn 留白時仍維持 null。
+      createdOn: toDate(input.localCreatedOn),
       isActive: input.isActive,
       displayOrder: (last?.displayOrder ?? -1) + 1,
     },

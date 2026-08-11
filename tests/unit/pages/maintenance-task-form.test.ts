@@ -5,6 +5,7 @@ import NewMaintenanceTaskPage from '../../../app/pages/maintenance/tasks/new.vue
 import EditMaintenanceTaskPage from '../../../app/pages/maintenance/tasks/[id]/edit.vue'
 import { signedInUserSession } from '../support/session'
 import { toLocalDateOnly } from '#shared/utils/maintenance'
+import { maxMaintenanceIntervalDays } from '#shared/utils/maintenanceTaskForm'
 
 const { navigateToMock } = vi.hoisted(() => ({ navigateToMock: vi.fn() }))
 
@@ -132,6 +133,8 @@ describe('/maintenance/tasks/:id/edit', () => {
     expect(page.get('[name="name"]').element.value).toBe('換濾材')
     expect(page.get('[data-testid="maintenance-interval-option"][data-interval="custom"]').attributes('aria-pressed')).toBe('true')
     expect(page.get('[name="intervalDays"]').element.value).toBe('14')
+    expect(page.get('[name="intervalDays"]').attributes('max'))
+      .toBe(String(maxMaintenanceIntervalDays(TASK.lastCompletion.completedOn)))
     expect(page.get('[name="startOn"]').element.value).toBe('2026-08-01')
     expect(page.get('[data-testid="maintenance-task-active"][role="switch"]').attributes('aria-checked')).toBe('true')
   })

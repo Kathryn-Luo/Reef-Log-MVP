@@ -2,7 +2,7 @@
 import type { MaintenanceTaskInput } from '#shared/types/maintenance'
 import {
   MAINTENANCE_INTERVAL_OPTIONS,
-  MAX_MAINTENANCE_INTERVAL_DAYS,
+  maxMaintenanceIntervalDays,
   parseMaintenanceTaskInput,
 } from '#shared/utils/maintenanceTaskForm'
 
@@ -23,6 +23,8 @@ interface MaintenanceTaskFormValue {
 const props = defineProps<{
   title: string
   initial?: Partial<MaintenanceTaskInitialValue>
+  fallbackStartOn?: string
+  lastCompletedOn?: string
   submitting?: boolean
   error?: string | null
 }>()
@@ -45,6 +47,9 @@ const intervalMode = ref(presetIntervals.includes(initialInterval) ? initialInte
 const localError = ref<string | null>(null)
 const visibleError = computed(() => localError.value ?? props.error ?? null)
 const canSubmit = computed(() => form.name.trim().length > 0 && String(form.intervalDays).trim().length > 0)
+const maxIntervalDays = computed(() => maxMaintenanceIntervalDays(
+  props.lastCompletedOn || form.startOn || props.fallbackStartOn || '0000-01-01',
+))
 
 function chooseInterval(value: string) {
   intervalMode.value = value
@@ -61,7 +66,10 @@ function chooseInterval(value: string) {
 }
 
 function submit() {
-  const parsed = parseMaintenanceTaskInput(form)
+  const parsed = parseMaintenanceTaskInput(form, {
+    fallbackStartOn: props.fallbackStartOn,
+    lastCompletedOn: props.lastCompletedOn,
+  })
 
   if (!parsed.ok) {
     localError.value = parsed.message
@@ -174,7 +182,7 @@ function submit() {
           type="number"
           inputmode="numeric"
           min="1"
-          :max="MAX_MAINTENANCE_INTERVAL_DAYS"
+          :max="maxIntervalDays"
           step="1"
           placeholder="天數"
           class="mt-3 w-full"

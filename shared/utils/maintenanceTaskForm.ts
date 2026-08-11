@@ -1,11 +1,26 @@
 import type { CreateMaintenanceTaskInput, MaintenanceTaskInput } from '../types/maintenance'
 import { isDateOnly } from './dateInput'
 
-/**
- * 低於 Prisma Int 上限，也保證四位數年份的 startOn 加上週期後仍在 JavaScript Date 範圍內。
- * 這個技術上限約 26 萬年，遠高於任何實際保養週期。
- */
-export const MAX_MAINTENANCE_INTERVAL_DAYS = 97_000_000
+const DAY_MS = 24 * 60 * 60 * 1000
+const EARLIEST_MAINTENANCE_DATE = '0000-01-01'
+const LATEST_MAINTENANCE_DATE = '9999-12-31'
+const latestMaintenanceDay = Date.parse(`${LATEST_MAINTENANCE_DATE}T00:00:00.000Z`)
+
+/** 從最早四位數年份到 9999-12-31 的絕對上限；實際可用值仍要依起算日縮小。 */
+export const MAX_MAINTENANCE_INTERVAL_DAYS = Math.floor(
+  (latestMaintenanceDay - Date.parse(`${EARLIEST_MAINTENANCE_DATE}T00:00:00.000Z`)) / DAY_MS,
+)
+
+/** 指定起算日後，仍能讓結果維持 `YYYY-MM-DD` 四位數年份的最大週期。 */
+export function maxMaintenanceIntervalDays(startOn: string): number {
+  if (!isDateOnly(startOn)) {
+    return 0
+  }
+
+  return Math.max(0, Math.floor(
+    (latestMaintenanceDay - Date.parse(`${startOn}T00:00:00.000Z`)) / DAY_MS,
+  ))
+}
 
 export const MAINTENANCE_INTERVAL_OPTIONS: readonly { value: number, label: string }[] = [
   { value: 1, label: '每天' },
@@ -14,7 +29,14 @@ export const MAINTENANCE_INTERVAL_OPTIONS: readonly { value: number, label: stri
   { value: 60, label: '每兩個月' },
 ]
 
-const FORBIDDEN_TASK_KEYS = ['tankId', 'displayOrder', 'note', 'completions'] as const
+const FORBIDDEN_TASK_KEYS = ['tankId', 'displayOrder', 'createdOn', 'note', 'completions'] as const
+
+export interface MaintenanceTaskDateContext {
+  /** startOn 留白時的建立當地日。 */
+  fallbackStartOn?: string
+  /** 有完成紀錄時優先於 startOn，與 nextDueOn 的基準一致。 */
+  lastCompletedOn?: string
+}
 
 export type ParseMaintenanceTaskResult
   = | { ok: true, value: MaintenanceTaskInput }
@@ -28,7 +50,10 @@ function trimmedText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-export function parseMaintenanceTaskInput(raw: unknown): ParseMaintenanceTaskResult {
+export function parseMaintenanceTaskInput(
+  raw: unknown,
+  context: MaintenanceTaskDateContext = {},
+): ParseMaintenanceTaskResult {
   const source = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
 
   if (FORBIDDEN_TASK_KEYS.some(key => Object.hasOwn(source, key))) {
@@ -49,14 +74,18 @@ export function parseMaintenanceTaskInput(raw: unknown): ParseMaintenanceTaskRes
     return { ok: false, message: '週期天數請填正整數。' }
   }
 
-  if (intervalDays > MAX_MAINTENANCE_INTERVAL_DAYS) {
-    return { ok: false, message: '週期天數超過可支援範圍。' }
-  }
-
   const startOn = trimmedText(source.startOn)
 
   if (startOn && !isDateOnly(startOn)) {
     return { ok: false, message: '起算日請選擇一個實際存在的日期。' }
+  }
+
+  const effectiveStartOn = context.lastCompletedOn || startOn || context.fallbackStartOn
+
+  if (intervalDays > MAX_MAINTENANCE_INTERVAL_DAYS
+    || (effectiveStartOn !== undefined
+      && (!isDateOnly(effectiveStartOn) || intervalDays > maxMaintenanceIntervalDays(effectiveStartOn)))) {
+    return { ok: false, message: '週期天數超過可支援範圍。' }
   }
 
   const isActive = source.isActive ?? true
@@ -81,12 +110,6 @@ export function parseCreateMaintenanceTaskInput(
   raw: unknown,
   now: Date = new Date(),
 ): ParseCreateMaintenanceTaskResult {
-  const parsed = parseMaintenanceTaskInput(raw)
-
-  if (!parsed.ok) {
-    return parsed
-  }
-
   const source = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
   const localCreatedOn = trimmedText(source.localCreatedOn)
 
@@ -100,6 +123,12 @@ export function parseCreateMaintenanceTaskInput(
 
   if (Math.abs(localDate - serverDate) > dayMs) {
     return { ok: false, message: '建立日期超出可接受範圍。' }
+  }
+
+  const parsed = parseMaintenanceTaskInput(raw, { fallbackStartOn: localCreatedOn })
+
+  if (!parsed.ok) {
+    return parsed
   }
 
   return { ok: true, value: { ...parsed.value, localCreatedOn } }

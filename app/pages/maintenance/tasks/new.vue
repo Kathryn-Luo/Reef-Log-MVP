@@ -17,6 +17,7 @@ const submitting = ref(false)
 const error = ref<string | null>(null)
 const { failed: loadFailed, retrying, retry } = useLoadFailure([status], refresh)
 const { preparing: sandboxPreparing, ensure } = useGuestSandbox()
+const initialLocalCreatedOn = toLocalDateOnly(new Date())
 
 const tanksEmpty = computed(() => status.value === 'success' && tanks.value.length === 0)
 const preparing = computed(() => !loadFailed.value && tanksEmpty.value && sandboxPreparing.value)
@@ -88,6 +89,7 @@ async function submit(input: MaintenanceTaskInput) {
   <MaintenanceTaskForm
     v-else
     title="新增保養任務"
+    :fallback-start-on="initialLocalCreatedOn"
     :submitting="submitting"
     :error="error"
     @submit="submit"

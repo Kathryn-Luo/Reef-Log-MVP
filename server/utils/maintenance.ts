@@ -43,13 +43,9 @@ export function toMaintenanceTaskDto(task: TaskWithCompletions): MaintenanceTask
     name: task.name,
     intervalDays: task.intervalDays,
     startOn: task.startOn ? toDateOnly(task.startOn) : null,
-    // schema.prisma 定的最後一層 fallback：尚無完成紀錄且 startOn 為 null 時，
-    // 視為建立當天起算。少了它，前端算不出那一種任務的 nextDueOn。
-    //
-    // 這裡取的是 UTC 的日曆日（createdAt 是時間點，不是日期）：深夜建立的任務對
-    // UTC+8 的使用者會早一天。差一天只影響「從未完成過、也沒設 startOn」的第一次
-    // 到期日，勾過一次之後就由 completedOn 接手——而那個值本來就是使用者當地的日期。
-    createdOn: toDateOnly(task.createdAt),
+    // 新任務保存使用者當地的建立日；migration／rolling deploy 期間可能存在 legacy null，
+    // 那一態才退回 createdAt 的 UTC 日期，不假設無法從資料證明的使用者時區。
+    createdOn: toDateOnly(task.createdOn ?? task.createdAt),
     displayOrder: task.displayOrder,
     isActive: task.isActive,
     // 從未完成過就是 null，不是假的日期、也不是 0——畫面因此分得出「還沒做過」

@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAINTENANCE_INTERVAL_OPTIONS,
+  MAX_MAINTENANCE_INTERVAL_DAYS,
   parseMaintenanceTaskInput,
 } from '../../../shared/utils/maintenanceTaskForm'
 
@@ -43,6 +44,18 @@ describe('parseMaintenanceTaskInput', () => {
   it.each([0, -1, 1.5, '1.5', '每天', '', null])('拒絕不是正整數的週期：%s', (intervalDays) => {
     expect(parseMaintenanceTaskInput({ ...VALID_INPUT, intervalDays }))
       .toEqual({ ok: false, message: '週期天數請填正整數。' })
+  })
+
+  it.each([2_147_483_648, Number.MAX_SAFE_INTEGER])('拒絕超出可儲存範圍的週期：%s', (intervalDays) => {
+    expect(parseMaintenanceTaskInput({ ...VALID_INPUT, intervalDays }))
+      .toEqual({ ok: false, message: '週期天數超過可支援範圍。' })
+  })
+
+  it('技術上限本身仍可通過，超過一天就被拒絕', () => {
+    expect(parseMaintenanceTaskInput({ ...VALID_INPUT, intervalDays: MAX_MAINTENANCE_INTERVAL_DAYS }))
+      .toMatchObject({ ok: true, value: { intervalDays: MAX_MAINTENANCE_INTERVAL_DAYS } })
+    expect(parseMaintenanceTaskInput({ ...VALID_INPUT, intervalDays: MAX_MAINTENANCE_INTERVAL_DAYS + 1 }))
+      .toEqual({ ok: false, message: '週期天數超過可支援範圍。' })
   })
 
   it('起算日留白寫入 null', () => {

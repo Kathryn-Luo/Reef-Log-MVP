@@ -172,16 +172,48 @@ describe('保養任務 detail/create/update API', () => {
       client,
       USER_A,
       'tank-a',
-      readBody({ name: ' 換活性碳 ', intervalDays: '60', startOn: '' }),
+      readBody({ name: ' 換活性碳 ', intervalDays: '60', startOn: '', localCreatedOn: '2026-08-11' }),
+      new Date('2026-08-11T03:00:00.000Z'),
     )
 
     expect(result).toMatchObject({
       ok: true,
-      value: { task: { id: 'task-new', name: '換活性碳', intervalDays: 60, startOn: null, isActive: true, displayOrder: 4 } },
+      value: { task: { id: 'task-new', name: '換活性碳', intervalDays: 60, startOn: '2026-08-11', isActive: true, displayOrder: 4 } },
     })
     expect(client.maintenanceTask.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ tankId: 'tank-a', startOn: null, isActive: true, displayOrder: 4 }),
+      data: expect.objectContaining({ tankId: 'tank-a', startOn: date('2026-08-11'), isActive: true, displayOrder: 4 }),
     }))
+  })
+
+  it('UTC+8 凌晨建立且起算日留白時，保存瀏覽器的當地建立日', async () => {
+    const client = fakeClient()
+    const result = await createOwnedMaintenanceTask(
+      client,
+      USER_A,
+      'tank-a',
+      readBody({ ...VALID_BODY, startOn: '', localCreatedOn: '2026-08-12' }),
+      new Date('2026-08-11T16:30:00.000Z'),
+    )
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: { task: { startOn: '2026-08-12', createdOn: '2026-08-11' } },
+    })
+  })
+
+  it('建立請求缺少或偽造超出時區範圍的當地建立日時回 400', async () => {
+    const client = fakeClient()
+    const now = new Date('2026-08-11T16:30:00.000Z')
+
+    await expect(createOwnedMaintenanceTask(client, USER_A, 'tank-a', readBody(VALID_BODY), now))
+      .resolves.toMatchObject({ ok: false, error: { statusCode: 400 } })
+    await expect(createOwnedMaintenanceTask(
+      client,
+      USER_A,
+      'tank-a',
+      readBody({ ...VALID_BODY, localCreatedOn: '2026-08-09' }),
+      now,
+    )).resolves.toMatchObject({ ok: false, error: { statusCode: 400 } })
   })
 
   it('編輯週期不修改或刪除既有完成履歷', async () => {
@@ -229,6 +261,24 @@ describe('保養任務 detail/create/update API', () => {
     )
 
     expect(result).toMatchObject({ ok: false, error: { statusCode: 400 } })
+    expect(client.maintenanceTask.update).not.toHaveBeenCalled()
+  })
+
+  it('POST 與 PATCH 對超大週期回 400，不讓 Prisma 寫入時才拋 500', async () => {
+    const client = fakeClient()
+    const oversized = { ...VALID_BODY, intervalDays: 2_147_483_648 }
+
+    await expect(createOwnedMaintenanceTask(
+      client,
+      USER_A,
+      'tank-a',
+      readBody({ ...oversized, localCreatedOn: '2026-08-11' }),
+      new Date('2026-08-11T03:00:00.000Z'),
+    )).resolves.toMatchObject({ ok: false, error: { statusCode: 400 } })
+    await expect(updateOwnedMaintenanceTask(client, USER_A, 'task-a', readBody(oversized)))
+      .resolves.toMatchObject({ ok: false, error: { statusCode: 400 } })
+
+    expect(client.maintenanceTask.create).not.toHaveBeenCalled()
     expect(client.maintenanceTask.update).not.toHaveBeenCalled()
   })
 })

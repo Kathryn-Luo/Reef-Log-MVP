@@ -4,6 +4,7 @@ import { enableAutoUnmount, flushPromises } from '@vue/test-utils'
 import NewMaintenanceTaskPage from '../../../app/pages/maintenance/tasks/new.vue'
 import EditMaintenanceTaskPage from '../../../app/pages/maintenance/tasks/[id]/edit.vue'
 import { signedInUserSession } from '../support/session'
+import { toLocalDateOnly } from '#shared/utils/maintenance'
 
 const { navigateToMock } = vi.hoisted(() => ({ navigateToMock: vi.fn() }))
 
@@ -101,7 +102,13 @@ describe('/maintenance/tasks/new', () => {
     await flushPromises()
 
     expect(state.createCalls).toBe(1)
-    expect(state.createBody).toEqual({ name: '換活性碳', intervalDays: 60, startOn: null, isActive: true })
+    expect(state.createBody).toEqual({
+      name: '換活性碳',
+      intervalDays: 60,
+      startOn: null,
+      isActive: true,
+      localCreatedOn: toLocalDateOnly(new Date()),
+    })
     expect(navigateToMock).toHaveBeenCalledWith('/maintenance')
   })
 

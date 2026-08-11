@@ -1,5 +1,11 @@
-import type { MaintenanceTaskInput } from '../types/maintenance'
+import type { CreateMaintenanceTaskInput, MaintenanceTaskInput } from '../types/maintenance'
 import { isDateOnly } from './dateInput'
+
+/**
+ * 低於 Prisma Int 上限，也保證四位數年份的 startOn 加上週期後仍在 JavaScript Date 範圍內。
+ * 這個技術上限約 26 萬年，遠高於任何實際保養週期。
+ */
+export const MAX_MAINTENANCE_INTERVAL_DAYS = 97_000_000
 
 export const MAINTENANCE_INTERVAL_OPTIONS: readonly { value: number, label: string }[] = [
   { value: 1, label: '每天' },
@@ -12,6 +18,10 @@ const FORBIDDEN_TASK_KEYS = ['tankId', 'displayOrder', 'note', 'completions'] as
 
 export type ParseMaintenanceTaskResult
   = | { ok: true, value: MaintenanceTaskInput }
+    | { ok: false, message: string }
+
+export type ParseCreateMaintenanceTaskResult
+  = | { ok: true, value: CreateMaintenanceTaskInput }
     | { ok: false, message: string }
 
 function trimmedText(value: unknown): string {
@@ -39,6 +49,10 @@ export function parseMaintenanceTaskInput(raw: unknown): ParseMaintenanceTaskRes
     return { ok: false, message: '週期天數請填正整數。' }
   }
 
+  if (intervalDays > MAX_MAINTENANCE_INTERVAL_DAYS) {
+    return { ok: false, message: '週期天數超過可支援範圍。' }
+  }
+
   const startOn = trimmedText(source.startOn)
 
   if (startOn && !isDateOnly(startOn)) {
@@ -60,4 +74,33 @@ export function parseMaintenanceTaskInput(raw: unknown): ParseMaintenanceTaskRes
       isActive,
     },
   }
+}
+
+/** 建立請求額外驗證瀏覽器當地日期；時區最多只會與 UTC 相差一個日曆日。 */
+export function parseCreateMaintenanceTaskInput(
+  raw: unknown,
+  now: Date = new Date(),
+): ParseCreateMaintenanceTaskResult {
+  const parsed = parseMaintenanceTaskInput(raw)
+
+  if (!parsed.ok) {
+    return parsed
+  }
+
+  const source = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+  const localCreatedOn = trimmedText(source.localCreatedOn)
+
+  if (!isDateOnly(localCreatedOn)) {
+    return { ok: false, message: '建立日期不正確。' }
+  }
+
+  const localDate = Date.parse(`${localCreatedOn}T00:00:00.000Z`)
+  const serverDate = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  const dayMs = 24 * 60 * 60 * 1000
+
+  if (Math.abs(localDate - serverDate) > dayMs) {
+    return { ok: false, message: '建立日期超出可接受範圍。' }
+  }
+
+  return { ok: true, value: { ...parsed.value, localCreatedOn } }
 }

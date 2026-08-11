@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { TankOption } from '#shared/types/home'
-import type { MaintenanceTaskInput, MaintenanceTaskResponse } from '#shared/types/maintenance'
+import type { CreateMaintenanceTaskInput, MaintenanceTaskInput, MaintenanceTaskResponse } from '#shared/types/maintenance'
 import { apiErrorMessage } from '#shared/utils/apiError'
+import { toLocalDateOnly } from '#shared/utils/maintenance'
 
 useSeoMeta({ title: '新增保養任務 · ReefLog' })
 
@@ -37,7 +38,10 @@ async function submit(input: MaintenanceTaskInput) {
   try {
     await $api<MaintenanceTaskResponse>(`/api/tanks/${currentTank.value.id}/maintenance-tasks`, {
       method: 'POST',
-      body: input,
+      body: {
+        ...input,
+        localCreatedOn: toLocalDateOnly(new Date()),
+      } satisfies CreateMaintenanceTaskInput,
     })
   }
   catch (cause) {

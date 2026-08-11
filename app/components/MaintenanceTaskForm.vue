@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import type { MaintenanceTaskInput } from '#shared/types/maintenance'
-import { MAINTENANCE_INTERVAL_OPTIONS, parseMaintenanceTaskInput } from '#shared/utils/maintenanceTaskForm'
+import {
+  MAINTENANCE_INTERVAL_OPTIONS,
+  MAX_MAINTENANCE_INTERVAL_DAYS,
+  parseMaintenanceTaskInput,
+} from '#shared/utils/maintenanceTaskForm'
 
 interface MaintenanceTaskInitialValue {
   name: string
@@ -170,6 +174,7 @@ function submit() {
           type="number"
           inputmode="numeric"
           min="1"
+          :max="MAX_MAINTENANCE_INTERVAL_DAYS"
           step="1"
           placeholder="天數"
           class="mt-3 w-full"

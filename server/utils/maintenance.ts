@@ -1,5 +1,5 @@
 import type { MaintenanceCompletion, MaintenanceTask, PrismaClient } from '@prisma/client'
-import type { MaintenancePageData, MaintenanceTaskDto, MaintenanceTaskInput } from '#shared/types/maintenance'
+import type { CreateMaintenanceTaskInput, MaintenancePageData, MaintenanceTaskDto, MaintenanceTaskInput } from '#shared/types/maintenance'
 
 // 保養提醒的資料層（issue #122，畫面是 #15 的 screen-7）。
 //
@@ -104,7 +104,7 @@ export async function findOwnedMaintenanceTask(
 export async function createMaintenanceTask(
   client: PrismaClient,
   tankId: string,
-  input: MaintenanceTaskInput,
+  input: CreateMaintenanceTaskInput,
 ): Promise<MaintenanceTaskDto> {
   const last = await client.maintenanceTask.findFirst({
     where: { tankId },
@@ -117,7 +117,8 @@ export async function createMaintenanceTask(
       tankId,
       name: input.name,
       intervalDays: input.intervalDays,
-      startOn: toDate(input.startOn),
+      // startOn 留白時用瀏覽器的當地建立日，不能從 UTC createdAt 推回使用者日曆日。
+      startOn: toDate(input.startOn ?? input.localCreatedOn),
       isActive: input.isActive,
       displayOrder: (last?.displayOrder ?? -1) + 1,
     },

@@ -38,6 +38,12 @@ export interface MaintenanceTaskInput {
   isActive: boolean
 }
 
+/** 建立任務時額外帶上瀏覽器的當地日曆日，避免從 UTC createdAt 猜錯日期。 */
+export interface CreateMaintenanceTaskInput extends MaintenanceTaskInput {
+  /** YYYY-MM-DD；只接受 server UTC 日期前後一天。 */
+  localCreatedOn: string
+}
+
 /**
  * 只回「最後一筆」完成紀錄，不回完整履歷：畫面上的「上次 07/01」「已完成 08:20」
  * 「今天有沒有做」三件事都只需要最後一筆（完成日只會往前走）。

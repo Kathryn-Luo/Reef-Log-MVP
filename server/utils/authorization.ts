@@ -11,7 +11,7 @@ import { parseCreatureStatusInput } from '#shared/utils/creatureDetail'
 import { parseCreatureProfileInput } from '#shared/utils/creatureForm'
 // completedOn 的規則與保養頁共用同一份（issue #122，與 parseWaterLogInput 同一個作法）
 import { parseCompletedOn, parseCompletedOnInput } from '#shared/utils/maintenance'
-import { parseMaintenanceTaskInput } from '#shared/utils/maintenanceTaskForm'
+import { parseCreateMaintenanceTaskInput, parseMaintenanceTaskInput } from '#shared/utils/maintenanceTaskForm'
 import { parseTankInput } from '#shared/utils/tankForm'
 // 時間範圍的規則住在 shared：#123 的畫面用的是同一份四個選項（issue #126）
 import { parseTrendRange } from '#shared/utils/trend'
@@ -443,6 +443,7 @@ export async function createOwnedMaintenanceTask(
   user: SessionUser | null,
   tankId: string | undefined,
   readBody: BodyReader,
+  now: Date = new Date(),
 ): Promise<Authorized<MaintenanceTaskResponse>> {
   const owned = await requireOwnedTank(client, user, tankId)
 
@@ -450,7 +451,7 @@ export async function createOwnedMaintenanceTask(
     return owned
   }
 
-  const parsed = parseMaintenanceTaskInput(await readBody())
+  const parsed = parseCreateMaintenanceTaskInput(await readBody(), now)
 
   if (!parsed.ok) {
     return { ok: false, error: invalidInput('Invalid maintenance task input', parsed.message) }

@@ -9,7 +9,7 @@ import { isDateOnly } from './dateInput'
 // 兩件事放在同一支：
 //   1. 畫面上「算得出來的東西」——「魚 · 神仙」、「入缸日 2025 / 11 / 12」、
 //      「在缸天數 189 天」。schema.prisma 明確不存這些衍生值。
-//   2. 狀態 + 死亡 / 生病記錄的欄位規則。詳情頁（app/pages/creatures/[id].vue）與
+//   2. 狀態 + 死亡 / 生病記錄的欄位規則。詳情頁（app/pages/creatures/[id]/index.vue）與
 //      PATCH /api/creatures/:id 共用 parseCreatureStatusInput：規則只寫一次，
 //      前端擋掉的與後端擋掉的必然一致（與 shared/utils/tankForm.ts 同一個作法）。
 

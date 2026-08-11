@@ -100,10 +100,11 @@ const subtitle = computed(() =>
 const sections = computed(() => buildMaintenanceSections(tasks.value, now))
 const todayRows = computed(() => buildTodayRowViews(sections.value.today))
 const upcomingRows = computed(() => buildUpcomingRowViews(sections.value.upcoming))
+const laterRows = computed(() => buildUpcomingRowViews(sections.value.later))
 
-// 兩區都空時給「一則」空狀態而不是兩則：「今天該做（空）」加「即將到期（空）」
-// 疊在一起像是壞掉了（issue #125 第 4-4 節）
-const isEmpty = computed(() => !todayRows.value.length && !upcomingRows.value.length)
+// 只有 API 真的沒有任何啟用任務時才是空狀態。到期日在 30 天窗口以後的任務仍存在，
+// 也必須保留 #17 的編輯入口。
+const isEmpty = computed(() => tasks.value.length === 0)
 
 /** 正在送出的任務。連點兩下的第一道防線（第二道是資料庫的 @@unique([taskId, completedOn])） */
 const pending = reactive(new Set<string>())
@@ -550,6 +551,74 @@ async function toggle(row: MaintenanceTodayRowView) {
         >
           接下來 30 天內沒有其他到期的保養。
         </p>
+      </section>
+
+      <section
+        v-if="laterRows.length"
+        data-testid="later-section"
+        class="mt-8 px-4"
+      >
+        <h2 class="text-base font-semibold tracking-wide text-muted">
+          其他任務
+        </h2>
+
+        <ul class="mt-3 flex flex-col gap-2.5">
+          <li
+            v-for="row in laterRows"
+            :key="row.id"
+            data-testid="later-row"
+            :data-task-id="row.id"
+            class="flex items-center gap-3 rounded-2xl border border-default bg-elevated/40 p-3"
+          >
+            <span class="flex size-14 shrink-0 flex-col items-center justify-center rounded-xl border border-default">
+              <span
+                data-testid="due-day"
+                class="text-lg font-bold leading-tight tabular-nums"
+              >
+                {{ row.dayText }}
+              </span>
+              <span
+                data-testid="due-month"
+                class="text-[10px] leading-tight text-dimmed"
+              >
+                {{ row.monthText }}
+              </span>
+            </span>
+
+            <div class="min-w-0 flex-1">
+              <p
+                data-testid="task-name"
+                class="truncate text-lg font-semibold"
+              >
+                {{ row.name }}
+              </p>
+
+              <p
+                data-testid="task-subtitle"
+                class="mt-0.5 truncate text-sm text-muted"
+              >
+                {{ row.subtitle }}
+              </p>
+            </div>
+
+            <span
+              data-testid="due-in"
+              class="shrink-0 text-sm tabular-nums text-dimmed"
+            >
+              {{ row.dueText }}
+            </span>
+
+            <UButton
+              data-testid="maintenance-edit"
+              :to="`/maintenance/tasks/${row.id}/edit`"
+              icon="i-lucide-pencil"
+              color="neutral"
+              variant="ghost"
+              :aria-label="`編輯 ${row.name}`"
+              class="shrink-0 rounded-full"
+            />
+          </li>
+        </ul>
       </section>
     </template>
   </section>

@@ -190,15 +190,16 @@ describe('buildMaintenanceSections 的分區', () => {
     expect(ids(sections().today)).not.toContain('tomorrow')
   })
 
-  // 30 天窗口是本專案自己定的（#15），所以邊界要釘住：正好第 30 天在裡面、第 46 天不在。
-  // 「換活性碳」這一類長週期任務因此會完全不出現在畫面上——issue #122 第 7 節列為已知缺口。
-  it('即將到期只收到期日在 UPCOMING_WINDOW_DAYS 天內的任務', () => {
-    const { today, upcoming } = sections()
+  // 30 天窗口是本專案自己定的（#15），所以邊界要釘住：正好第 30 天在裡面、第 46 天
+  // 移到「其他任務」，仍保留 #17 的編輯入口。
+  it('即將到期只收 30 天內的任務，窗口外任務留在其他任務', () => {
+    const { today, upcoming, later } = sections()
 
     expect(UPCOMING_WINDOW_DAYS).toBe(30)
     expect(ids(upcoming)).toContain('window-edge')
     expect(ids(upcoming)).not.toContain('far-away')
     expect(ids(today)).not.toContain('far-away')
+    expect(ids(later)).toEqual(['far-away'])
   })
 
   it('剛好落在窗口最後一天的任務仍然收進來，多一天就不收', () => {
@@ -256,8 +257,8 @@ describe('buildMaintenanceSections 的分區', () => {
     expect(row).toMatchObject({ nextDueOn: '2026-07-05', completedToday: true, overdue: false })
   })
 
-  it('沒有任何任務時兩區都是空的，徽章是 0', () => {
-    expect(buildMaintenanceSections([], MORNING_OF_JULY_8)).toEqual({ today: [], upcoming: [], dueCount: 0 })
+  it('沒有任何任務時三區都是空的，徽章是 0', () => {
+    expect(buildMaintenanceSections([], MORNING_OF_JULY_8)).toEqual({ today: [], upcoming: [], later: [], dueCount: 0 })
   })
 
   // 從未完成過、也沒有 startOn 的任務照樣要分得出區——它的起算日是 createdOn

@@ -59,12 +59,13 @@ function task(overrides: Partial<MaintenanceTaskDto> & { id: string, name: strin
 }
 
 /**
- * 示範用的五個任務，剛好把兩區與三種樣態都佔滿：
+ * 示範用的六個任務，剛好把三區與三種樣態都佔滿：
  *   換水 10%   每 7 天、7 天前做過  → 今天到期
  *   餵食       每天、今天 08:20 做過 → 今天該做（已完成）
  *   折射計校正 每 30 天、33 天前做過 → 逾期 3 天
  *   洗濾材     每 30 天、16 天前做過 → 14 天後
  *   洗前置棉   每 7 天、4 天前做過   → 3 天後
+ *   換活性碳   每 60 天、14 天前做過 → 46 天後（其他任務）
  *
  * 「洗濾材」的 displayOrder 刻意排在「洗前置棉」前面：即將到期區要依到期日由近到遠，
  * 照著 API 給的順序渲染的話這一題會過不了。
@@ -76,6 +77,7 @@ function demoTasks(): MaintenanceTaskDto[] {
     task({ id: 'task-calib', name: '折射計校正', intervalDays: 30, displayOrder: 2, lastCompletion: completion(addDays(TODAY, -33), 10, 0) }),
     task({ id: 'task-media', name: '洗濾材 / 生化球', intervalDays: 30, displayOrder: 3, lastCompletion: completion(addDays(TODAY, -16), 12, 0) }),
     task({ id: 'task-floss', name: '洗前置棉', intervalDays: 7, displayOrder: 4, lastCompletion: completion(addDays(TODAY, -4), 11, 0) }),
+    task({ id: 'task-carbon', name: '換活性碳', intervalDays: 60, displayOrder: 5, lastCompletion: completion(addDays(TODAY, -14), 13, 0) }),
   ]
 }
 
@@ -276,6 +278,9 @@ const todayIds = (page: Page) =>
 const upcomingIds = (page: Page) =>
   page.findAll('[data-testid="upcoming-row"]').map(row => row.attributes('data-task-id'))
 
+const laterIds = (page: Page) =>
+  page.findAll('[data-testid="later-row"]').map(row => row.attributes('data-task-id'))
+
 const badge = (page: Page) => page.get('[data-testid="today-badge"]').text()
 
 function todayRow(page: Page, taskId: string) {
@@ -325,6 +330,17 @@ describe('保養提醒 — 頁首', () => {
     expect(page.get('[data-testid="upcoming-row"][data-task-id="task-floss"]')
       .get('[data-testid="maintenance-edit"]').attributes('href'))
       .toBe('/maintenance/tasks/task-floss/edit')
+  })
+
+  // Given 任務到期日在 30 天顯示窗口以後 / Then 仍能從「其他任務」進入編輯頁
+  it('窗口外任務顯示在其他任務區並保留編輯入口', async () => {
+    const page = await open()
+    const row = page.get('[data-testid="later-row"][data-task-id="task-carbon"]')
+
+    expect(page.get('[data-testid="later-section"]').text()).toContain('其他任務')
+    expect(row.get('[data-testid="task-name"]').text()).toBe('換活性碳')
+    expect(row.get('[data-testid="maintenance-edit"]').attributes('href'))
+      .toBe('/maintenance/tasks/task-carbon/edit')
   })
 })
 
@@ -598,7 +614,7 @@ describe('保養提醒 — 停用的任務', () => {
 
     const page = await open()
 
-    expect([...todayIds(page), ...upcomingIds(page)].sort())
+    expect([...todayIds(page), ...upcomingIds(page), ...laterIds(page)].sort())
       .toEqual(state.tasks.map(item => item.id).sort())
     expect(page.text()).not.toContain('洗濾材')
   })
@@ -630,6 +646,15 @@ describe('保養提醒 — 空狀態', () => {
 
     expect(action.attributes('href')).toBe('/maintenance/tasks/new')
     expect(action.text()).toContain('新增第一個任務')
+  })
+
+  it('只剩 30 天窗口外任務時不顯示「還沒有任何保養任務」', async () => {
+    state.tasks = demoTasks().filter(item => item.id === 'task-carbon')
+
+    const page = await open()
+
+    expect(page.find('[data-testid="maintenance-empty"]').exists()).toBe(false)
+    expect(laterIds(page)).toEqual(['task-carbon'])
   })
 
   // 4-4：「今天該做」空、「即將到期」有東西是正常且常見的，這時那一區給一句短句就好，

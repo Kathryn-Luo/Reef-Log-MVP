@@ -23,7 +23,7 @@ async function openCreature(page: import('@playwright/test').Page, name: string)
   // 呼叫端的斷言就撞上 strict mode violation（issue #95）。
   //
   // 所以再等一個「只有詳情頁才有」的元素。`creature-taxonomy` 出現在
-  // app/pages/creatures/[id].vue，列表頁沒有它——它出現就代表換的是畫面，不只是網址。
+  // app/pages/creatures/[id]/index.vue，列表頁沒有它——它出現就代表換的是畫面，不只是網址。
   await expect(page.getByTestId('creature-taxonomy')).toBeVisible()
 }
 

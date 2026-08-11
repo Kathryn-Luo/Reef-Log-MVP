@@ -53,6 +53,8 @@ export const PROTECTED_PAGES: readonly ProtectedPage[] = [
   // 頁首的「<缸名> · N 隻」副標。它整段住在「有缸」那一支 v-else 裡，
   // 與 /trends、/maintenance 那兩個常駐頁首不同——載入失敗時不會渲染
   { path: '/creatures', marker: 'inventory-subtitle' },
+  // 新增頁會先取得缸清單；成功且有缸時才畫出表單
+  { path: '/creatures/new', marker: 'creature-profile-form' },
   // 「今天該做」那一區。maintenance.spec.ts 的 expectLoaded 等的就是這一個。
   //
   // 它依賴「沙盒裡至少有一個任務落在兩區之內」：示範資料有五個週期性任務，

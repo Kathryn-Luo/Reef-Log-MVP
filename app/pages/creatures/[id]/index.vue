@@ -20,9 +20,8 @@ import { apiErrorMessage, apiErrorStatus } from '#shared/utils/apiError'
 
 // 生物詳情 · 死亡記錄（Epic #1 screen-6，issue #14）。
 //
-// 這一頁只編輯「狀態 + 死亡 / 生病記錄」。俗名 / 學名 / 照片 / 入缸日的編輯在
-// 頁首右上角的「編輯」後面，那個表單 Epic 中沒有截圖，由另一支 needs-design 的
-// 「新增 / 編輯生物表單」issue 負責；這裡只渲染按鈕並連向該路由。
+// 這一頁只編輯「狀態 + 死亡 / 生病記錄」。俗名、學名、分類、入缸日與價格由
+// 頁首右上角「編輯」連到獨立的基本資料表單處理。
 
 const route = useRoute()
 const creatureId = computed(() => String(route.params.id))

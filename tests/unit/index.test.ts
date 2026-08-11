@@ -34,6 +34,6 @@ describe('首頁的「＋ 新增」生物按鈕', () => {
     const addButton = page.findAll('a').find(link => link.text().includes('新增'))
 
     expect(addButton).toBeDefined()
-    expect(addButton!.attributes('href')).toBe('/creatures/new')
+    expect(addButton!.attributes('href')).toBe('/creatures/new?tank=tank-1')
   })
 })

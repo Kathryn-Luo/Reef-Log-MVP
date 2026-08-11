@@ -56,12 +56,14 @@ const HANDLERS = [
   { file: 'server/api/tanks/index.post.ts', resolver: 'createOwnedTank' },
   { file: 'server/api/tanks/[id]/home.get.ts', resolver: 'resolveTankHome' },
   { file: 'server/api/tanks/[id]/creatures.get.ts', resolver: 'resolveTankCreatures' },
+  { file: 'server/api/tanks/[id]/creatures.post.ts', resolver: 'createOwnedCreature' },
   { file: 'server/api/tanks/[id]/water-logs.get.ts', resolver: 'resolveWaterLogPage' },
   { file: 'server/api/tanks/[id]/water-logs.post.ts', resolver: 'createOwnedWaterLog' },
   { file: 'server/api/tanks/[id]/trends.get.ts', resolver: 'resolveTrendPage' },
   { file: 'server/api/creatures/[id].get.ts', resolver: 'resolveCreatureDetail' },
   { file: 'server/api/creatures/[id].patch.ts', resolver: 'applyCreatureStatus' },
   { file: 'server/api/creatures/[id]/move.patch.ts', resolver: 'moveOwnedCreature' },
+  { file: 'server/api/creatures/[id]/profile.patch.ts', resolver: 'updateOwnedCreatureProfile' },
   // 保養提醒（issue #122）：讀取掛在缸底下，兩支寫入掛在任務底下
   { file: 'server/api/tanks/[id]/maintenance.get.ts', resolver: 'resolveMaintenancePage' },
   { file: 'server/api/maintenance-tasks/[id]/completions.post.ts', resolver: 'resolveCompleteTask' },
@@ -112,6 +114,8 @@ describe('每一支 API 都經過同一道歸屬檢查', () => {
     'server/api/tanks/index.post.ts',
     'server/api/creatures/[id].patch.ts',
     'server/api/creatures/[id]/move.patch.ts',
+    'server/api/creatures/[id]/profile.patch.ts',
+    'server/api/tanks/[id]/creatures.post.ts',
     'server/api/tanks/[id]/water-logs.post.ts',
     'server/api/maintenance-tasks/[id]/completions.post.ts',
   ])('%s 把 body 延後到身分檢查之後才讀', (file) => {

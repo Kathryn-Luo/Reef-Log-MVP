@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import TrendsPage from '../../../app/pages/trends.vue'
-import CreatureDetailPage from '../../../app/pages/creatures/[id].vue'
+import CreatureDetailPage from '../../../app/pages/creatures/[id]/index.vue'
 
 // Given 我正在任一個 tab 頁面 / When 我點擊底部另一個 tab
 // Then 路由切換到該頁面 —— 五個 tab 的目的地都要有頁面可落地。

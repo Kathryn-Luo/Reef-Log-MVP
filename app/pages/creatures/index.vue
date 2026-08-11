@@ -196,10 +196,7 @@ const rows = computed(() =>
           </p>
         </div>
 
-        <!--
-          表單畫面 Epic 中沒有截圖，由另一支 needs-design 的
-          「新增 / 編輯生物表單」issue 負責；這裡只渲染按鈕並連向該路由。
-        -->
+        <!-- 新增生物使用獨立的基本資料表單；庫存頁只提供入口。 -->
         <UButton
           data-testid="creature-add"
           to="/creatures/new"

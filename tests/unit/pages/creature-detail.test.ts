@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mockNuxtImport, mountSuspended, registerEndpoint } from '@nuxt/test-utils/runtime'
 import { enableAutoUnmount, flushPromises } from '@vue/test-utils'
-import CreatureDetailPage from '../../../app/pages/creatures/[id].vue'
+import CreatureDetailPage from '../../../app/pages/creatures/[id]/index.vue'
 import { signedInUserSession } from '../support/session'
 import type { CreatureDetailDto } from '#shared/types/creature'
 import type { TankOption } from '#shared/types/home'

@@ -395,7 +395,7 @@ const cards = computed(() =>
             「新增 / 編輯生物表單」issue 負責；這裡只渲染按鈕並連向該路由。
           -->
           <UButton
-            to="/creatures/new"
+            :to="{ path: '/creatures/new', query: { tank: currentTank.id } }"
             icon="i-lucide-plus"
             color="primary"
             class="shrink-0 rounded-full px-4"

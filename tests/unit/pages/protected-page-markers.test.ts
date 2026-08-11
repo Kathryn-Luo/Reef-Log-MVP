@@ -6,6 +6,7 @@ import HomePage from '../../../app/pages/index.vue'
 import LogPage from '../../../app/pages/log.vue'
 import TrendsPage from '../../../app/pages/trends.vue'
 import CreaturesPage from '../../../app/pages/creatures/index.vue'
+import NewCreaturePage from '../../../app/pages/creatures/new.vue'
 import MaintenancePage from '../../../app/pages/maintenance.vue'
 import NewTankPage from '../../../app/pages/tanks/new.vue'
 import { signedInUserSession } from '../support/session'
@@ -130,6 +131,7 @@ const PAGE_COMPONENTS: Record<string, Component> = {
   '/log': LogPage,
   '/trends': TrendsPage,
   '/creatures': CreaturesPage,
+  '/creatures/new': NewCreaturePage,
   '/maintenance': MaintenancePage,
   '/tanks/new': NewTankPage,
 }

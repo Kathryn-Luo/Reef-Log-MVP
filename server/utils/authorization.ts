@@ -1,6 +1,7 @@
 import type { PrismaClient, User } from '@prisma/client'
 import type { CreatureDetailDto, CreatureDetailResponse, CreatureProfileResponse, MoveCreatureResponse, TankCreaturesData } from '#shared/types/creature'
 import type { GuestSandboxResponse } from '#shared/types/guestSandbox'
+import type { AvatarSource, UserProfileResponse } from '#shared/types/profile'
 import type { Timer } from './requestTiming'
 import type { TankHomeData, TankOption } from '#shared/types/home'
 import type { MaintenancePageData, MaintenanceTaskDto, MaintenanceTaskResponse } from '#shared/types/maintenance'
@@ -315,6 +316,56 @@ export async function resolveGuestSandbox(
   }
 
   return { ok: true, value: await ensureGuestSandbox(client, user.id, timer) }
+}
+
+/**
+ * GET /api/profile —— 取得當前登入使用者的公開個人資料。
+ *
+ * 未登入回 401。
+ */
+export async function resolveProfile(
+  client: PrismaClient,
+  user: SessionUser | null,
+): Promise<Authorized<UserProfileResponse>> {
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  const fullUser = await client.user.findUnique({
+    where: { id: user.id },
+    include: {
+      accounts: {
+        select: {
+          provider: true,
+        },
+      },
+    },
+  })
+
+  if (!fullUser) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  const avatarUrl = fullUser.customAvatarUrl ?? fullUser.googleAvatarUrl ?? null
+  const avatarSource: AvatarSource = fullUser.customAvatarUrl
+    ? 'custom'
+    : fullUser.googleAvatarUrl
+      ? 'google'
+      : 'none'
+
+  const providers = fullUser.accounts.map(acc => acc.provider)
+
+  return {
+    ok: true,
+    value: {
+      displayName: fullUser.displayName,
+      email: fullUser.email,
+      providers,
+      createdAt: fullUser.createdAt.toISOString(),
+      avatarUrl,
+      avatarSource,
+    },
+  }
 }
 
 /** GET /api/tanks/:id/home —— screen-1 單一缸的內容 */

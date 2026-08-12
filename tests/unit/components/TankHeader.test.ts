@@ -126,15 +126,48 @@ describe('TankHeader', () => {
     expect(header.find('[data-testid="tank-menu-create"]').exists()).toBe(false)
   })
 
-  // issue 的「已知缺口」：右上角圓形圖示在 schema 中沒有任何對應，
-  // 本 issue 先渲染為無作用的裝飾按鈕，實際行為待人類確認後另開 issue
-  it('右上角的圓形圖示是無作用的裝飾，不進入 tab 順序', async () => {
+  // Epic #160：右上角原為無作用裝飾的 sun icon 改為可點擊導向個人資料的 Profile 入口
+  it('右上角應渲染出指向 /profile 的入口，且無 disabled 或 aria-hidden 等無效化屬性', async () => {
     const header = await mountHeader([MAIN_TANK])
-    const ornament = header.get('[data-testid="tank-header-ornament"]')
+    const profileLink = header.get('[data-testid="tank-header-profile"]')
 
-    expect(ornament.attributes('disabled')).toBeDefined()
-    expect(ornament.attributes('aria-hidden')).toBe('true')
-    expect(ornament.attributes('tabindex')).toBe('-1')
+    expect(profileLink.element.tagName).toBe('A')
+    expect(profileLink.attributes('href')).toBe('/profile')
+    expect(profileLink.attributes('aria-label')).toBe('個人資料')
+    expect(profileLink.attributes('disabled')).toBeUndefined()
+    expect(profileLink.attributes('aria-hidden')).toBeUndefined()
+    expect(profileLink.attributes('tabindex')).toBeUndefined()
+
+    // 確保不存在舊的裝飾按鈕
+    expect(header.find('[data-testid="tank-header-ornament"]').exists()).toBe(false)
+  })
+
+  it('Profile 入口不應顯示任何頭像或文字，僅包含 circle-user icon', async () => {
+    const header = await mountHeader([MAIN_TANK])
+    const profileLink = header.get('[data-testid="tank-header-profile"]')
+
+    // 確保沒有載入 img 元素，也沒有任何名稱首字之類的文字
+    expect(profileLink.find('img').exists()).toBe(false)
+    expect(profileLink.text()).toBe('')
+
+    // 應該含有 i-lucide-circle-user icon (Nuxt UI v4 渲染為帶 class 的 span)
+    const iconSpan = profileLink.get('span')
+    expect(iconSpan.classes()).toContain('iconify')
+    expect(iconSpan.classes().some(cls => cls.includes('circle-user'))).toBe(true)
+  })
+
+  // 尺寸掛在 icon 本身，不在連結上：入口拿掉了外框圓圈，會縮的是圖示
+  // （2026-08-12 由人類調整視覺，#162 內文的 size-9 / size-11 是舊值）。
+  it('Profile 入口的 icon 在收合時變小', async () => {
+    const headerNormal = await mountHeader([MAIN_TANK])
+    const iconNormal = headerNormal.get('[data-testid="tank-header-profile-icon"]')
+    expect(iconNormal.classes()).toContain('size-9')
+    expect(iconNormal.classes()).not.toContain('size-7')
+
+    const headerCollapsed = await mountCollapsed([MAIN_TANK])
+    const iconCollapsed = headerCollapsed.get('[data-testid="tank-header-profile-icon"]')
+    expect(iconCollapsed.classes()).toContain('size-7')
+    expect(iconCollapsed.classes()).not.toContain('size-9')
   })
 })
 

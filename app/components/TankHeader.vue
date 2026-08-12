@@ -141,23 +141,21 @@ function select(tankId: string) {
       </div>
 
       <!--
-        issue #9 的「已知缺口」：右上角的圓形圖示在 schema.prisma 中沒有任何對應 model 或欄位，
-        Epic 也沒說明其功能。先渲染為無作用的裝飾，實際行為待人類確認後另開 issue。
+        Epic #160：右上角原為無作用裝飾的 sun icon 改為可點擊導向個人資料的 Profile 入口
       -->
-      <button
-        data-testid="tank-header-ornament"
-        type="button"
-        disabled
-        aria-hidden="true"
-        tabindex="-1"
-        class="grid shrink-0 place-items-center rounded-full border border-default text-dimmed transition-[width,height] duration-200 ease-out motion-reduce:transition-none"
-        :class="collapsed ? 'size-9' : 'size-11'"
+      <ULink
+        data-testid="tank-header-profile"
+        to="/profile"
+        aria-label="個人資料"
+        class="grid shrink-0 place-items-center text-dimmed"
       >
         <UIcon
-          name="i-lucide-sun"
-          class="size-5"
+          data-testid="tank-header-profile-icon"
+          name="i-lucide-circle-user-round"
+          class="transition-[width,height] duration-200 ease-out motion-reduce:transition-none"
+          :class="collapsed ? 'size-7' : 'size-9'"
         />
-      </button>
+      </ULink>
     </div>
 
     <div

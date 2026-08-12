@@ -69,9 +69,6 @@ enableAutoUnmount(afterEach)
 
 beforeEach(() => {
   clearNuxtData('profile')
-  // `clearNuxtData` 只重設值，不會移除其他測試曾建立的同名 async-data 實例。
-  // 這裡需要新的 status 與 handler，才能可靠觀察第一次請求的 pending 畫面。
-  delete useNuxtApp()._asyncData.profile
   clearNuxtState()
   state.profile = { ...GOOGLE_PROFILE }
   state.getFailure = false
@@ -102,6 +99,7 @@ describe('/profile', () => {
     await vi.waitFor(() => {
       expect(state.resolvePendingGet).not.toBeNull()
     })
+    await nextTick()
     expect(page.find('[data-testid="profile-loading"]').exists()).toBe(true)
     state.resolvePendingGet?.()
     await flushPromises()

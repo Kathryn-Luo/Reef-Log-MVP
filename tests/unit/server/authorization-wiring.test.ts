@@ -73,6 +73,8 @@ const HANDLERS = [
   { file: 'server/api/maintenance-tasks/[id]/completions/[completedOn].delete.ts', resolver: 'resolveClearCompletion' },
   // 訪客沙盒的補建（issue #144）。不掛在任何缸底下——它要做的事正是「讓這位使用者有缸」
   { file: 'server/api/guest-sandbox.post.ts', resolver: 'resolveGuestSandbox' },
+  // 個人資料（issue #160）
+  { file: 'server/api/profile.get.ts', resolver: 'resolveProfile' },
 ]
 
 describe('每一支 API 都經過同一道歸屬檢查', () => {

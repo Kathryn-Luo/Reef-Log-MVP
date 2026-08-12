@@ -13,6 +13,10 @@
 //   → session 策略是密封 cookie（內容只有 { userId, exp }，驗簽即得身分、不查 DB），
 //     所以刻意「不」建 Session model——這是 #47 已定案的取捨，不是漏掉。
 //
+// Epic #160「個人資料與頭像」沒有另附畫面截圖，內文已定案 Profile 頁才顯示照片，
+// 首頁右上角固定使用 Profile icon。Google 頭像與使用者上傳頭像分欄保存，讓 Google
+// 重新登入可更新備援圖片，又不會蓋掉使用者明確選擇的自訂頭像。
+//
 // 以下註解中未特別標註的 screen-N 一律指 Epic #1 的截圖；#47 的那一張寫成 screen-1（#47）。
 //
 // 慣例依 docs/SCHEMA_GUIDE.md：model 單數 PascalCase、欄位 camelCase、
@@ -79,7 +83,16 @@ model User {
   /// 顯示名稱。Google 登入取回傳的 name；訪客固定為「訪客」。
   displayName String?
 
-  createdAt DateTime @default(now())
+  /// Google OAuth profile 的 picture URL。每次 Google 登入可更新；訪客與尚未重新登入的
+  /// 既有 Google 使用者為 null。它只作為 Profile 頁的備援頭像，不放進密封 session。
+  googleAvatarUrl String?
+
+  /// 使用者上傳到目前部署環境 Vercel Blob store 的 public immutable URL。
+  /// Profile 頁優先顯示這一欄；null 時才退回 googleAvatarUrl 或名稱首字。
+  /// 只存目前有效的一張，不保留歷史，因此不另建 Avatar model。
+  customAvatarUrl String?
+
+  createdAt    DateTime @default(now())
   /// 最近一次辨識出這位使用者並準備續發 session 的時間。
   ///
   /// 訪客沙盒清理以這個欄位而非 createdAt 判斷逾期：長期使用的訪客會持續更新，

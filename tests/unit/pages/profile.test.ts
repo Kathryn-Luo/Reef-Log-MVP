@@ -136,12 +136,37 @@ describe('/profile', () => {
     expect(page.find('[data-testid="profile-email"]').exists()).toBe(false)
   })
 
-  it('改名成功後更新畫面，沒有照片時首字也同步更新', async () => {
+  // schema.prisma 的 User.displayName：「訪客固定為『訪客』」。server 會回 403，
+  // 畫面就不該給出一個按了必定失敗的入口。
+  it('訪客沒有改名入口', async () => {
     state.profile = {
       ...GOOGLE_PROFILE,
       displayName: '訪客',
       email: null,
       providers: ['GUEST'],
+      avatarUrl: null,
+      avatarSource: 'none',
+    }
+
+    const page = await open()
+
+    expect(page.get('[data-testid="profile-display-name"]').text()).toBe('訪客')
+    expect(page.find('[data-testid="profile-name-edit"]').exists()).toBe(false)
+    expect(page.find('[data-testid="profile-name-form"]').exists()).toBe(false)
+  })
+
+  it('同時綁著 GUEST 與 GOOGLE 的帳號仍有改名入口', async () => {
+    state.profile = { ...GOOGLE_PROFILE, providers: ['GUEST', 'GOOGLE'] }
+
+    const page = await open()
+
+    expect(page.find('[data-testid="profile-name-edit"]').exists()).toBe(true)
+  })
+
+  it('改名成功後更新畫面，沒有照片時首字也同步更新', async () => {
+    state.profile = {
+      ...GOOGLE_PROFILE,
+      displayName: '陳彥廷',
       avatarUrl: null,
       avatarSource: 'none',
     }

@@ -33,6 +33,12 @@ const providerLabels: Record<string, string> = {
   GUEST: '訪客',
 }
 
+// 訪客的顯示名稱固定為「訪客」（schema.prisma 的 User.displayName），PATCH /api/profile
+// 會回 403。畫面因此不給編輯入口——這只是 UX，真正的邊界在 server/utils/authorization.ts。
+const canEditName = computed(() =>
+  profile.value?.providers.some(provider => provider !== 'GUEST') ?? false,
+)
+
 const providers = computed(() =>
   profile.value?.providers.map(provider => providerLabels[provider] ?? provider).join('、') ?? '',
 )
@@ -50,6 +56,10 @@ const joinedOn = computed(() => {
 })
 
 function startEditing() {
+  if (!canEditName.value) {
+    return
+  }
+
   draftName.value = profile.value?.displayName ?? ''
   nameError.value = null
   editing.value = true
@@ -142,7 +152,7 @@ async function saveName() {
           />
 
           <form
-            v-if="editing"
+            v-if="editing && canEditName"
             data-testid="profile-name-form"
             class="mt-7 w-full max-w-md"
             novalidate
@@ -216,6 +226,7 @@ async function saveName() {
                 {{ visibleName }}
               </h2>
               <UButton
+                v-if="canEditName"
                 data-testid="profile-name-edit"
                 type="button"
                 icon="i-lucide-pencil"

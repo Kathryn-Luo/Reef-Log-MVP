@@ -2,12 +2,15 @@ import type { PrismaClient, User } from '@prisma/client'
 import type { CreatureDetailDto, CreatureDetailResponse, CreatureProfileResponse, MoveCreatureResponse, TankCreaturesData } from '#shared/types/creature'
 import type { GuestSandboxResponse } from '#shared/types/guestSandbox'
 import type { AvatarSource, UserProfileResponse } from '#shared/types/profile'
+import type { AvatarUploadPart, AvatarUploadRejection } from '#shared/utils/avatarUpload'
+import type { AvatarBlobStore } from './avatarStore'
 import type { Timer } from './requestTiming'
 import type { TankHomeData, TankOption } from '#shared/types/home'
 import type { MaintenancePageData, MaintenanceTaskDto, MaintenanceTaskResponse } from '#shared/types/maintenance'
 import type { CreateTankResponse } from '#shared/types/tank'
 import type { TrendPageData } from '#shared/types/trend'
 import type { CreateWaterLogResponse, WaterLogPageData } from '#shared/types/waterLog'
+import { parseAvatarUpload } from '#shared/utils/avatarUpload'
 import { parseCreatureStatusInput } from '#shared/utils/creatureDetail'
 import { parseCreatureProfileInput } from '#shared/utils/creatureForm'
 // completedOn 的規則與保養頁共用同一份（issue #122，與 parseWaterLogInput 同一個作法）
@@ -19,6 +22,7 @@ import { parseTankInput } from '#shared/utils/tankForm'
 import { parseTrendRange } from '#shared/utils/trend'
 // parseWaterLogInput 與記錄水質的表單共用同一份規則，所以它住在 shared（issue #124）
 import { parseWaterLogInput } from '#shared/utils/waterLog'
+import { saveCustomAvatar, vercelAvatarBlobStore } from './avatarStore'
 import { createCreatureProfile, getCreatureDetail, moveCreature, updateCreatureProfile, updateCreatureStatus } from './creatureDetail'
 import { getTankCreatures } from './creatureList'
 import { ensureGuestSandbox } from './guestSandbox'
@@ -368,7 +372,8 @@ export async function resolveProfile(
   return { ok: true, value: toUserProfileResponse(fullUser) }
 }
 
-type ProfileUser = Pick<User, 'displayName' | 'email' | 'createdAt' | 'customAvatarUrl' | 'googleAvatarUrl'> & {
+/** `toUserProfileResponse` 需要的那幾欄。`saveCustomAvatar` 回的也是這個形狀。 */
+export type ProfileUser = Pick<User, 'displayName' | 'email' | 'createdAt' | 'customAvatarUrl' | 'googleAvatarUrl'> & {
   accounts: { provider: string }[]
 }
 
@@ -431,6 +436,65 @@ export async function updateOwnedProfile(
   })
 
   return { ok: true, value: toUserProfileResponse(updatedUser) }
+}
+
+/**
+ * 拒絕上傳的三種理由各自對應一個 statusMessage。
+ *
+ * 三種都是 400，但**不能是同一句話**：UI 要靠它們分辨顯示「檔案太大」還是
+ * 「格式不支援」（#168）。中文訊息一律在 `data.message`（h3 會過濾掉 statusMessage
+ * 裡的非 ASCII 字元，見 shared/utils/apiError.ts）。
+ */
+const AVATAR_REJECTION_STATUS: Record<AvatarUploadRejection, string> = {
+  'missing': 'Missing avatar file',
+  'too-large': 'Avatar file too large',
+  'unsupported-format': 'Unsupported avatar format',
+}
+
+/** multipart 的內容，與 body 一樣**刻意延後**到通過身分檢查之後才取得（見下方註解） */
+type MultipartReader = () => Promise<AvatarUploadPart[] | undefined>
+
+/**
+ * POST /api/profile/avatar —— 上傳一張自訂頭像（issue #166）。
+ *
+ * 順序是「先驗證登入，再讀取與驗證檔案」，而且這裡的順序比其他幾支更要緊：
+ * 未登入的人不該有辦法讓 server 先把一份 2 MB 的檔案收進記憶體，才被告知他根本沒有
+ * 身分。`readParts` 因此是一個 thunk，不是已經 await 好的值。
+ *
+ * 檔案本身的三道檢查（MIME、副檔名、magic bytes）與 2 MB 上限在
+ * `shared/utils/avatarUpload.ts`；上傳、compare-and-set 與 Blob 收拾在
+ * `server/utils/avatarStore.ts`。
+ *
+ * 訪客一樣可以上傳：`displayName` 的那道限制來自 schema 註解把訪客的名字定成常數
+ * （見 GUEST_CANNOT_RENAME），頭像沒有這回事，而訪客沙盒本來就是用來把功能走一遍的。
+ *
+ * `store` 是預設參數而不是模組內直接呼叫，理由與 `resolveGuestSandbox` 的 `timer`
+ * 相同：測試餵得進替身，正式路徑一個字都不必改。
+ */
+export async function updateOwnedAvatar(
+  client: PrismaClient,
+  user: SessionUser | null,
+  readParts: MultipartReader,
+  store: AvatarBlobStore = vercelAvatarBlobStore,
+): Promise<Authorized<UserProfileResponse>> {
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  const parsed = parseAvatarUpload(await readParts())
+
+  if (!parsed.ok) {
+    return { ok: false, error: invalidInput(AVATAR_REJECTION_STATUS[parsed.reason], parsed.message) }
+  }
+
+  const owner = await saveCustomAvatar(client, user.id, parsed.value, store)
+
+  // cookie 有效但使用者已被刪除——與其他幾支同一個答案，而且此時還沒建立任何 Blob
+  if (!owner) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  return { ok: true, value: toUserProfileResponse(owner) }
 }
 
 /** GET /api/tanks/:id/home —— screen-1 單一缸的內容 */

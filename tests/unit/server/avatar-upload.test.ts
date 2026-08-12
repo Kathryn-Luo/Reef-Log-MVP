@@ -8,7 +8,7 @@ import {
   AVATAR_TOO_LARGE_MESSAGE,
   AVATAR_UNSUPPORTED_MESSAGE,
 } from '../../../shared/utils/avatarUpload'
-import { NOT_SIGNED_IN, updateOwnedAvatar } from '../../../server/utils/authorization'
+import { GUEST_CANNOT_UPLOAD_AVATAR, NOT_SIGNED_IN, updateOwnedAvatar } from '../../../server/utils/authorization'
 import { buildAvatarPathname, vercelAvatarBlobStore } from '../../../server/utils/avatarStore'
 
 // POST /api/profile/avatar —— 自訂頭像上傳的 server 端（issue #166）。
@@ -166,6 +166,66 @@ describe('updateOwnedAvatar：未登入', () => {
 
     expect(store.put).not.toHaveBeenCalled()
     expect(client.user.updateMany).not.toHaveBeenCalled()
+  })
+})
+
+// Epic #160（2026-08-12 定案）：訪客不得上傳頭像。
+//
+// 兩個理由都不是 UX：訪客沙盒被 prisma/cleanupExpiredGuests.ts 清掉時，customAvatarUrl
+// 指的 Blob 會變成永遠沒人記得的孤兒；而這是 public repo、訪客登入不需要任何憑證，
+// 開放上傳等於任何人都能拿 production 的 store 當免費圖床。
+describe('updateOwnedAvatar：訪客', () => {
+  const guest = { id: 'user-guest' }
+
+  function guestRow() {
+    return userRow({
+      id: guest.id,
+      displayName: '訪客',
+      email: null,
+      googleAvatarUrl: null,
+      accounts: [{ provider: 'GUEST' }],
+    })
+  }
+
+  it('回傳 403，而且連 multipart 都沒有讀、沒有建立 Blob', async () => {
+    const client = fakeClient([guestRow()])
+    const store = fakeStore()
+    const readParts = vi.fn(async () => pngUpload())
+
+    await expect(updateOwnedAvatar(client, guest, readParts, store))
+      .resolves.toEqual({ ok: false, error: GUEST_CANNOT_UPLOAD_AVATAR })
+
+    // 這是這道檢查最實際的好處：匿名腳本連 2 MB 都送不進 server 的記憶體
+    expect(readParts).not.toHaveBeenCalled()
+    expect(store.put).not.toHaveBeenCalled()
+    expect(client.user.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('訪客送不合格的檔案也是 403，不會被 400 蓋掉', async () => {
+    const client = fakeClient([guestRow()])
+    const store = fakeStore()
+
+    const result = await updateOwnedAvatar(
+      client,
+      guest,
+      async () => pngUpload({ filename: 'x.svg', type: 'image/svg+xml' }),
+      store,
+    )
+
+    expect(result).toEqual({ ok: false, error: GUEST_CANNOT_UPLOAD_AVATAR })
+    expect(store.put).not.toHaveBeenCalled()
+  })
+
+  it('同時掛著 GUEST 與 GOOGLE 的帳號可以上傳', async () => {
+    const rows = [userRow({ accounts: [{ provider: 'GUEST' }, { provider: 'GOOGLE' }] })]
+    const client = fakeClient(rows)
+    const store = fakeStore()
+
+    const result = await updateOwnedAvatar(client, { id: 'user-a' }, async () => pngUpload(), store)
+
+    expect(result.ok).toBe(true)
+    expect(store.put).toHaveBeenCalledTimes(1)
+    expect(rows[0]!.customAvatarUrl).toMatch(/^https:\/\/store\.example\/avatars\/user-a\//)
   })
 })
 

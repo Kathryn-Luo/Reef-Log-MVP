@@ -68,7 +68,7 @@ registerEndpoint('/api/profile', {
 enableAutoUnmount(afterEach)
 
 beforeEach(() => {
-  clearNuxtData()
+  clearNuxtData('profile')
   clearNuxtState()
   state.profile = { ...GOOGLE_PROFILE }
   state.getFailure = false
@@ -96,10 +96,10 @@ describe('/profile', () => {
     // `open()` 會先 flush，適合最終畫面；這裡要先觀察請求進行中的骨架。
     const page = await mountSuspended(ProfilePage, { route: '/profile' })
 
-    expect(page.find('[data-testid="profile-loading"]').exists()).toBe(true)
     await vi.waitFor(() => {
       expect(state.resolvePendingGet).not.toBeNull()
     })
+    expect(page.find('[data-testid="profile-loading"]').exists()).toBe(true)
     state.resolvePendingGet?.()
     await flushPromises()
 

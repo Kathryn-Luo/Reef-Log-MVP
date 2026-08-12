@@ -22,6 +22,47 @@ export interface CreatureProfileRequest extends CreatureProfileInput {
   timeZoneOffsetMinutes: number
 }
 
+/**
+ * 一項建議是從哪來的（issue #159）。
+ *
+ * 畫面用它區分「ReefLog 內建」與「你自己輸入過」，也讓合併時的優先序有依據：
+ * 同一個學名兩邊都有時留下歷史那一筆——那是這位使用者實際寫過的大小寫與寫法。
+ */
+export type CreatureSuggestionSource = 'builtin' | 'history'
+
+/**
+ * 學名欄的一項建議。
+ *
+ * `names` 是俗名與別名：搜尋要能用「火焰仙」找到 `Centropyge loriculus`，
+ * 所以建議的「顯示名」與「填進欄位的值」本來就不是同一個字串。
+ *
+ * `subCategory` 可為 null：歷史資料裡的生物不一定填過細分類，內建清單則一定有。
+ */
+export interface CreatureSpeciesSuggestion {
+  names: string[]
+  scientificName: string
+  category: CreatureCategoryKey
+  subCategory: string | null
+  source: CreatureSuggestionSource
+}
+
+/** 細分類欄的一項建議。分類跟著一起帶，建議才篩得出「魚的細分類」。 */
+export interface CreatureSubCategorySuggestion {
+  subCategory: string
+  category: CreatureCategoryKey
+  source: CreatureSuggestionSource
+}
+
+/**
+ * GET /api/creature-suggestions 的回應——目前使用者過去輸入過的值，已去重。
+ *
+ * 只回自動完成用得到的欄位：這支端點的用途是輸入輔助，不是另一條讀生物資料的路。
+ */
+export interface CreatureSuggestionsResponse {
+  species: CreatureSpeciesSuggestion[]
+  subCategories: CreatureSubCategorySuggestion[]
+}
+
 /** 對應 schema.prisma 的 enum DeathCause */
 export type DeathCauseKey = 'DISEASE' | 'WATER_QUALITY' | 'PREDATION' | 'JUMPED' | 'STARVATION' | 'UNKNOWN'
 

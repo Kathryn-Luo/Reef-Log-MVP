@@ -312,7 +312,7 @@ test.describe('別人的 id', () => {
 // Then  回傳 401，不回傳任何資料
 test.describe('未登入', () => {
   // 全新的 context，一張 cookie 都沒有——不是「過期」，是從來沒登入過
-  test('十二支 API 一律回 401', async ({ browser }) => {
+  test('十三支 API 一律回 401', async ({ browser }) => {
     const context = await browser.newContext()
 
     const responses = await Promise.all([
@@ -332,9 +332,12 @@ test.describe('未登入', () => {
       // 訪客沙盒的補建（issue #144）。這一支特別要緊：它是唯一一支不需要任何既有資料
       // 就會**寫入**的 API，折成 200 的話沒有 cookie 的請求也能讓資料庫長出一整份示範資料
       context.request.post('/api/guest-sandbox'),
+      // 自動完成的個人歷史建議（issue #159）。它讀的是真實的生物資料，
+      // 折成 200 空清單的話，沒有 cookie 的請求也會拿到一份「查得到什麼」的回答
+      context.request.get('/api/creature-suggestions'),
     ])
 
-    expect(responses.map(response => response.status())).toEqual(Array.from({ length: 12 }, () => 401))
+    expect(responses.map(response => response.status())).toEqual(Array.from({ length: 13 }, () => 401))
 
     await context.close()
   })

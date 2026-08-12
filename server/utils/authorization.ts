@@ -1,5 +1,5 @@
 import type { PrismaClient, User } from '@prisma/client'
-import type { CreatureDetailDto, CreatureDetailResponse, CreatureProfileResponse, MoveCreatureResponse, TankCreaturesData } from '#shared/types/creature'
+import type { CreatureDetailDto, CreatureDetailResponse, CreatureProfileResponse, CreatureSuggestionsResponse, MoveCreatureResponse, TankCreaturesData } from '#shared/types/creature'
 import type { GuestSandboxResponse } from '#shared/types/guestSandbox'
 import type { AvatarSource, UserProfileResponse } from '#shared/types/profile'
 import type { Timer } from './requestTiming'
@@ -21,6 +21,7 @@ import { parseTrendRange } from '#shared/utils/trend'
 import { parseWaterLogInput } from '#shared/utils/waterLog'
 import { createCreatureProfile, getCreatureDetail, moveCreature, updateCreatureProfile, updateCreatureStatus } from './creatureDetail'
 import { getTankCreatures } from './creatureList'
+import { getCreatureSuggestions } from './creatureSuggestions'
 import { ensureGuestSandbox } from './guestSandbox'
 import { createTimer } from './requestTiming'
 import { getTankHome, listTankOptions } from './homeData'
@@ -706,6 +707,23 @@ export async function resolveTankCreatures(
   }
 
   return { ok: true, value: { creatures: await getTankCreatures(client, owned.value) } }
+}
+
+/**
+ * GET /api/creature-suggestions —— 新增／編輯生物表單的個人歷史建議（issue #159）。
+ *
+ * 不掛在任何一個缸底下：建議的母體是「我名下所有缸的生物」，換一缸不該換一份建議。
+ * 未登入回 401，與其他每一支一樣——建議清單雖然只是輸入輔助，讀的仍是真實的生物資料。
+ */
+export async function resolveCreatureSuggestions(
+  client: PrismaClient,
+  user: SessionUser | null,
+): Promise<Authorized<CreatureSuggestionsResponse>> {
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  return { ok: true, value: await getCreatureSuggestions(client, user.id) }
 }
 
 /** POST /api/tanks/:id/creatures —— 在目前使用者的缸建立一隻生物。 */

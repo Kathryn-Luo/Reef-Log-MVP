@@ -32,3 +32,9 @@ export function parseDisplayName(raw: unknown): ParseDisplayNameResult {
 
   return { ok: true, value: displayName }
 }
+
+/** 無照片時顯示名稱的第一個 Unicode 字元；沒有名稱則交給 UI 顯示 icon。 */
+export function profileInitial(displayName: string | null | undefined): string | null {
+  const name = displayName?.trim()
+  return name ? [...name][0] ?? null : null
+}

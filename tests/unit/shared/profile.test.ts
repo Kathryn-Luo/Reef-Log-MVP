@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it } from 'vitest'
-import { DISPLAY_NAME_MAX_LENGTH, parseDisplayName } from '../../../shared/utils/profile'
+import { DISPLAY_NAME_MAX_LENGTH, parseDisplayName, profileInitial } from '../../../shared/utils/profile'
 
 describe('parseDisplayName', () => {
   it('移除名稱前後空白', () => {
@@ -35,4 +35,16 @@ describe('parseDisplayName', () => {
         .toEqual({ ok: false, message: '顯示名稱不能包含換行或控制字元。' })
     },
   )
+})
+
+describe('profileInitial', () => {
+  it.each([
+    [' 訪客 ', '訪'],
+    ['🐠魚缸', '🐠'],
+    ['', null],
+    ['   ', null],
+    [null, null],
+  ])('從顯示名稱 %j 取得首字 %j', (displayName, expected) => {
+    expect(profileInitial(displayName)).toBe(expected)
+  })
 })

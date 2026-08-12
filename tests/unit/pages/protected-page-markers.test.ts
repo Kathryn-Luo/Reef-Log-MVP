@@ -10,6 +10,7 @@ import NewCreaturePage from '../../../app/pages/creatures/new.vue'
 import MaintenancePage from '../../../app/pages/maintenance/index.vue'
 import NewMaintenanceTaskPage from '../../../app/pages/maintenance/tasks/new.vue'
 import NewTankPage from '../../../app/pages/tanks/new.vue'
+import ProfilePage from '../../../app/pages/profile.vue'
 import { signedInUserSession } from '../support/session'
 import { PROTECTED_PAGES } from '../../e2e/support/protectedPages'
 import type { TankOption, WaterParameterKey } from '#shared/types/home'
@@ -127,6 +128,14 @@ endpoint('/api/tanks/tank-1/water-logs', () => ({ previousReadings: [], waterLog
 endpoint('/api/tanks/tank-1/trends', () => emptyTrends())
 endpoint('/api/tanks/tank-1/creatures', () => ({ creatures: [] }))
 endpoint('/api/tanks/tank-1/maintenance', () => ({ tasks: [dueTodayTask()] }))
+endpoint('/api/profile', () => ({
+  displayName: '訪客',
+  email: null,
+  providers: ['GUEST'],
+  createdAt: '2026-08-01T00:00:00.000Z',
+  avatarUrl: null,
+  avatarSource: 'none',
+}))
 
 const PAGE_COMPONENTS: Record<string, Component> = {
   '/': HomePage,
@@ -137,6 +146,7 @@ const PAGE_COMPONENTS: Record<string, Component> = {
   '/maintenance': MaintenancePage,
   '/maintenance/tasks/new': NewMaintenanceTaskPage,
   '/tanks/new': NewTankPage,
+  '/profile': ProfilePage,
 }
 
 /** 沒有任何 GET 的頁面：整頁壞掉不是靠打壞 API 模擬得出來的 */

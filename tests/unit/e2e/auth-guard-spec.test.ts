@@ -92,10 +92,10 @@ function markerAssertion(): string {
 }
 
 describe('每一個受保護的頁面都指名了自己的正面標記', () => {
-  // issue 的清單加上 #16 與 #17 的新增表單
-  it('八頁都在表上', () => {
+  // issue 的清單加上 #16、#17 的新增表單與 #164 個人資料頁
+  it('九頁都在表上', () => {
     expect(PROTECTED_PAGES.map(page => page.path))
-      .toEqual(['/', '/log', '/trends', '/creatures', '/creatures/new', '/maintenance', '/maintenance/tasks/new', '/tanks/new'])
+      .toEqual(['/', '/log', '/trends', '/creatures', '/creatures/new', '/maintenance', '/maintenance/tasks/new', '/tanks/new', '/profile'])
   })
 
   // ⚠ 底下兩題只是命名上的早期警示，**不是**「標記合格」的證明。

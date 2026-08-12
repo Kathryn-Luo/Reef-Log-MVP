@@ -33,6 +33,23 @@ export function parseDisplayName(raw: unknown): ParseDisplayNameResult {
   return { ok: true, value: displayName }
 }
 
+/**
+ * 這個帳號的 `displayName` 是不是使用者自己的名字。
+ *
+ * 純訪客不是：`server/utils/guestLogin.ts` 對每一位訪客都寫入同一個固定字串「訪客」
+ * （見 `prisma/schema.prisma` 的 `User.displayName`）。兩個地方因此都看這個判斷——
+ *
+ *   - 改名：訪客不能改（#171，server 回 403）
+ *   - 首字頭像：訪客不顯示，直接用預設 icon。每一位訪客都會看到同一個「訪」，
+ *     那個字認不出任何人，也不是他選的
+ *
+ * 判斷是「有沒有任何非 `GUEST` 的 provider」，**不是**「名字等不等於『訪客』」：
+ * Google 使用者可以把自己的名字改成「訪客」，那仍然是他自己選的名字。
+ */
+export function ownsDisplayName(providers: readonly string[] | null | undefined): boolean {
+  return providers?.some(provider => provider !== 'GUEST') ?? false
+}
+
 /** 無照片時顯示名稱的第一個 Unicode 字元；沒有名稱則交給 UI 顯示 icon。 */
 export function profileInitial(displayName: string | null | undefined): string | null {
   const name = displayName?.trim()

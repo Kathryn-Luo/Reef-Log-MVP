@@ -10,8 +10,13 @@
 // 學名欄的「顯示的是俗名、填進去的是學名」在 combobox 的 label/value 模型裡也彆扭。
 // 文字輸入仍然是 Nuxt UI 的 UInput，樣式與表單其他欄位一致，沒有另外引入任何套件。
 //
-// 清單本身刻意用原生的 <button>：與同一張表單上的分類選擇器（CreatureProfileForm）
-// 同一個作法，也讓建議在測試裡就是一個點得到的元素，不需要模擬 combobox 的鍵盤協定。
+// 但「不用現成的 combobox」不等於「不必遵守 combobox 的協定」（PR #177 的 review）：
+// 一旦宣告 role="combobox" 與 role="option"，輔助技術就會照那套規則讀它。所以
+// aria-controls、aria-activedescendant 與方向鍵／Enter／Escape 都要自己補上。
+//
+// 建議項刻意**不是**可聚焦的元素：combobox 的協定是焦點永遠留在輸入框上，由
+// aria-activedescendant 指出「現在指著哪一項」。把每一項做成 <button> 的話，
+// 鍵盤使用者要按最多 8 次 Tab 才離得開這一個欄位。
 
 export interface CreatureSuggestionItem {
   /** 選取後填進欄位的值 */
@@ -46,17 +51,78 @@ const emit = defineEmits<{
 
 const open = ref(false)
 
+/** 方向鍵指到第幾項；-1 ＝ 還沒指任何一項（剛展開時就是這個狀態） */
+const activeIndex = ref(-1)
+
 const value = computed({
   get: () => props.modelValue,
-  set: (next: string) => emit('update:modelValue', next),
+  set: (next: string) => {
+    // 字一改，上一輪指著的那一項就不再對應任何東西
+    activeIndex.value = -1
+    emit('update:modelValue', next)
+  },
 })
 
 const visibleItems = computed(() => open.value ? props.items : [])
 
+const listId = computed(() => `${props.id}-suggestions`)
+
+/** aria-activedescendant 指的是 id，所以每一項都要有一個穩定的 id */
+function optionId(index: number): string {
+  return `${listId.value}-${index}`
+}
+
+const activeDescendant = computed(() =>
+  activeIndex.value >= 0 && activeIndex.value < visibleItems.value.length
+    ? optionId(activeIndex.value)
+    : undefined,
+)
+
+function close() {
+  open.value = false
+  activeIndex.value = -1
+}
+
 function choose(item: CreatureSuggestionItem) {
   emit('select', item)
   // 選完就收起來：清單留著只會擋住下一個欄位，而使用者要的那件事已經完成
-  open.value = false
+  close()
+}
+
+/** 上下移動，並在頭尾繞回去——清單短，繞回去比停在邊界少按幾次 */
+function move(step: number) {
+  const total = visibleItems.value.length
+
+  if (!total) {
+    return
+  }
+
+  activeIndex.value = activeIndex.value < 0 && step < 0
+    ? total - 1
+    : (activeIndex.value + step + total) % total
+}
+
+function onArrow(step: number) {
+  // 方向鍵也負責把收起來的清單叫回來：使用者按下去的意思就是「讓我看選項」
+  open.value = true
+  move(step)
+}
+
+/**
+ * Enter 只在「清單開著而且指著某一項」時被吃掉。
+ *
+ * 其餘情況一律放行，否則使用者打完清單外的字、想按 Enter 送出表單時會沒有反應——
+ * 而「清單外的值照樣存得進去」正是這兩個欄位的重點（issue #159）。
+ */
+function onEnter(event: KeyboardEvent) {
+  const item = visibleItems.value[activeIndex.value]
+
+  if (!item) {
+    return
+  }
+
+  event.preventDefault()
+  choose(item)
 }
 
 /**
@@ -69,7 +135,7 @@ function onFocusOut(event: FocusEvent) {
   const next = event.relatedTarget
 
   if (!(next instanceof Node) || !(event.currentTarget as HTMLElement).contains(next)) {
-    open.value = false
+    close()
   }
 }
 </script>
@@ -87,45 +153,54 @@ function onFocusOut(event: FocusEvent) {
       autocomplete="off"
       role="combobox"
       :aria-expanded="visibleItems.length > 0"
+      :aria-controls="visibleItems.length > 0 ? listId : undefined"
+      :aria-activedescendant="activeDescendant"
       aria-autocomplete="list"
       class="w-full"
       @focus="open = true"
       @input="open = true"
-      @keydown.escape="open = false"
+      @keydown.down.prevent="onArrow(1)"
+      @keydown.up.prevent="onArrow(-1)"
+      @keydown.enter="onEnter"
+      @keydown.escape="close"
     />
 
     <ul
       v-if="visibleItems.length > 0"
+      :id="listId"
       data-testid="creature-suggestion-list"
       role="listbox"
       class="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-lg border border-default bg-default py-1 shadow-lg"
     >
+      <!--
+        每一項就是 option 本身，不再包一層 <button>：焦點要留在輸入框上（見檔頭）。
+        滑鼠仍然點得到——mousedown.prevent 讓輸入框不失焦，click 才送得到這裡。
+      -->
       <li
-        v-for="item in visibleItems"
+        v-for="(item, index) in visibleItems"
+        :id="optionId(index)"
         :key="`${item.value}-${item.label}`"
+        data-testid="creature-suggestion"
         role="option"
-        :aria-selected="item.value === modelValue"
+        tabindex="-1"
+        :data-value="item.value"
+        :aria-selected="index === activeIndex"
+        class="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm"
+        :class="index === activeIndex ? 'bg-elevated' : 'hover:bg-elevated/60'"
+        @mousedown.prevent
+        @click="choose(item)"
       >
-        <button
-          data-testid="creature-suggestion"
-          type="button"
-          :data-value="item.value"
-          class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-elevated/60"
-          @mousedown.prevent
-          @click="choose(item)"
-        >
-          <span class="min-w-0 flex-1 truncate">
-            {{ item.label }}
-            <span
-              v-if="item.hint"
-              class="ml-1 text-xs text-muted"
-            >{{ item.hint }}</span>
-          </span>
+        <span class="min-w-0 flex-1 truncate">
+          {{ item.label }}
           <span
-            v-if="item.history"
-            class="shrink-0 rounded px-1.5 py-0.5 text-xs text-dimmed ring-1 ring-default"
-          >用過</span>
-        </button>
+            v-if="item.hint"
+            class="ml-1 text-xs text-muted"
+          >{{ item.hint }}</span>
+        </span>
+        <span
+          v-if="item.history"
+          class="shrink-0 rounded px-1.5 py-0.5 text-xs text-dimmed ring-1 ring-default"
+        >用過</span>
       </li>
     </ul>
   </div>

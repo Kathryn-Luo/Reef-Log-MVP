@@ -44,7 +44,8 @@ export const CREATURE_SPECIES: readonly CreatureSpecies[] = [
   { names: ['黃新娘', '黃新娘神仙'], scientificName: 'Centropyge heraldi', category: 'FISH', subCategory: '神仙' },
   { names: ['皇后神仙', '皇后'], scientificName: 'Pomacanthus imperator', category: 'FISH', subCategory: '神仙' },
   { names: ['六線龍', '六線龍魚'], scientificName: 'Pseudocheilinus hexataenia', category: 'FISH', subCategory: '龍魚' },
-  { names: ['青蛙', '青蛙魚', '花斑鰭', '曼德琳'], scientificName: 'Synchiropus splendidus', category: 'FISH', subCategory: '鰕虎' },
+  // 曼德琳是䲗科（Callionymidae），不是鰕虎科——外型像、分類上不是同一群
+  { names: ['青蛙', '青蛙魚', '花斑連鰭䲗', '曼德琳'], scientificName: 'Synchiropus splendidus', category: 'FISH', subCategory: '青蛙魚' },
   { names: ['火箭', '雷達', '紅火箭'], scientificName: 'Nemateleotris magnifica', category: 'FISH', subCategory: '鰕虎' },
   { names: ['黃金鰕虎', '黃金蝦虎'], scientificName: 'Cryptocentrus cinctus', category: 'FISH', subCategory: '鰕虎' },
   { names: ['藍魔鬼', '藍雀'], scientificName: 'Chrysiptera cyanea', category: 'FISH', subCategory: '雀鯛' },
@@ -70,7 +71,9 @@ export const CREATURE_SPECIES: readonly CreatureSpecies[] = [
   { names: ['火焰蝦', '紅蘇蝦'], scientificName: 'Lysmata debelius', category: 'OTHER', subCategory: '蝦' },
   { names: ['翡翠蟹', '綠翡翠蟹'], scientificName: 'Mithraculus sculptus', category: 'OTHER', subCategory: '蟹' },
   { names: ['藍腳寄居蟹', '寄居蟹'], scientificName: 'Calcinus elegans', category: 'OTHER', subCategory: '寄居蟹' },
-  { names: ['蠑螺', '角螺'], scientificName: 'Trochus sp.', category: 'OTHER', subCategory: '螺' },
+  // 蠑螺是 Turbo 屬；Trochus 是馬蹄螺／鐘螺，兩者在缸裡都常見但不是同一種，分開列
+  { names: ['蠑螺', '角螺'], scientificName: 'Turbo sp.', category: 'OTHER', subCategory: '螺' },
+  { names: ['馬蹄螺', '鐘螺'], scientificName: 'Trochus sp.', category: 'OTHER', subCategory: '螺' },
   { names: ['藍指海星', '海星'], scientificName: 'Linckia laevigata', category: 'OTHER', subCategory: '海星' },
   { names: ['奶嘴海葵', '泡泡海葵'], scientificName: 'Entacmaea quadricolor', category: 'OTHER', subCategory: '海葵' },
 ]
@@ -87,6 +90,37 @@ function toSuggestion(species: CreatureSpecies): CreatureSpeciesSuggestion {
     category: species.category,
     subCategory: species.subCategory,
     source: 'builtin',
+  }
+}
+
+/** 學名（正規化後）→ 內建清單那一筆。合併歷史值時要查它。 */
+const BUILTIN_BY_SCIENTIFIC_NAME = new Map(
+  CREATURE_SPECIES.map(species => [normalize(species.scientificName), species]),
+)
+
+/**
+ * 把內建清單已知、而歷史值缺少的欄位補進歷史值。
+ *
+ * 「歷史值優先」決定的是**顯示哪一份**——留下使用者自己寫過的學名大小寫與他給那隻
+ * 生物取的名字。但它不該把內建清單知道的事情一起丟掉：上次填了學名卻把細分類留白的
+ * 使用者，下次選同一筆建議時就再也帶不進細分類了（PR #177 的 review）。
+ *
+ * 俗名接在使用者自己的名字後面，所以主標仍是「小火」而不是「火焰仙」，
+ * 但打「火焰仙」時這一筆也搜得到——使用者記得的通常是俗名，不是學名。
+ */
+function withBuiltinFallback(suggestion: CreatureSpeciesSuggestion): CreatureSpeciesSuggestion {
+  const builtin = BUILTIN_BY_SCIENTIFIC_NAME.get(normalize(suggestion.scientificName))
+
+  if (!builtin) {
+    return suggestion
+  }
+
+  const extraNames = builtin.names.filter(name => !suggestion.names.includes(name))
+
+  return {
+    ...suggestion,
+    names: extraNames.length ? [...suggestion.names, ...extraNames] : suggestion.names,
+    subCategory: suggestion.subCategory ?? builtin.subCategory,
   }
 }
 
@@ -121,8 +155,14 @@ export function searchSpeciesSuggestions(options: SearchSpeciesOptions): Creatur
   const seen = new Set<string>()
   const results: CreatureSpeciesSuggestion[] = []
 
-  // 歷史在前：同一個學名兩邊都有時，留下的是這位使用者自己寫過的那一份
-  for (const suggestion of [...(options.history ?? []), ...CREATURE_SPECIES.map(toSuggestion)]) {
+  // 歷史在前：同一個學名兩邊都有時，留下的是這位使用者自己寫過的那一份，
+  // 但缺的欄位先由內建清單補齊（見 withBuiltinFallback）
+  const candidates = [
+    ...(options.history ?? []).map(withBuiltinFallback),
+    ...CREATURE_SPECIES.map(toSuggestion),
+  ]
+
+  for (const suggestion of candidates) {
     const key = normalize(suggestion.scientificName)
 
     if (!key || seen.has(key) || !matchesSpecies(suggestion, query)) {
@@ -149,7 +189,7 @@ export interface SearchSubCategoryOptions {
   limit?: number
 }
 
-/** 內建清單裡屬於某個分類的細分類（依清單順序，去重） */
+/** 內建清單的細分類（依清單順序，去重） */
 function builtinSubCategories(): CreatureSubCategorySuggestion[] {
   const seen = new Set<string>()
 
@@ -167,6 +207,44 @@ function builtinSubCategories(): CreatureSubCategorySuggestion[] {
 }
 
 /**
+ * 還沒選分類時，把三類交錯排開（魚、珊瑚、其他、魚、珊瑚…）。
+ *
+ * 內建清單是照分類分段寫的，直接照順序取的話前 8 筆全是魚——選了分類的人不受影響
+ * （後面會篩掉別類），但**還沒選分類**的人會以為這個欄位只認得魚（PR #177 的 review）。
+ *
+ * 只影響「沒有輸入」時的預設清單順序；一旦開始打字，命中的本來就散落在三類裡。
+ */
+function interleaveByCategory(items: CreatureSubCategorySuggestion[]): CreatureSubCategorySuggestion[] {
+  const buckets = new Map<string, CreatureSubCategorySuggestion[]>()
+
+  for (const item of items) {
+    const bucket = buckets.get(item.category)
+
+    if (bucket) {
+      bucket.push(item)
+    }
+    else {
+      buckets.set(item.category, [item])
+    }
+  }
+
+  const queues = [...buckets.values()]
+  const result: CreatureSubCategorySuggestion[] = []
+
+  for (let round = 0; result.length < items.length; round += 1) {
+    for (const queue of queues) {
+      const item = queue[round]
+
+      if (item) {
+        result.push(item)
+      }
+    }
+  }
+
+  return result
+}
+
+/**
  * 細分類欄的建議：先依目前分類篩選，再依輸入篩選，歷史值優先且去重。
  *
  * 為什麼是「篩掉」而不是「排後面」：魚的細分類（倒吊 / 神仙 / 小丑…）與珊瑚的
@@ -180,7 +258,10 @@ export function searchSubCategorySuggestions(options: SearchSubCategoryOptions):
   const seen = new Set<string>()
   const results: CreatureSubCategorySuggestion[] = []
 
-  for (const suggestion of [...(options.history ?? []), ...builtinSubCategories()]) {
+  // 沒選分類時把三類交錯開，避免前 8 筆被清單順序決定成全是魚
+  const builtin = category ? builtinSubCategories() : interleaveByCategory(builtinSubCategories())
+
+  for (const suggestion of [...(options.history ?? []), ...builtin]) {
     const value = suggestion.subCategory.trim()
     const key = normalize(value)
 

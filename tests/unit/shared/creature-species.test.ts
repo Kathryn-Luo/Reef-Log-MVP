@@ -125,6 +125,66 @@ describe('學名欄的建議：個人歷史值', () => {
     expect(matched[0]!.source).toBe('history')
   })
 
+  // PR #177 的 review 抓到的：歷史值優先是對的，但「優先」只該決定**顯示哪一份**，
+  // 不該把內建清單已知的細分類一起丟掉。上次填了學名卻把細分類留白的話，
+  // 下次選同一筆建議就再也帶不進細分類了。
+  it('歷史值缺細分類時，由內建清單補上', () => {
+    const history: CreatureSpeciesSuggestion[] = [
+      {
+        names: ['小火'],
+        scientificName: 'Centropyge loriculus',
+        category: 'FISH',
+        subCategory: null,
+        source: 'history',
+      },
+    ]
+
+    const results = searchSpeciesSuggestions({ query: 'Centropyge loriculus', history })
+    const matched = results.filter(item => item.scientificName === 'Centropyge loriculus')
+
+    expect(matched).toHaveLength(1)
+    expect(matched[0]!.source).toBe('history')
+    expect(matched[0]!.subCategory).toBe('神仙')
+    // 顯示的主標仍是使用者自己給那隻的名字
+    expect(matched[0]!.names[0]).toBe('小火')
+  })
+
+  it('歷史值自己有細分類時不被內建清單蓋掉', () => {
+    const history: CreatureSpeciesSuggestion[] = [
+      {
+        names: ['小火'],
+        scientificName: 'Centropyge loriculus',
+        category: 'FISH',
+        subCategory: '我的分類',
+        source: 'history',
+      },
+    ]
+
+    const results = searchSpeciesSuggestions({ query: 'Centropyge loriculus', history })
+
+    expect(results[0]!.subCategory).toBe('我的分類')
+  })
+
+  // 合併進來的俗名讓歷史那一筆也搜得到——使用者記得的是「火焰仙」，不是學名
+  it('用內建的俗名也搜得到補齊後的歷史值', () => {
+    const history: CreatureSpeciesSuggestion[] = [
+      {
+        names: ['小火'],
+        scientificName: 'Centropyge loriculus',
+        category: 'FISH',
+        subCategory: null,
+        source: 'history',
+      },
+    ]
+
+    const results = searchSpeciesSuggestions({ query: '火焰仙', history })
+    const matched = results.filter(item => item.scientificName === 'Centropyge loriculus')
+
+    expect(matched).toHaveLength(1)
+    expect(matched[0]!.source).toBe('history')
+    expect(matched[0]!.subCategory).toBe('神仙')
+  })
+
   it('去重不分大小寫', () => {
     const history: CreatureSpeciesSuggestion[] = [
       { ...HISTORY_SPECIES[0]!, scientificName: 'amphiprion OCELLARIS' },
@@ -164,6 +224,24 @@ describe('細分類的建議依分類篩選', () => {
     expect(searchSubCategorySuggestions({ query: '神仙', category: '' }).map(item => item.category)).toEqual(['FISH'])
     expect(searchSubCategorySuggestions({ query: 'lps', category: '' }).map(item => item.category)).toEqual(['CORAL'])
     expect(searchSubCategorySuggestions({ query: '海星', category: '' }).map(item => item.category)).toEqual(['OTHER'])
+  })
+
+  // PR #177 的 review：上面那條驗的是「查得到」，但沒有輸入時使用者看到的是前 8 筆，
+  // 而內建清單前 8 個細分類剛好全是魚——珊瑚與其他生物在畫面上一個都不會出現。
+  it('還沒選分類又還沒輸入時，預設清單三類都看得到', () => {
+    const categories = new Set(
+      searchSubCategorySuggestions({ query: '', category: '' }).map(item => item.category),
+    )
+
+    expect(categories).toEqual(new Set(['FISH', 'CORAL', 'OTHER']))
+  })
+
+  it('選了分類之後就只剩那一類，不受上面的交錯影響', () => {
+    const categories = new Set(
+      searchSubCategorySuggestions({ query: '', category: 'CORAL' }).map(item => item.category),
+    )
+
+    expect(categories).toEqual(new Set(['CORAL']))
   })
 
   it('開啟欄位（尚未輸入）就給得出該分類的建議', () => {

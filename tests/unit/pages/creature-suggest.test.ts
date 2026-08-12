@@ -41,6 +41,7 @@ const HISTORY: CreatureSuggestionsResponse = {
 const state = {
   suggestionCalls: 0,
   failSuggestions: false,
+  history: HISTORY as CreatureSuggestionsResponse,
 }
 
 registerEndpoint('/api/creature-suggestions', () => {
@@ -50,7 +51,7 @@ registerEndpoint('/api/creature-suggestions', () => {
     throw new Error('suggestions unavailable')
   }
 
-  return HISTORY
+  return state.history
 })
 
 enableAutoUnmount(afterEach)
@@ -60,6 +61,7 @@ beforeEach(() => {
   clearNuxtState()
   state.suggestionCalls = 0
   state.failSuggestions = false
+  state.history = HISTORY
   vi.useRealTimers()
 })
 
@@ -157,6 +159,32 @@ describe('選取物種會帶入學名與細分類', () => {
 
     expect(valueOf(form, 'scientificName')).toBe('Centropyge loriculus')
     expect(valueOf(form, 'subCategory')).toBe('我自己分的類')
+  })
+
+  // PR #177 的 review：上一次填了學名卻把細分類留白的話，那筆歷史值會蓋掉內建清單，
+  // 於是下次選同一筆建議再也帶不進細分類。上面的 fixture 兩筆 subCategory 都有值，
+  // 剛好繞過這條路，所以這裡另外給一份留白的歷史值。
+  it('上次留白細分類的歷史學名，這次選取仍帶得進內建的細分類', async () => {
+    state.history = {
+      species: [{
+        names: ['小火'],
+        scientificName: 'Centropyge loriculus',
+        category: 'FISH',
+        subCategory: null,
+        source: 'history',
+      }],
+      subCategories: [],
+    }
+
+    const form = await mountForm()
+
+    // 打學名而不是俗名：這樣歷史那一筆也會命中，去重時它會蓋過內建的——
+    // 那正是原本會壞掉的路。打俗名的話歷史值根本不命中，反而看不出問題。
+    await type(form, 'scientificName', 'Centropyge')
+    await choose(form, 'scientificName', 'Centropyge loriculus')
+
+    expect(valueOf(form, 'scientificName')).toBe('Centropyge loriculus')
+    expect(valueOf(form, 'subCategory')).toBe('神仙')
   })
 
   it('只有空白字元的細分類視同尚未填寫', async () => {

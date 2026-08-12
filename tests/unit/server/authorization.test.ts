@@ -20,6 +20,7 @@ import {
   resolveCreatureDetail,
   resolveGuestSandbox,
   resolveMaintenancePage,
+  resolveProfile,
   resolveTankCreatures,
   resolveTankHome,
   resolveTankOptions,
@@ -41,6 +42,82 @@ import { WATER_PARAMETER_ORDER } from '../../../shared/utils/waterQuality'
 
 const USER_A = { id: 'user-a' }
 const USER_B = { id: 'user-b' }
+
+interface UserRow {
+  id: string
+  displayName: string | null
+  email: string | null
+  googleAvatarUrl: string | null
+  customAvatarUrl: string | null
+  createdAt: Date
+  accounts: { provider: string }[]
+}
+
+const USERS: UserRow[] = [
+  {
+    id: USER_A.id,
+    displayName: 'User A',
+    email: 'user-a@example.com',
+    googleAvatarUrl: null,
+    customAvatarUrl: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    accounts: [{ provider: 'GUEST' }],
+  },
+  {
+    id: USER_B.id,
+    displayName: 'User B',
+    email: 'user-b@example.com',
+    googleAvatarUrl: null,
+    customAvatarUrl: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    accounts: [{ provider: 'GOOGLE' }],
+  },
+  {
+    id: 'user-google-only',
+    displayName: 'Google User',
+    email: 'google@example.com',
+    googleAvatarUrl: 'http://google.com/avatar.jpg',
+    customAvatarUrl: null,
+    createdAt: new Date('2026-08-01T12:00:00.000Z'),
+    accounts: [{ provider: 'GOOGLE' }],
+  },
+  {
+    id: 'user-guest',
+    displayName: '訪客',
+    email: null,
+    googleAvatarUrl: null,
+    customAvatarUrl: null,
+    createdAt: new Date('2026-08-02T12:00:00.000Z'),
+    accounts: [{ provider: 'GUEST' }],
+  },
+  {
+    id: 'user-both-avatars',
+    displayName: 'Double Avatar User',
+    email: 'double@example.com',
+    googleAvatarUrl: 'http://google.com/avatar.jpg',
+    customAvatarUrl: 'http://custom.com/avatar.jpg',
+    createdAt: new Date('2026-08-03T12:00:00.000Z'),
+    accounts: [{ provider: 'GOOGLE' }],
+  },
+  {
+    id: 'user-no-avatar',
+    displayName: 'No Avatar User',
+    email: 'noavatar@example.com',
+    googleAvatarUrl: null,
+    customAvatarUrl: null,
+    createdAt: new Date('2026-08-04T12:00:00.000Z'),
+    accounts: [{ provider: 'GOOGLE' }],
+  },
+  {
+    id: 'user-multi-account',
+    displayName: 'Multi Account User',
+    email: 'multi@example.com',
+    googleAvatarUrl: null,
+    customAvatarUrl: null,
+    createdAt: new Date('2026-08-05T12:00:00.000Z'),
+    accounts: [{ provider: 'GOOGLE' }, { provider: 'GUEST' }],
+  },
+]
 
 interface TankRow {
   id: string
@@ -190,6 +267,12 @@ function fakeClient() {
       && (where.archivedAt === undefined || tank.archivedAt === where.archivedAt)) ?? null
 
   const client = {
+    user: {
+      findUnique: vi.fn(({ where }: { where: { id: string } }) => {
+        const user = USERS.find(u => u.id === where.id)
+        return Promise.resolve(user ?? null)
+      }),
+    },
     tank: {
       findFirst: vi.fn(({ where }: { where: Parameters<typeof ownedTank>[0] }) => Promise.resolve(ownedTank(where))),
       findMany: vi.fn(({ where }: { where: { userId: string, archivedAt: null } }) => Promise.resolve(
@@ -1318,7 +1401,7 @@ describe('DELETE /api/maintenance-tasks/:id/completions/:completedOn 的歸屬�
 // 剩下的授權問題就只有身分——而它是**唯一一支會在沒有任何既有資料的情況下寫入**的 API，
 // 401 折成 200 的話，任何沒有 cookie 的請求都能讓資料庫多長出一整份示範資料。
 //
-// 「已經備妥就不再複製」的冪等性由 guest-sandbox-ensure.test.ts 顧，那是這一層以下的事。
+// 「已經備妥就不再複製」的冪等性由 guest-sandbox-ensure.test.ts 顧，那是這一層以下的事.
 describe('resolveGuestSandbox', () => {
   // Given 我沒有登入 / Then 回傳 401，而且一次查詢都不發出
   it('未登入時回 401，而且一次寫入都不發出', async () => {
@@ -1327,5 +1410,106 @@ describe('resolveGuestSandbox', () => {
     await expect(resolveGuestSandbox(client, null))
       .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
     expectNoQuery(client)
+  })
+})
+
+describe('resolveProfile', () => {
+  it('未登入時回傳 401，不執行任何資料庫查詢', async () => {
+    const client = fakeClient()
+
+    await expect(resolveProfile(client, null))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+
+    expect(client.user.findUnique).not.toHaveBeenCalled()
+  })
+
+  it('登入但使用者在資料庫中已被刪除時回傳 401', async () => {
+    const client = fakeClient()
+
+    await expect(resolveProfile(client, { id: 'non-existent' }))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+  })
+
+  it('Google 使用者登入時，正確回傳 profile 資料，且 email 不為 null，providers 包含 GOOGLE', async () => {
+    const client = fakeClient()
+    const result = await resolveProfile(client, { id: 'user-google-only' })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value).toEqual({
+        displayName: 'Google User',
+        email: 'google@example.com',
+        providers: ['GOOGLE'],
+        createdAt: '2026-08-01T12:00:00.000Z',
+        avatarUrl: 'http://google.com/avatar.jpg',
+        avatarSource: 'google',
+      })
+      // 確保不包含 id / lastActiveAt / sandboxSeededAt / updatedAt
+      const keys = Object.keys(result.value)
+      expect(keys).not.toContain('id')
+      expect(keys).not.toContain('lastActiveAt')
+      expect(keys).not.toContain('sandboxSeededAt')
+      expect(keys).not.toContain('updatedAt')
+    }
+  })
+
+  it('訪客登入時，email 為 null，providers 只有 GUEST', async () => {
+    const client = fakeClient()
+    const result = await resolveProfile(client, { id: 'user-guest' })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value).toEqual({
+        displayName: '訪客',
+        email: null,
+        providers: ['GUEST'],
+        createdAt: '2026-08-02T12:00:00.000Z',
+        avatarUrl: null,
+        avatarSource: 'none',
+      })
+    }
+  })
+
+  it('同時有 customAvatarUrl 與 googleAvatarUrl 時，優先採用 customAvatarUrl 且來源為 custom', async () => {
+    const client = fakeClient()
+    const result = await resolveProfile(client, { id: 'user-both-avatars' })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.avatarUrl).toBe('http://custom.com/avatar.jpg')
+      expect(result.value.avatarSource).toBe('custom')
+    }
+  })
+
+  it('只有 googleAvatarUrl 時，採用 googleAvatarUrl 且來源為 google', async () => {
+    const client = fakeClient()
+    const result = await resolveProfile(client, { id: 'user-google-only' })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.avatarUrl).toBe('http://google.com/avatar.jpg')
+      expect(result.value.avatarSource).toBe('google')
+    }
+  })
+
+  it('兩個頭像皆為 null 時，avatarUrl 為 null 且來源為 none', async () => {
+    const client = fakeClient()
+    const result = await resolveProfile(client, { id: 'user-no-avatar' })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.avatarUrl).toBeNull()
+      expect(result.value.avatarSource).toBe('none')
+    }
+  })
+
+  it('多筆 Account 時，providers 完整', async () => {
+    const client = fakeClient()
+    const result = await resolveProfile(client, { id: 'user-multi-account' })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.providers).toEqual(['GOOGLE', 'GUEST'])
+    }
   })
 })

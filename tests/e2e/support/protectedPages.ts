@@ -66,4 +66,6 @@ export const PROTECTED_PAGES: readonly ProtectedPage[] = [
   { path: '/maintenance/tasks/new', marker: 'maintenance-task-form' },
   // 靜態表單，沒有任何 GET。頁面渲染得出來就有它
   { path: '/tanks/new', marker: 'tank-form' },
+  // 帳號資料成功載入後才畫出來；載入失敗會改畫 LoadErrorState
+  { path: '/profile', marker: 'profile-account' },
 ]

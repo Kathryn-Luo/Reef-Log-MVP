@@ -75,6 +75,7 @@ const HANDLERS = [
   { file: 'server/api/guest-sandbox.post.ts', resolver: 'resolveGuestSandbox' },
   // 個人資料（issue #160）
   { file: 'server/api/profile.get.ts', resolver: 'resolveProfile' },
+  { file: 'server/api/profile.patch.ts', resolver: 'updateOwnedProfile' },
 ]
 
 describe('每一支 API 都經過同一道歸屬檢查', () => {
@@ -120,6 +121,7 @@ describe('每一支 API 都經過同一道歸屬檢查', () => {
     'server/api/creatures/[id].patch.ts',
     'server/api/creatures/[id]/move.patch.ts',
     'server/api/creatures/[id]/profile.patch.ts',
+    'server/api/profile.patch.ts',
     'server/api/tanks/[id]/creatures.post.ts',
     'server/api/tanks/[id]/water-logs.post.ts',
     'server/api/tanks/[id]/maintenance-tasks.post.ts',

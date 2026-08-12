@@ -13,6 +13,7 @@ import { parseCreatureProfileInput } from '#shared/utils/creatureForm'
 // completedOn 的規則與保養頁共用同一份（issue #122，與 parseWaterLogInput 同一個作法）
 import { parseCompletedOn, parseCompletedOnInput } from '#shared/utils/maintenance'
 import { parseCreateMaintenanceTaskInput, parseMaintenanceTaskInput } from '#shared/utils/maintenanceTaskForm'
+import { parseDisplayName } from '#shared/utils/profile'
 import { parseTankInput } from '#shared/utils/tankForm'
 // 時間範圍的規則住在 shared：#123 的畫面用的是同一份四個選項（issue #126）
 import { parseTrendRange } from '#shared/utils/trend'
@@ -91,6 +92,24 @@ export const NOT_SIGNED_IN: ApiErrorSpec = {
   statusCode: 401,
   statusMessage: 'Not signed in',
   data: { message: '未登入，請先登入後再試一次。' },
+}
+
+/**
+ * 訪客不能改顯示名稱。
+ *
+ * `prisma/schema.prisma` 的 `User.displayName` 註解定的是「Google 登入取回傳的 name；
+ * **訪客固定為「訪客」**」，`server/utils/guestLogin.ts` 也把它寫成常數
+ * `GUEST_DISPLAY_NAME`。少了這道檢查，訪客打一次 PATCH 就能讓資料庫裡出現一個
+ * 與已核准的資料模型互相矛盾的值（見 PR #173 的 review）。
+ *
+ * 為什麼是 403 而不是 404：這裡沒有「別人的資源」可以被列舉——`/api/profile` 永遠
+ * 指向呼叫者自己。答案只跟呼叫者自己的 provider 有關，藏起來不會少洩漏任何東西，
+ * 反而讓畫面分不出「壞掉了」與「這個帳號本來就不能改」。
+ */
+export const GUEST_CANNOT_RENAME: ApiErrorSpec = {
+  statusCode: 403,
+  statusMessage: 'Guest display name is fixed',
+  data: { message: '訪客的顯示名稱固定為「訪客」，改用 Google 登入後才能修改。' },
 }
 
 /**
@@ -346,26 +365,72 @@ export async function resolveProfile(
     return { ok: false, error: NOT_SIGNED_IN }
   }
 
-  const avatarUrl = fullUser.customAvatarUrl ?? fullUser.googleAvatarUrl ?? null
-  const avatarSource: AvatarSource = fullUser.customAvatarUrl
+  return { ok: true, value: toUserProfileResponse(fullUser) }
+}
+
+type ProfileUser = Pick<User, 'displayName' | 'email' | 'createdAt' | 'customAvatarUrl' | 'googleAvatarUrl'> & {
+  accounts: { provider: string }[]
+}
+
+function toUserProfileResponse(user: ProfileUser): UserProfileResponse {
+  const avatarUrl = user.customAvatarUrl ?? user.googleAvatarUrl ?? null
+  const avatarSource: AvatarSource = user.customAvatarUrl
     ? 'custom'
-    : fullUser.googleAvatarUrl
+    : user.googleAvatarUrl
       ? 'google'
       : 'none'
 
-  const providers = fullUser.accounts.map(acc => acc.provider)
-
   return {
-    ok: true,
-    value: {
-      displayName: fullUser.displayName,
-      email: fullUser.email,
-      providers,
-      createdAt: fullUser.createdAt.toISOString(),
-      avatarUrl,
-      avatarSource,
-    },
+    displayName: user.displayName,
+    email: user.email,
+    providers: user.accounts.map(account => account.provider),
+    createdAt: user.createdAt.toISOString(),
+    avatarUrl,
+    avatarSource,
   }
+}
+
+/** PATCH /api/profile —— 修改當前登入使用者的顯示名稱。 */
+export async function updateOwnedProfile(
+  client: PrismaClient,
+  user: SessionUser | null,
+  readBody: BodyReader,
+): Promise<Authorized<UserProfileResponse>> {
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  // 先確認「這個帳號可不可以改名」，再談「這次送來的名字合不合格」。順序刻意如此：
+  // 訪客不管送什麼都是 403，不會拿到一份「你的名字太長了」的檢查報告，讓人以為
+  // 改短一點就能過。body 也因此完全不必讀。
+  const current = await client.user.findUnique({
+    where: { id: user.id },
+    include: { accounts: { select: { provider: true } } },
+  })
+
+  if (!current) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  // 「有沒有任何一個非 GUEST 的 provider」，而不是「第一個 provider 是不是 GUEST」：
+  // 訪客沙盒日後若接上 Google，帳號會同時掛著兩個 Account，那時應該可以改名。
+  if (!current.accounts.some(account => account.provider !== 'GUEST')) {
+    return { ok: false, error: GUEST_CANNOT_RENAME }
+  }
+
+  const parsed = parseDisplayName(await readBody())
+
+  if (!parsed.ok) {
+    return { ok: false, error: invalidInput('Invalid display name', parsed.message) }
+  }
+
+  const updatedUser = await client.user.update({
+    where: { id: user.id },
+    data: { displayName: parsed.value },
+    include: { accounts: { select: { provider: true } } },
+  })
+
+  return { ok: true, value: toUserProfileResponse(updatedUser) }
 }
 
 /** GET /api/tanks/:id/home —— screen-1 單一缸的內容 */

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { PrismaClient } from '@prisma/client'
 import {
   CREATURE_NOT_FOUND,
+  GUEST_CANNOT_RENAME,
   MAINTENANCE_TASK_NOT_FOUND,
   MISSING_CREATURE_ID,
   MISSING_TANK_ID,
@@ -26,6 +27,7 @@ import {
   resolveTankOptions,
   resolveTrendPage,
   resolveWaterLogPage,
+  updateOwnedProfile,
 } from '../../../server/utils/authorization'
 import { INVALID_TREND_RANGE_MESSAGE } from '../../../shared/utils/trend'
 import { WATER_PARAMETER_ORDER } from '../../../shared/utils/waterQuality'
@@ -89,6 +91,16 @@ const USERS: UserRow[] = [
     customAvatarUrl: null,
     createdAt: new Date('2026-08-02T12:00:00.000Z'),
     accounts: [{ provider: 'GUEST' }],
+  },
+  {
+    // 訪客沙盒之後接上 Google 的帳號：只要有一個非 GUEST 的 provider 就不受「訪客固定為訪客」限制
+    id: 'user-upgraded-guest',
+    displayName: '訪客',
+    email: 'upgraded@example.com',
+    googleAvatarUrl: null,
+    customAvatarUrl: null,
+    createdAt: new Date('2026-08-03T12:00:00.000Z'),
+    accounts: [{ provider: 'GUEST' }, { provider: 'GOOGLE' }],
   },
   {
     id: 'user-both-avatars',
@@ -271,6 +283,10 @@ function fakeClient() {
       findUnique: vi.fn(({ where }: { where: { id: string } }) => {
         const user = USERS.find(u => u.id === where.id)
         return Promise.resolve(user ?? null)
+      }),
+      update: vi.fn(({ where, data }: { where: { id: string }, data: { displayName: string } }) => {
+        const user = USERS.find(u => u.id === where.id)
+        return Promise.resolve(user ? { ...user, ...data } : null)
       }),
     },
     tank: {
@@ -1511,5 +1527,106 @@ describe('resolveProfile', () => {
     if (result.ok) {
       expect(result.value.providers).toEqual(['GOOGLE', 'GUEST'])
     }
+  })
+})
+
+describe('updateOwnedProfile', () => {
+  it('未登入時回 401，而且不讀 body、不寫入資料庫', async () => {
+    const client = fakeClient()
+    const readBody = vi.fn().mockResolvedValue({ displayName: '小魚缸管理員' })
+
+    await expect(updateOwnedProfile(client, null, readBody))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+    expect(readBody).not.toHaveBeenCalled()
+    expect(client.user.update).not.toHaveBeenCalled()
+  })
+
+  it('只以 trim 後的 displayName 更新使用者，並回傳最新 profile', async () => {
+    const client = fakeClient()
+    const result = await updateOwnedProfile(
+      client,
+      USER_B,
+      async () => ({
+        displayName: '  小魚缸管理員  ',
+        email: 'attacker@example.com',
+        customAvatarUrl: 'https://example.com/attacker.png',
+      }),
+    )
+
+    expect(client.user.update).toHaveBeenCalledWith({
+      where: { id: USER_B.id },
+      data: { displayName: '小魚缸管理員' },
+      include: { accounts: { select: { provider: true } } },
+    })
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        displayName: '小魚缸管理員',
+        email: 'user-b@example.com',
+        providers: ['GOOGLE'],
+        createdAt: '2026-01-01T00:00:00.000Z',
+        avatarUrl: null,
+        avatarSource: 'none',
+      },
+    })
+  })
+
+  it.each([
+    {},
+    { displayName: '   ' },
+    { displayName: '魚'.repeat(31) },
+    { displayName: '魚\n缸' },
+  ])('輸入不合格時回 400 且不寫入：%j', async (body) => {
+    const client = fakeClient()
+    const result = await updateOwnedProfile(client, USER_B, async () => body)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.statusCode).toBe(400)
+      expect(result.error.data.message).toBeTruthy()
+    }
+    expect(client.user.update).not.toHaveBeenCalled()
+  })
+
+  // schema.prisma 的 User.displayName 註解：「訪客固定為『訪客』」。這條 invariant 由
+  // server 這一層守著——畫面藏起編輯入口只是 UX，直接打 API 才是真的要擋的路徑。
+  it('訪客改名回 403，而且不讀 body、不寫入資料庫', async () => {
+    const client = fakeClient()
+    const readBody = vi.fn().mockResolvedValue({ displayName: '小明' })
+
+    await expect(updateOwnedProfile(client, { id: 'user-guest' }, readBody))
+      .resolves.toEqual({ ok: false, error: GUEST_CANNOT_RENAME })
+    expect(readBody).not.toHaveBeenCalled()
+    expect(client.user.update).not.toHaveBeenCalled()
+  })
+
+  it('訪客即使送出不合格的名稱也是 403，不會被 400 蓋掉', async () => {
+    const client = fakeClient()
+    const result = await updateOwnedProfile(client, { id: 'user-guest' }, async () => ({ displayName: '   ' }))
+
+    expect(result).toEqual({ ok: false, error: GUEST_CANNOT_RENAME })
+    expect(client.user.update).not.toHaveBeenCalled()
+  })
+
+  it('session 指到已不存在的使用者時回 401，不寫入資料庫', async () => {
+    const client = fakeClient()
+    const readBody = vi.fn().mockResolvedValue({ displayName: '小明' })
+
+    await expect(updateOwnedProfile(client, { id: 'deleted-user' }, readBody))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+    expect(readBody).not.toHaveBeenCalled()
+    expect(client.user.update).not.toHaveBeenCalled()
+  })
+
+  it('同時綁著 GUEST 與 GOOGLE 的帳號可以改名', async () => {
+    const client = fakeClient()
+    const result = await updateOwnedProfile(client, { id: 'user-upgraded-guest' }, async () => ({ displayName: '小明' }))
+
+    expect(result.ok).toBe(true)
+    expect(client.user.update).toHaveBeenCalledWith({
+      where: { id: 'user-upgraded-guest' },
+      data: { displayName: '小明' },
+      include: { accounts: { select: { provider: true } } },
+    })
   })
 })

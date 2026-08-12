@@ -100,7 +100,20 @@ describe('/profile', () => {
       expect(state.resolvePendingGet).not.toBeNull()
     })
     await nextTick()
-    expect(page.find('[data-testid="profile-loading"]').exists()).toBe(true)
+    const asyncProfile = useNuxtApp()._asyncData.profile
+    expect({
+      status: asyncProfile?.status.value,
+      data: asyncProfile?.data.value,
+      loading: page.find('[data-testid="profile-loading"]').exists(),
+      account: page.find('[data-testid="profile-account"]').exists(),
+      loadError: page.find('[data-testid="load-error"]').exists(),
+    }).toEqual({
+      status: 'pending',
+      data: undefined,
+      loading: true,
+      account: false,
+      loadError: false,
+    })
     state.resolvePendingGet?.()
     await flushPromises()
 

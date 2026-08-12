@@ -131,7 +131,10 @@ describe('/profile', () => {
 
     const page = await open()
 
-    expect(page.get('[data-testid="profile-avatar-initial"]').text()).toBe('訪')
+    // 訪客的名字是系統給的，不是他自己的——首字頭像對他沒有意義，直接用預設 icon
+    expect(page.find('[data-testid="profile-avatar-initial"]').exists()).toBe(false)
+    expect(page.get('[data-testid="profile-avatar-icon"]').exists()).toBe(true)
+    expect(page.get('[data-testid="profile-display-name"]').text()).toBe('訪客')
     expect(page.get('[data-testid="profile-providers"]').text()).toContain('訪客')
     expect(page.find('[data-testid="profile-email"]').exists()).toBe(false)
   })

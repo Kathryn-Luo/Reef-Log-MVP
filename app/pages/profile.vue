@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { UserProfileResponse } from '#shared/types/profile'
 import { apiErrorMessage } from '#shared/utils/apiError'
-import { DISPLAY_NAME_MAX_LENGTH, parseDisplayName } from '#shared/utils/profile'
+import { DISPLAY_NAME_MAX_LENGTH, ownsDisplayName, parseDisplayName } from '#shared/utils/profile'
 
 definePageMeta({ layout: false })
 useSeoMeta({ title: '個人資料 · ReefLog' })
@@ -35,9 +35,8 @@ const providerLabels: Record<string, string> = {
 
 // 訪客的顯示名稱固定為「訪客」（schema.prisma 的 User.displayName），PATCH /api/profile
 // 會回 403。畫面因此不給編輯入口——這只是 UX，真正的邊界在 server/utils/authorization.ts。
-const canEditName = computed(() =>
-  profile.value?.providers.some(provider => provider !== 'GUEST') ?? false,
-)
+// 與首字頭像共用同一個判斷，理由也是同一個（見 shared/utils/profile.ts 的 ownsDisplayName）。
+const canEditName = computed(() => ownsDisplayName(profile.value?.providers))
 
 const providers = computed(() =>
   profile.value?.providers.map(provider => providerLabels[provider] ?? provider).join('、') ?? '',
@@ -149,6 +148,7 @@ async function saveName() {
             :avatar-url="profile.avatarUrl"
             :avatar-source="profile.avatarSource"
             :display-name="profile.displayName"
+            :providers="profile.providers"
           />
 
           <form

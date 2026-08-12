@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import type { AvatarSource } from '#shared/types/profile'
-import { profileInitial } from '#shared/utils/profile'
+import { ownsDisplayName, profileInitial } from '#shared/utils/profile'
 
 const props = defineProps<{
   avatarUrl: string | null
   avatarSource: AvatarSource
   displayName: string | null
+  providers: string[]
 }>()
 
 const imageFailed = ref(false)
-const initial = computed(() => profileInitial(props.displayName))
+
+// 純訪客沒有屬於自己的名字，首字頭像對他沒有意義——退到預設 icon 那一層（見 ownsDisplayName）
+const initial = computed(() =>
+  ownsDisplayName(props.providers) ? profileInitial(props.displayName) : null,
+)
 const showImage = computed(() => Boolean(props.avatarUrl) && !imageFailed.value)
 
 watch(() => props.avatarUrl, () => {

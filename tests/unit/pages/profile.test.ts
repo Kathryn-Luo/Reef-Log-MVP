@@ -22,6 +22,8 @@ const GOOGLE_PROFILE = {
 const state = {
   profile: { ...GOOGLE_PROFILE } as Record<string, unknown>,
   getFailure: false,
+  getPending: false,
+  resolvePendingGet: null as (() => void) | null,
   patchFailure: null as string | null,
   patchCalls: 0,
   patchBody: null as Record<string, unknown> | null,
@@ -29,9 +31,15 @@ const state = {
 
 registerEndpoint('/api/profile', {
   method: 'GET',
-  handler: () => {
+  handler: async () => {
     if (state.getFailure) {
       throw createError({ statusCode: 500, statusMessage: 'Profile failed' })
+    }
+
+    if (state.getPending) {
+      await new Promise<void>((resolve) => {
+        state.resolvePendingGet = resolve
+      })
     }
 
     return state.profile
@@ -64,6 +72,8 @@ beforeEach(() => {
   clearNuxtState()
   state.profile = { ...GOOGLE_PROFILE }
   state.getFailure = false
+  state.getPending = false
+  state.resolvePendingGet = null
   state.patchFailure = null
   state.patchCalls = 0
   state.patchBody = null
@@ -80,6 +90,18 @@ async function startEditing(page: Awaited<ReturnType<typeof open>>) {
 }
 
 describe('/profile', () => {
+  it('API 尚未回應時立即顯示載入骨架，完成後顯示帳號資料', async () => {
+    state.getPending = true
+
+    const page = await open()
+
+    expect(page.find('[data-testid="profile-loading"]').exists()).toBe(true)
+    state.resolvePendingGet?.()
+    await flushPromises()
+
+    expect(page.find('[data-testid="profile-account"]').exists()).toBe(true)
+  })
+
   it('顯示 Google 使用者的頭像、名稱、Email、登入方式與加入日期，Email 沒有編輯入口', async () => {
     const page = await open()
 
@@ -133,6 +155,13 @@ describe('/profile', () => {
   it('空白或超過 30 字時顯示原因，不送出請求', async () => {
     const page = await open()
     await startEditing(page)
+
+    await page.get('input[name="displayName"]').setValue('   ')
+    expect(page.get('[data-testid="profile-name-save"]').attributes('disabled')).toBeUndefined()
+    await page.get('[data-testid="profile-name-form"]').trigger('submit')
+
+    expect(state.patchCalls).toBe(0)
+    expect(page.get('[data-testid="profile-name-error"]').text()).toContain('請輸入顯示名稱')
 
     await page.get('input[name="displayName"]').setValue('魚'.repeat(31))
     await page.get('[data-testid="profile-name-form"]').trigger('submit')

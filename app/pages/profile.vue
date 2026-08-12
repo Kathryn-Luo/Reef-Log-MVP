@@ -7,7 +7,7 @@ definePageMeta({ layout: false })
 useSeoMeta({ title: '個人資料 · ReefLog' })
 
 const { $api } = useNuxtApp()
-const { data: profile, status, refresh } = await useAsyncData('profile', () =>
+const { data: profile, status, refresh } = useAsyncData('profile', () =>
   $api<UserProfileResponse>('/api/profile'),
 )
 const { failed: loadFailed, retrying, retry } = useLoadFailure([status], refresh)
@@ -21,8 +21,8 @@ const visibleName = computed(() => profile.value?.displayName?.trim() || '未設
 const nameCount = computed(() => [...draftName.value].length)
 const parsedDraft = computed(() => parseDisplayName({ displayName: draftName.value }))
 const canSave = computed(() =>
-  parsedDraft.value.ok
-  && parsedDraft.value.value !== (profile.value?.displayName ?? '').trim()
+  (!parsedDraft.value.ok
+    || parsedDraft.value.value !== (profile.value?.displayName ?? '').trim())
   && !saving.value,
 )
 

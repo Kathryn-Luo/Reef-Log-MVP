@@ -7,8 +7,10 @@ definePageMeta({ layout: false })
 useSeoMeta({ title: '個人資料 · ReefLog' })
 
 const { $api } = useNuxtApp()
-const { data: profile, status, refresh } = useAsyncData('profile', () =>
-  $api<UserProfileResponse>('/api/profile'),
+const { data: profile, status, refresh } = useAsyncData(
+  'profile',
+  () => $api<UserProfileResponse>('/api/profile'),
+  { lazy: true },
 )
 const { failed: loadFailed, retrying, retry } = useLoadFailure([status], refresh)
 

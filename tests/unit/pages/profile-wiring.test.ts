@@ -8,8 +8,9 @@ const source = readFileSync(resolve(process.cwd(), 'app/pages/profile.vue'), 'ut
 
 describe('/profile 載入流程', () => {
   it('非阻塞地啟動個人資料請求，讓初次載入骨架能立即渲染', () => {
-    expect(source).toContain('useAsyncData(\'profile\'')
-    expect(source).not.toContain('await useAsyncData(\'profile\'')
+    expect(source).toMatch(/useAsyncData\(\s*'profile'/)
+    expect(source).not.toMatch(/await\s+useAsyncData\(\s*'profile'/)
+    expect(source).toContain('{ lazy: true }')
     expect(source).toContain('data-testid="profile-loading"')
   })
 })

@@ -93,9 +93,13 @@ describe('/profile', () => {
   it('API 尚未回應時立即顯示載入骨架，完成後顯示帳號資料', async () => {
     state.getPending = true
 
-    const page = await open()
+    // `open()` 會先 flush，適合最終畫面；這裡要先觀察請求進行中的骨架。
+    const page = await mountSuspended(ProfilePage, { route: '/profile' })
 
     expect(page.find('[data-testid="profile-loading"]').exists()).toBe(true)
+    await vi.waitFor(() => {
+      expect(state.resolvePendingGet).not.toBeNull()
+    })
     state.resolvePendingGet?.()
     await flushPromises()
 

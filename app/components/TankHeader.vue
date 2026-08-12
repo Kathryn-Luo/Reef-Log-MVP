@@ -143,11 +143,18 @@ function select(tankId: string) {
       <!--
         Epic #160：右上角原為無作用裝飾的 sun icon 改為可點擊導向個人資料的 Profile 入口
       -->
-      <ULink to="/profile">
+      <ULink
+        data-testid="tank-header-profile"
+        to="/profile"
+        aria-label="個人資料"
+        class="grid shrink-0 place-items-center text-dimmed"
+      >
         <UIcon
+          data-testid="tank-header-profile-icon"
           name="i-lucide-circle-user-round"
           class="transition-[width,height] duration-200 ease-out motion-reduce:transition-none"
-          :class="collapsed ? 'size-7' : 'size-9'" />
+          :class="collapsed ? 'size-7' : 'size-9'"
+        />
       </ULink>
     </div>
 

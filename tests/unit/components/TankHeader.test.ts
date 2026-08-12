@@ -156,16 +156,18 @@ describe('TankHeader', () => {
     expect(iconSpan.classes().some(cls => cls.includes('circle-user'))).toBe(true)
   })
 
-  it('Profile 入口應根據 collapsed 狀態調整尺寸', async () => {
+  // 尺寸掛在 icon 本身，不在連結上：入口拿掉了外框圓圈，會縮的是圖示
+  // （2026-08-12 由人類調整視覺，#162 內文的 size-9 / size-11 是舊值）。
+  it('Profile 入口的 icon 在收合時變小', async () => {
     const headerNormal = await mountHeader([MAIN_TANK])
-    const profileLinkNormal = headerNormal.get('[data-testid="tank-header-profile"]')
-    expect(profileLinkNormal.classes()).toContain('size-11')
-    expect(profileLinkNormal.classes()).not.toContain('size-9')
+    const iconNormal = headerNormal.get('[data-testid="tank-header-profile-icon"]')
+    expect(iconNormal.classes()).toContain('size-9')
+    expect(iconNormal.classes()).not.toContain('size-7')
 
     const headerCollapsed = await mountCollapsed([MAIN_TANK])
-    const profileLinkCollapsed = headerCollapsed.get('[data-testid="tank-header-profile"]')
-    expect(profileLinkCollapsed.classes()).toContain('size-9')
-    expect(profileLinkCollapsed.classes()).not.toContain('size-11')
+    const iconCollapsed = headerCollapsed.get('[data-testid="tank-header-profile-icon"]')
+    expect(iconCollapsed.classes()).toContain('size-7')
+    expect(iconCollapsed.classes()).not.toContain('size-9')
   })
 })
 

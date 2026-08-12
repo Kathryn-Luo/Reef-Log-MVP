@@ -13,6 +13,7 @@ import { parseCreatureProfileInput } from '#shared/utils/creatureForm'
 // completedOn 的規則與保養頁共用同一份（issue #122，與 parseWaterLogInput 同一個作法）
 import { parseCompletedOn, parseCompletedOnInput } from '#shared/utils/maintenance'
 import { parseCreateMaintenanceTaskInput, parseMaintenanceTaskInput } from '#shared/utils/maintenanceTaskForm'
+import { parseDisplayName } from '#shared/utils/profile'
 import { parseTankInput } from '#shared/utils/tankForm'
 // 時間範圍的規則住在 shared：#123 的畫面用的是同一份四個選項（issue #126）
 import { parseTrendRange } from '#shared/utils/trend'
@@ -346,26 +347,54 @@ export async function resolveProfile(
     return { ok: false, error: NOT_SIGNED_IN }
   }
 
-  const avatarUrl = fullUser.customAvatarUrl ?? fullUser.googleAvatarUrl ?? null
-  const avatarSource: AvatarSource = fullUser.customAvatarUrl
+  return { ok: true, value: toUserProfileResponse(fullUser) }
+}
+
+type ProfileUser = Pick<User, 'displayName' | 'email' | 'createdAt' | 'customAvatarUrl' | 'googleAvatarUrl'> & {
+  accounts: { provider: string }[]
+}
+
+function toUserProfileResponse(user: ProfileUser): UserProfileResponse {
+  const avatarUrl = user.customAvatarUrl ?? user.googleAvatarUrl ?? null
+  const avatarSource: AvatarSource = user.customAvatarUrl
     ? 'custom'
-    : fullUser.googleAvatarUrl
+    : user.googleAvatarUrl
       ? 'google'
       : 'none'
 
-  const providers = fullUser.accounts.map(acc => acc.provider)
-
   return {
-    ok: true,
-    value: {
-      displayName: fullUser.displayName,
-      email: fullUser.email,
-      providers,
-      createdAt: fullUser.createdAt.toISOString(),
-      avatarUrl,
-      avatarSource,
-    },
+    displayName: user.displayName,
+    email: user.email,
+    providers: user.accounts.map(account => account.provider),
+    createdAt: user.createdAt.toISOString(),
+    avatarUrl,
+    avatarSource,
   }
+}
+
+/** PATCH /api/profile —— 修改當前登入使用者的顯示名稱。 */
+export async function updateOwnedProfile(
+  client: PrismaClient,
+  user: SessionUser | null,
+  readBody: BodyReader,
+): Promise<Authorized<UserProfileResponse>> {
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  const parsed = parseDisplayName(await readBody())
+
+  if (!parsed.ok) {
+    return { ok: false, error: invalidInput('Invalid display name', parsed.message) }
+  }
+
+  const updatedUser = await client.user.update({
+    where: { id: user.id },
+    data: { displayName: parsed.value },
+    include: { accounts: { select: { provider: true } } },
+  })
+
+  return { ok: true, value: toUserProfileResponse(updatedUser) }
 }
 
 /** GET /api/tanks/:id/home —— screen-1 單一缸的內容 */

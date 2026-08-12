@@ -26,6 +26,7 @@ import {
   resolveTankOptions,
   resolveTrendPage,
   resolveWaterLogPage,
+  updateOwnedProfile,
 } from '../../../server/utils/authorization'
 import { INVALID_TREND_RANGE_MESSAGE } from '../../../shared/utils/trend'
 import { WATER_PARAMETER_ORDER } from '../../../shared/utils/waterQuality'
@@ -271,6 +272,10 @@ function fakeClient() {
       findUnique: vi.fn(({ where }: { where: { id: string } }) => {
         const user = USERS.find(u => u.id === where.id)
         return Promise.resolve(user ?? null)
+      }),
+      update: vi.fn(({ where, data }: { where: { id: string }, data: { displayName: string } }) => {
+        const user = USERS.find(u => u.id === where.id)
+        return Promise.resolve(user ? { ...user, ...data } : null)
       }),
     },
     tank: {
@@ -1511,5 +1516,64 @@ describe('resolveProfile', () => {
     if (result.ok) {
       expect(result.value.providers).toEqual(['GOOGLE', 'GUEST'])
     }
+  })
+})
+
+describe('updateOwnedProfile', () => {
+  it('未登入時回 401，而且不讀 body、不寫入資料庫', async () => {
+    const client = fakeClient()
+    const readBody = vi.fn().mockResolvedValue({ displayName: '小魚缸管理員' })
+
+    await expect(updateOwnedProfile(client, null, readBody))
+      .resolves.toEqual({ ok: false, error: NOT_SIGNED_IN })
+    expect(readBody).not.toHaveBeenCalled()
+    expect(client.user.update).not.toHaveBeenCalled()
+  })
+
+  it('只以 trim 後的 displayName 更新使用者，並回傳最新 profile', async () => {
+    const client = fakeClient()
+    const result = await updateOwnedProfile(
+      client,
+      USER_A,
+      async () => ({
+        displayName: '  小魚缸管理員  ',
+        email: 'attacker@example.com',
+        customAvatarUrl: 'https://example.com/attacker.png',
+      }),
+    )
+
+    expect(client.user.update).toHaveBeenCalledWith({
+      where: { id: USER_A.id },
+      data: { displayName: '小魚缸管理員' },
+      include: { accounts: { select: { provider: true } } },
+    })
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        displayName: '小魚缸管理員',
+        email: 'user-a@example.com',
+        providers: ['GUEST'],
+        createdAt: '2026-01-01T00:00:00.000Z',
+        avatarUrl: null,
+        avatarSource: 'none',
+      },
+    })
+  })
+
+  it.each([
+    {},
+    { displayName: '   ' },
+    { displayName: '魚'.repeat(31) },
+    { displayName: '魚\n缸' },
+  ])('輸入不合格時回 400 且不寫入：%j', async (body) => {
+    const client = fakeClient()
+    const result = await updateOwnedProfile(client, USER_A, async () => body)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.statusCode).toBe(400)
+      expect(result.error.data.message).toBeTruthy()
+    }
+    expect(client.user.update).not.toHaveBeenCalled()
   })
 })

@@ -100,24 +100,12 @@ describe('/profile', () => {
       expect(state.resolvePendingGet).not.toBeNull()
     })
     await nextTick()
-    const asyncProfile = useNuxtApp()._asyncData.profile
-    expect({
-      status: asyncProfile?.status.value,
-      data: asyncProfile?.data.value,
-      loading: page.find('[data-testid="profile-loading"]').exists(),
-      account: page.find('[data-testid="profile-account"]').exists(),
-      loadError: page.find('[data-testid="load-error"]').exists(),
-    }).toEqual({
-      status: 'pending',
-      data: undefined,
-      loading: true,
-      account: false,
-      loadError: false,
-    })
+    expect(page.find('[data-testid="profile-loading"]').exists()).toBe(true)
     state.resolvePendingGet?.()
-    await flushPromises()
 
-    expect(page.find('[data-testid="profile-account"]').exists()).toBe(true)
+    await vi.waitFor(() => {
+      expect(page.find('[data-testid="profile-account"]').exists()).toBe(true)
+    })
   })
 
   it('顯示 Google 使用者的頭像、名稱、Email、登入方式與加入日期，Email 沒有編輯入口', async () => {

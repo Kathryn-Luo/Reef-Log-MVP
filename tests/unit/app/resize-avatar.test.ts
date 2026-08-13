@@ -139,8 +139,9 @@ describe('resizeAvatar', () => {
   it('長邊縮到 512 px，短邊依原比例等比縮小', async () => {
     const original = photo()
 
-    const resized = await resizeAvatar(original)
+    const { file: resized, outcome } = await resizeAvatar(original)
 
+    expect(outcome).toBe('resized')
     // 4032 × 3024（4:3）→ 512 × 384
     expect(canvas.encoded).toEqual([
       { width: AVATAR_MAX_EDGE, height: 384, type: AVATAR_OUTPUT_TYPE, quality: AVATAR_OUTPUT_QUALITY },
@@ -181,7 +182,7 @@ describe('resizeAvatar', () => {
     bitmap.width = 200
     bitmap.height = 120
 
-    const resized = await resizeAvatar(photo(30 * 1024))
+    const { file: resized } = await resizeAvatar(photo(30 * 1024))
 
     expect(canvas.encoded[0]).toMatchObject({ width: 200, height: 120 })
     expect(canvas.drawn).toEqual([{ width: 200, height: 120 }])
@@ -227,23 +228,24 @@ describe('resizeAvatar', () => {
     bitmap.fail = true
     const original = photo()
 
-    const resized = await resizeAvatar(original)
+    const { file, outcome } = await resizeAvatar(original)
 
-    expect(resized).toBe(original)
+    expect(file).toBe(original)
+    expect(outcome).toBe('decode-failed')
   })
 
   it('拿不到 2D context 時回傳原本的 File', async () => {
     canvas.hasContext = false
     const original = photo()
 
-    expect(await resizeAvatar(original)).toBe(original)
+    expect(await resizeAvatar(original)).toEqual({ file: original, outcome: 'no-canvas-context' })
   })
 
   it('toBlob 回 null 時回傳原本的 File', async () => {
     canvas.blobNull = true
     const original = photo()
 
-    expect(await resizeAvatar(original)).toBe(original)
+    expect(await resizeAvatar(original)).toEqual({ file: original, outcome: 'encode-failed' })
   })
 
   // ── 舊瀏覽器上的兩條退路 ──────────────────────────────────────────
@@ -260,7 +262,7 @@ describe('resizeAvatar', () => {
     bitmap.rejectOptions = true
     const original = photo()
 
-    const resized = await resizeAvatar(original)
+    const { file: resized } = await resizeAvatar(original)
 
     // 先試帶選項的，被拒之後才退而求其次
     expect(bitmap.options).toEqual([{ imageOrientation: 'from-image' }, undefined])
@@ -276,7 +278,7 @@ describe('resizeAvatar', () => {
     canvas.encodable = ['image/jpeg']
     const original = photo()
 
-    const resized = await resizeAvatar(original)
+    const { file: resized } = await resizeAvatar(original)
 
     expect(canvas.encoded.map(call => call.type)).toEqual(['image/webp', 'image/jpeg'])
     expect(resized).not.toBe(original)
@@ -291,6 +293,6 @@ describe('resizeAvatar', () => {
     canvas.encodable = []
     const original = photo()
 
-    expect(await resizeAvatar(original)).toBe(original)
+    expect(await resizeAvatar(original)).toEqual({ file: original, outcome: 'encode-failed' })
   })
 })

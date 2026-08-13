@@ -222,8 +222,13 @@ async function settle() {
   await nextTick()
 }
 
-/** 讓 `resizeAvatar` 真的縮得出東西：happy-dom 三樣都缺，全部換成替身 */
-function stubImagePipeline() {
+/**
+ * 讓 `resizeAvatar` 真的縮得出東西：happy-dom 三樣都缺，全部換成替身。
+ *
+ * `encodedBytes` 是編碼器吐出來的大小。預設 48 KB（長邊 512 的 WebP 的實際量級），
+ * 要驗「縮完仍然過大」那一格的自己調大。
+ */
+function stubImagePipeline(encodedBytes = 48 * 1024) {
   vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 4032, height: 3024, close: () => {} })))
 
   const originalGetContext = HTMLCanvasElement.prototype.getContext
@@ -231,7 +236,7 @@ function stubImagePipeline() {
 
   HTMLCanvasElement.prototype.getContext = (() => ({ drawImage: () => {} })) as never
   HTMLCanvasElement.prototype.toBlob = function (callback: BlobCallback, type?: string) {
-    callback(new Blob([new Uint8Array(48 * 1024)], { type: type ?? AVATAR_OUTPUT_TYPE }))
+    callback(new Blob([new Uint8Array(encodedBytes)], { type: type ?? AVATAR_OUTPUT_TYPE }))
   }
 
   return () => {
@@ -357,10 +362,35 @@ describe('/profile 更換頭像', () => {
 
     const error = page.get('[data-testid="profile-avatar-error"]').text()
 
-    expect(error).toContain('這台裝置')
+    // happy-dom 沒有 createImageBitmap，卡的是解碼那一關——訊息要指得出是哪一關，
+    // 四種原因各說各的話。手機上沒有 console，這句話就是唯一的診斷資訊。
+    expect(error).toContain('讀不開')
     // 換一張多小的圖才有用，要說得出數字——這裡正是使用者唯一碰得到 2 MB 的地方
     expect(error).toContain('2 MB')
     expect(error).not.toBe(AVATAR_TOO_LARGE_MESSAGE)
+  })
+
+  // 縮圖回報成功、出來的檔案卻仍然超過上限——照理不可能（長邊 512 的 WebP 約 40–80 KB）。
+  // 但「照理不可能」正是最該擋的一格：真發生時 server 會回「圖片請控制在 2 MB 以內」，
+  // 而那句話會把責任推給使用者選的圖，讓真正的 bug（resizeAvatar 自己）藏起來。
+  it('縮完仍然超過上限時，說的是縮完仍過大，而不是把責任推給使用者選的圖', async () => {
+    const restore = stubImagePipeline(3 * 1024 * 1024)
+
+    try {
+      const page = await open()
+      await chooseFile(page, photo('IMG_4823.JPG', 'image/jpeg', CAMERA_PHOTO_BYTES))
+
+      expect(state.postCalls).toBe(0)
+
+      const error = page.get('[data-testid="profile-avatar-error"]').text()
+
+      expect(error).toContain('縮小後仍然超過上限')
+      expect(error).not.toContain('這台裝置')
+      expect(error).not.toBe(AVATAR_TOO_LARGE_MESSAGE)
+    }
+    finally {
+      restore()
+    }
   })
 
   it('縮不動又超過上限之後，仍可以再選一張小的圖上傳', async () => {

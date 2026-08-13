@@ -103,6 +103,29 @@ async function decode(file: File): Promise<ImageBitmap> {
 }
 
 /**
+ * 這一次縮圖的結果，`'resized'` 以外都代表「回傳的是原檔」。
+ *
+ * 為什麼要分得這麼細：這幾條路徑只在**真實裝置**上才走得到，而那裡沒有 console 可看。
+ * 呼叫端把它翻成各自不同的一句話顯示出來，一張截圖就足以判斷是哪一關卡住——
+ * 少了它，遠端只能靠猜（#168 的實機回報已經為此多繞了兩輪）。
+ */
+export type AvatarResizeOutcome
+  /** 縮好了，回傳的是重新編碼的那一份 */
+  = 'resized'
+    /** 兩種解碼方式都失敗：這個瀏覽器讀不開這個檔案 */
+    | 'decode-failed'
+    /** 拿不到 2D context：這個瀏覽器沒有可用的 canvas */
+    | 'no-canvas-context'
+    /** WebP 與 JPEG 都編不出來，或 toBlob 直接回 null */
+    | 'encode-failed'
+
+export interface AvatarResizeResult {
+  /** 該送出的那一份。`outcome !== 'resized'` 時就是傳進來的原檔本身 */
+  file: File
+  outcome: AvatarResizeOutcome
+}
+
+/**
  * 把使用者選的照片縮成長邊 512 px 的 WebP。
  *
  * **失敗一律回傳原本的 `File`，不丟例外。** 瀏覽器不支援、檔案解不開、編碼器給不出
@@ -113,35 +136,45 @@ async function decode(file: File): Promise<ImageBitmap> {
  * 方向靠 `imageOrientation: 'from-image'`，在**解碼那一刻**就套用 EXIF。
  * 先塞進 `<img>` 再 `drawImage` 的話方向資訊已經沒了，會出現「預覽是正的、上傳後躺著」。
  */
-export async function resizeAvatar(file: File): Promise<File> {
+export async function resizeAvatar(file: File): Promise<AvatarResizeResult> {
+  let bitmap: ImageBitmap
+
   try {
-    const bitmap = await decode(file)
-
-    try {
-      const { width, height } = fitWithin(bitmap.width, bitmap.height)
-      const canvas = document.createElement('canvas')
-
-      canvas.width = width
-      canvas.height = height
-
-      const context = canvas.getContext('2d')
-
-      // 沒有 2D context 就沒有畫布可畫——這個瀏覽器做不到，送原檔
-      if (!context) {
-        return file
-      }
-
-      context.drawImage(bitmap, 0, 0, width, height)
-
-      // WebP、JPEG 都編不出來（或 toBlob 直接回 null）才走原檔那條路
-      return await encodeSmallest(canvas) ?? file
-    }
-    finally {
-      // 解碼出來的點陣圖佔的是實體記憶體，等 GC 太慢——一張 4032 × 3024 就是 48 MB
-      bitmap.close()
-    }
+    bitmap = await decode(file)
   }
   catch {
-    return file
+    return { file, outcome: 'decode-failed' }
+  }
+
+  try {
+    const { width, height } = fitWithin(bitmap.width, bitmap.height)
+    const canvas = document.createElement('canvas')
+
+    canvas.width = width
+    canvas.height = height
+
+    const context = canvas.getContext('2d')
+
+    // 沒有 2D context 就沒有畫布可畫——這個瀏覽器做不到，送原檔
+    if (!context) {
+      return { file, outcome: 'no-canvas-context' }
+    }
+
+    context.drawImage(bitmap, 0, 0, width, height)
+
+    const encoded = await encodeSmallest(canvas)
+
+    // WebP、JPEG 都編不出來（或 toBlob 直接回 null）才走原檔那條路
+    return encoded
+      ? { file: encoded, outcome: 'resized' }
+      : { file, outcome: 'encode-failed' }
+  }
+  catch {
+    // drawImage 也可能丟（來源畫布被污染、尺寸算出 0），一樣不往外拋
+    return { file, outcome: 'encode-failed' }
+  }
+  finally {
+    // 解碼出來的點陣圖佔的是實體記憶體，等 GC 太慢——一張 4032 × 3024 就是 48 MB
+    bitmap.close()
   }
 }

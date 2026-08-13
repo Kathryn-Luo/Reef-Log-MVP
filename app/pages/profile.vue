@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { AvatarResizeOutcome } from '~/utils/avatarImage'
 import type { UserProfileResponse } from '#shared/types/profile'
 import { apiErrorMessage } from '#shared/utils/apiError'
 import { AVATAR_FIELD_NAME, AVATAR_MAX_BYTES } from '#shared/utils/avatarUpload'
@@ -111,6 +112,24 @@ async function saveName() {
 
 const avatarInput = useTemplateRef<HTMLInputElement>('avatarInput')
 const avatarRegion = useTemplateRef<HTMLElement>('avatarRegion')
+
+/**
+ * 「這一份送出去必定被退」時要說的話，依卡在哪一關而不同。
+ *
+ * 四句話刻意各不相同。這幾條路徑只在真實裝置上走得到，而手機沒有 console 可看——
+ * 使用者截一張圖過來，這句話就要能指出是哪一關。折成同一句「上傳失敗」的話，
+ * 遠端診斷只剩下猜（#168 已經為此多繞了兩輪）。
+ *
+ * 每一句都給得出下一步（換一張小圖），不是只有一句「不支援」把人丟在原地。
+ */
+const OVERSIZED_MESSAGES: Record<AvatarResizeOutcome, string> = {
+  // 縮圖回報成功，出來的檔案卻仍然超過上限——照理不可能（長邊 512 的 WebP 約 40–80 KB）。
+  // 真的看到這句，代表要修的是 resizeAvatar 自己，不是使用者選的圖。
+  'resized': '照片縮小後仍然超過上限，請改選一張 2 MB 以內的圖片。',
+  'decode-failed': '這台裝置讀不開這張照片，無法在上傳前縮小，請改選一張 2 MB 以內的圖片。',
+  'no-canvas-context': '這台裝置無法處理照片，無法在上傳前縮小，請改選一張 2 MB 以內的圖片。',
+  'encode-failed': '這台裝置無法轉換照片格式，無法在上傳前縮小，請改選一張 2 MB 以內的圖片。',
+}
 const uploading = ref(false)
 const removing = ref(false)
 const confirmingRemove = ref(false)
@@ -162,15 +181,16 @@ async function onAvatarSelected(event: Event) {
   try {
     // 縮圖失敗時 resizeAvatar 回的是原本那個 File，不是例外：送出去讓 server 判，
     // 總比在前端就把人卡住好（Android 各家 picker 對 accept 的遵守程度不一）。
-    const prepared = await resizeAvatar(file)
+    const { file: prepared, outcome } = await resizeAvatar(file)
 
-    // 但「縮不動」加上「原檔本來就超過上限」是唯一的例外：這一趟必定被退，而退回來
-    // 的「圖片請控制在 2 MB 以內」會讓使用者以為換一張就好——他換幾張相機拍的照片
-    // 都一樣大，問題在這台裝置縮不動。與其上傳完 6 MB 再說，不如現在就說清楚。
+    // 但「手上這一份已經超過 server 的上限」是例外：這一趟必定被退，而退回來的
+    // 「圖片請控制在 2 MB 以內」會讓使用者以為換一張就好——他換幾張相機拍的照片
+    // 都一樣大，問題不在他選的圖。與其上傳完 6 MB 再說，不如現在就說清楚。
     //
-    // 判斷靠的是「回來的是不是同一個 File」，那正是 resizeAvatar 對失敗的定義。
-    if (prepared === file && prepared.size > AVATAR_MAX_BYTES) {
-      avatarError.value = '這台裝置無法在上傳前縮小照片，請改選一張 2 MB 以內的圖片。'
+    // 看的是**實際要送出的那一份**的大小，不是「縮圖有沒有成功」：兩者不等價，
+    // 而不等價的那一格（縮完仍然過大）正是最需要被看見的那一格。
+    if (prepared.size > AVATAR_MAX_BYTES) {
+      avatarError.value = OVERSIZED_MESSAGES[outcome]
       return
     }
 

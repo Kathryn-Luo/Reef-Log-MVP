@@ -159,6 +159,18 @@ describe('resolveGuestLogin — 首次進站', () => {
     expect(createdUser(client).sandboxSeededAt).toBeUndefined()
   })
 
+  // issue #165 Story⑥「Given 我是訪客 / When 我進站 / Then googleAvatarUrl 維持 null」——
+  // 訪客沒有 Google 頭像可拿。頭像的來源全部在 googleLogin.ts 那一側，這條路徑
+  // 連 googleAvatarUrl 這個鍵都不該出現。
+  it('不寫入 googleAvatarUrl，訪客沒有 Google 頭像', async () => {
+    const { client } = fakeClient()
+
+    await resolveGuestLogin(client, null)
+
+    expect(createdUser(client)).not.toHaveProperty('googleAvatarUrl')
+    expect(createdUser(client)).not.toHaveProperty('customAvatarUrl')
+  })
+
   it('建帳號是單獨一次 nested create，不再需要交易', async () => {
     const { client, calls } = fakeClient()
 

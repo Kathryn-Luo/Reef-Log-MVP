@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { UserProfileResponse } from '#shared/types/profile'
 import { apiErrorMessage } from '#shared/utils/apiError'
-import { AVATAR_FIELD_NAME } from '#shared/utils/avatarUpload'
+import { AVATAR_FIELD_NAME, AVATAR_MAX_BYTES } from '#shared/utils/avatarUpload'
 import { DISPLAY_NAME_MAX_LENGTH, ownsDisplayName, parseDisplayName } from '#shared/utils/profile'
 
 definePageMeta({ layout: false })
@@ -163,6 +163,17 @@ async function onAvatarSelected(event: Event) {
     // 縮圖失敗時 resizeAvatar 回的是原本那個 File，不是例外：送出去讓 server 判，
     // 總比在前端就把人卡住好（Android 各家 picker 對 accept 的遵守程度不一）。
     const prepared = await resizeAvatar(file)
+
+    // 但「縮不動」加上「原檔本來就超過上限」是唯一的例外：這一趟必定被退，而退回來
+    // 的「圖片請控制在 2 MB 以內」會讓使用者以為換一張就好——他換幾張相機拍的照片
+    // 都一樣大，問題在這台裝置縮不動。與其上傳完 6 MB 再說，不如現在就說清楚。
+    //
+    // 判斷靠的是「回來的是不是同一個 File」，那正是 resizeAvatar 對失敗的定義。
+    if (prepared === file && prepared.size > AVATAR_MAX_BYTES) {
+      avatarError.value = '這台裝置無法在上傳前縮小照片，請改選一張 2 MB 以內的圖片。'
+      return
+    }
+
     const form = new FormData()
 
     form.append(AVATAR_FIELD_NAME, prepared, prepared.name)

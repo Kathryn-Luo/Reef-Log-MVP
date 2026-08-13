@@ -15,18 +15,34 @@
 /** 長邊上限。頭像顯示尺寸不到 128 px，512 已經足夠 2× 螢幕再裁切 */
 export const AVATAR_MAX_EDGE = 512
 
-/** 輸出格式。三種允許格式裡壓縮率最好的那一個（同畫質約為 JPEG 的 2/3） */
+/** 首選輸出格式。三種允許格式裡壓縮率最好的那一個（同畫質約為 JPEG 的 2/3） */
 export const AVATAR_OUTPUT_TYPE = 'image/webp'
+
+/**
+ * 依序嘗試的輸出格式，第一個編得出來的就是送出的那一份。
+ *
+ * 副檔名必須跟著 MIME 走：server 的三道檢查要 MIME、副檔名、magic bytes 三者一致
+ *（`shared/utils/avatarUpload.ts`），一份 JPEG 頂著 `.webp` 的名字會被當成
+ * 「格式不支援」退件，而使用者換幾張圖都一樣。
+ *
+ * 為什麼需要第二順位：`toBlob` 編不出 WebP 時**不會失敗**，它安靜地回一份 PNG，
+ * 沒有任何管道說「我換格式了」。舊版 Safari 就是這個行為。只認 WebP 的話，
+ * 那些裝置會整批退到「送原檔」——而手機相機的原檔本來就超過 2 MB。
+ */
+const OUTPUT_FORMATS = [
+  { type: AVATAR_OUTPUT_TYPE, filename: 'avatar.webp' },
+  { type: 'image/jpeg', filename: 'avatar.jpg' },
+] as const
 
 /** 0.8：再往下人臉會開始出現色塊，再往上檔案變大但看不出差別 */
 export const AVATAR_OUTPUT_QUALITY = 0.8
 
 /**
- * 送出時的檔名。真正決定 Blob pathname 的是 server（見 `buildAvatarPathname`），
+ * 首選格式送出時的檔名。真正決定 Blob pathname 的是 server（見 `buildAvatarPathname`），
  * 這個名字只用來讓 multipart 的那一段有副檔名可讀——而 server 的三道檢查裡有一道
- * 正是「副檔名要對得上 MIME」。
+ * 正是「副檔名要對得上 MIME」。退到 JPEG 時檔名也跟著換，見 `OUTPUT_FORMATS`。
  */
-export const AVATAR_OUTPUT_FILENAME = 'avatar.webp'
+export const AVATAR_OUTPUT_FILENAME = OUTPUT_FORMATS[0].filename
 
 /** 長邊縮到 `AVATAR_MAX_EDGE`，等比、**只縮不放**（已經很小的圖維持原尺寸） */
 function fitWithin(width: number, height: number): { width: number, height: number } {
@@ -45,8 +61,45 @@ function fitWithin(width: number, height: number): { width: number, height: numb
   }
 }
 
-function encode(canvas: HTMLCanvasElement): Promise<Blob | null> {
-  return new Promise(resolve => canvas.toBlob(resolve, AVATAR_OUTPUT_TYPE, AVATAR_OUTPUT_QUALITY))
+function encode(canvas: HTMLCanvasElement, type: string): Promise<Blob | null> {
+  return new Promise(resolve => canvas.toBlob(resolve, type, AVATAR_OUTPUT_QUALITY))
+}
+
+/**
+ * 依序試 `OUTPUT_FORMATS`，回傳第一個「真的編出該格式」的結果。
+ *
+ * 判斷方式只能是比對 `blob.type`：編不出來時 `toBlob` 回的是一份 PNG，不是 null，
+ * 所以「有拿到東西」不代表拿到的是要的東西。
+ */
+async function encodeSmallest(canvas: HTMLCanvasElement): Promise<File | null> {
+  for (const format of OUTPUT_FORMATS) {
+    const blob = await encode(canvas, format.type)
+
+    if (blob?.type === format.type) {
+      return new File([blob], format.filename, { type: format.type })
+    }
+  }
+
+  return null
+}
+
+/**
+ * 解碼成點陣圖，方向盡量套用 EXIF。
+ *
+ * `imageOrientation: 'from-image'` 是後來才加進規格的列舉值。只認得 'none' / 'flipY'
+ * 的舊 WebKit 會在 WebIDL 的列舉轉換那一步**丟 TypeError**——不是忽略選項，是整個
+ * 呼叫失敗。少了這條退路，那些裝置一張照片都縮不動。
+ *
+ * 退路犧牲的是自動轉正（橫拍的照片可能躺著），換到的是「縮得動」。兩者相比，
+ * 躺著的頭像至少存得進去，使用者還能自己轉正再上傳一次；縮不動則是完全走不通。
+ */
+async function decode(file: File): Promise<ImageBitmap> {
+  try {
+    return await createImageBitmap(file, { imageOrientation: 'from-image' })
+  }
+  catch {
+    return await createImageBitmap(file)
+  }
 }
 
 /**
@@ -62,7 +115,7 @@ function encode(canvas: HTMLCanvasElement): Promise<Blob | null> {
  */
 export async function resizeAvatar(file: File): Promise<File> {
   try {
-    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
+    const bitmap = await decode(file)
 
     try {
       const { width, height } = fitWithin(bitmap.width, bitmap.height)
@@ -80,16 +133,8 @@ export async function resizeAvatar(file: File): Promise<File> {
 
       context.drawImage(bitmap, 0, 0, width, height)
 
-      const blob = await encode(canvas)
-
-      // toBlob 給不出東西，或給的不是 WebP（不支援 WebP 編碼的瀏覽器會自己退回 PNG）。
-      // 後者不能頂著 .webp 的檔名送出去：server 要 MIME、副檔名、magic bytes 三者一致，
-      // 掛錯名字會被當成「格式不支援」退件，而使用者換幾張圖都一樣。
-      if (!blob || blob.type !== AVATAR_OUTPUT_TYPE) {
-        return file
-      }
-
-      return new File([blob], AVATAR_OUTPUT_FILENAME, { type: AVATAR_OUTPUT_TYPE })
+      // WebP、JPEG 都編不出來（或 toBlob 直接回 null）才走原檔那條路
+      return await encodeSmallest(canvas) ?? file
     }
     finally {
       // 解碼出來的點陣圖佔的是實體記憶體，等 GC 太慢——一張 4032 × 3024 就是 48 MB

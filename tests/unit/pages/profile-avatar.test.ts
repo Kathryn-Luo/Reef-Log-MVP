@@ -167,7 +167,18 @@ async function open(profile?: Record<string, unknown>, attached = false): Promis
 
 const CUSTOM_AVATAR_PROFILE = { ...GOOGLE_PROFILE, avatarUrl: CUSTOM_AVATAR, avatarSource: 'custom' }
 
-function photo(name = 'IMG_4823.JPG', type = 'image/jpeg', bytes = 6 * 1024 * 1024): File {
+/** 相機拍的原檔尺寸。縮圖存在的理由，也是「縮不動就走不通」的那個大小 */
+const CAMERA_PHOTO_BYTES = 6 * 1024 * 1024
+
+/**
+ * 預設**在上限之內**（1 MB）。
+ *
+ * happy-dom 沒有能用的 createImageBitmap 與 canvas，所以這一支測試檔裡的每一次選檔
+ * 都走「縮不動」那條路。而縮不動又超過上限時畫面會直接擋下、根本不送出（見下方
+ * 那兩條 test）——預設若是 6 MB，所有「送出之後怎麼樣」的測試都會停在送出之前。
+ * 要那個大小的自己傳 `CAMERA_PHOTO_BYTES`。
+ */
+function photo(name = 'IMG_4823.JPG', type = 'image/jpeg', bytes = 1024 * 1024): File {
   return new File([new Uint8Array(bytes)], name, { type })
 }
 
@@ -282,7 +293,7 @@ describe('/profile 更換頭像', () => {
 
     try {
       const page = await open()
-      await chooseFile(page, photo())
+      await chooseFile(page, photo('IMG_4823.JPG', 'image/jpeg', CAMERA_PHOTO_BYTES))
 
       expect(state.uploaded).toEqual([{
         field: AVATAR_FIELD_NAME,
@@ -315,17 +326,50 @@ describe('/profile 更換頭像', () => {
   // Given 前端縮圖失敗（瀏覽器不支援 createImageBitmap／canvas，或檔案無法解碼）
   // When  我送出
   // Then  前端改送原檔而不是直接報錯
-  it('縮圖失敗時照樣送出原檔，不在前端就報錯', async () => {
+  // 原檔本來就在上限內時，縮不動不構成問題：送出去 server 收得下。前端不必自己
+  // 先擋一手——它不是安全邊界，多擋一層只會多一個與 server 分岔的機會。
+  it('縮圖失敗但原檔在上限內時，照樣送出原檔，不在前端就報錯', async () => {
     const page = await open()
 
-    await chooseFile(page, photo('IMG_4823.JPG', 'image/jpeg', 3 * 1024 * 1024))
+    await chooseFile(page, photo('IMG_4823.JPG', 'image/jpeg', 1024 * 1024))
 
     expect(state.uploaded).toEqual([{
       field: AVATAR_FIELD_NAME,
       name: 'IMG_4823.JPG',
       type: 'image/jpeg',
-      size: 3 * 1024 * 1024,
+      size: 1024 * 1024,
     }])
+    expect(page.find('[data-testid="profile-avatar-error"]').exists()).toBe(false)
+  })
+
+  // Given 這台裝置縮不動照片（舊瀏覽器），而我選的是相機拍的 6 MB 原檔
+  // When  我送出
+  // Then  畫面直接說明是裝置縮不動，而不是把它上傳完再由 server 回「圖片請控制在 2 MB 以內」
+  //
+  // 那句 server 的訊息在這個情境下會誤導：使用者以為換一張就好，但他換幾張相機拍的
+  // 照片都一樣大。而且那是一趟注定失敗的 6 MB 上傳，手機用的還是行動網路。
+  it('縮不動又超過上限時，說明是裝置縮不動，而且根本不送出', async () => {
+    const page = await open()
+
+    await chooseFile(page, photo('IMG_4823.JPG', 'image/jpeg', CAMERA_PHOTO_BYTES))
+
+    expect(state.postCalls).toBe(0)
+
+    const error = page.get('[data-testid="profile-avatar-error"]').text()
+
+    expect(error).toContain('這台裝置')
+    // 換一張多小的圖才有用，要說得出數字——這裡正是使用者唯一碰得到 2 MB 的地方
+    expect(error).toContain('2 MB')
+    expect(error).not.toBe(AVATAR_TOO_LARGE_MESSAGE)
+  })
+
+  it('縮不動又超過上限之後，仍可以再選一張小的圖上傳', async () => {
+    const page = await open()
+
+    await chooseFile(page, photo('IMG_4823.JPG', 'image/jpeg', CAMERA_PHOTO_BYTES))
+    await chooseFile(page, photo('small.jpg', 'image/jpeg', 512 * 1024))
+
+    expect(state.postCalls).toBe(1)
     expect(page.find('[data-testid="profile-avatar-error"]').exists()).toBe(false)
   })
 

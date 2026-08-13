@@ -89,6 +89,27 @@ function choose(item: CreatureSuggestionItem) {
   close()
 }
 
+const listEl = useTemplateRef<HTMLElement>('list')
+
+/**
+ * 把作用中的那一項捲進可視範圍。
+ *
+ * 焦點永遠留在輸入框上（combobox 的協定），所以瀏覽器不會替我們捲——上限 8 筆
+ * 乘上每項的高度會超過清單的 max-h-64，走到後幾筆時那一項就落在可視區外了。
+ *
+ * `block: 'nearest'` 而不是 'center'：只在真的看不到時才動，不會每按一下就把清單
+ * 重新置中。jsdom 沒有實作 scrollIntoView，所以要容得下它不存在。
+ */
+async function scrollActiveIntoView() {
+  await nextTick()
+
+  const active = listEl.value?.children[activeIndex.value]
+
+  if (active instanceof HTMLElement) {
+    active.scrollIntoView?.({ block: 'nearest' })
+  }
+}
+
 /** 上下移動，並在頭尾繞回去——清單短，繞回去比停在邊界少按幾次 */
 function move(step: number) {
   const total = visibleItems.value.length
@@ -100,7 +121,24 @@ function move(step: number) {
   activeIndex.value = activeIndex.value < 0 && step < 0
     ? total - 1
     : (activeIndex.value + step + total) % total
+
+  void scrollActiveIntoView()
 }
+
+/**
+ * 建議一換，鍵盤游標就放掉。
+ *
+ * activeIndex 是索引，不是身分。個人歷史建議是掛載之後才取回來的（Preview／Neon
+ * 冷啟動時更慢），它一到就會重排 items——同一個索引這時指向的已經是另一個物種，
+ * 使用者接下來那一下 Enter 會選到他根本沒看上的東西（PR #177 的 review）。
+ *
+ * 選擇「放掉」而不是「用 value 追著跑」：清單重排的當下，使用者心裡指著的是畫面上
+ * 的**位置**，把游標搬到那一筆在新順序裡的新位置同樣不是他要的。停在沒有選取的
+ * 狀態最誠實——按 Enter 什麼都不會發生，他會再按一次方向鍵。
+ */
+watch(() => props.items, () => {
+  activeIndex.value = -1
+})
 
 function onArrow(step: number) {
   // 方向鍵也負責把收起來的清單叫回來：使用者按下去的意思就是「讓我看選項」
@@ -168,6 +206,7 @@ function onFocusOut(event: FocusEvent) {
     <ul
       v-if="visibleItems.length > 0"
       :id="listId"
+      ref="list"
       data-testid="creature-suggestion-list"
       role="listbox"
       class="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-lg border border-default bg-default py-1 shadow-lg"

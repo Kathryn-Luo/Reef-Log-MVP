@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import CreatureSuggestInput from '../../../app/components/CreatureSuggestInput.vue'
 import type { CreatureSuggestionItem } from '../../../app/components/CreatureSuggestInput.vue'
@@ -29,6 +29,12 @@ async function open(field: Awaited<ReturnType<typeof mountInput>>) {
   await field.get('input').trigger('focus')
   return field
 }
+
+// jsdom 沒有實作 scrollIntoView，元件必須容得下它不存在（真實瀏覽器一定有）。
+// 這裡補一支替身，順便讓「有沒有捲」變成可以斷言的事。
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
+})
 
 describe('CreatureSuggestInput 的 combobox 協定', () => {
   it('combobox 以 aria-controls 指向那份清單', async () => {
@@ -144,6 +150,41 @@ describe('CreatureSuggestInput 的 combobox 協定', () => {
 
     expect(field.find('[data-testid="creature-suggestion-list"]').exists()).toBe(false)
     expect(input.attributes('aria-activedescendant')).toBeUndefined()
+  })
+
+  // PR #177 的 review：個人歷史建議是掛載之後才取回來的（Preview／Neon 冷啟動時更慢）。
+  // 它一回來就會把 items 重排，而 activeIndex 是個索引——同一個數字這時指向的已經是
+  // 另一個物種，接下來那一下 Enter 會選到使用者根本沒看上的東西。
+  it('建議清單被重排時放掉鍵盤游標，不會指到換過來的另一筆', async () => {
+    const field = await mountInput()
+    const input = field.get('input')
+
+    await input.trigger('focus')
+    await input.trigger('keydown', { key: 'ArrowDown' })
+    expect(input.attributes('aria-activedescendant')).toBeTruthy()
+
+    // 歷史建議回來了，同一批項目換了順序
+    await field.setProps({ items: [ITEMS[2]!, ITEMS[0]!, ITEMS[1]!] })
+
+    expect(input.attributes('aria-activedescendant')).toBeUndefined()
+
+    // 而且不會誤選：這一下 Enter 什麼都不該發生
+    await input.trigger('keydown', { key: 'Enter' })
+    expect(field.emitted('select')).toBeUndefined()
+  })
+
+  // 8 筆 × 約 40px 高於清單的 max-h-64（256px），走到後幾筆時作用中的那一項會落在
+  // 可視區外——焦點留在輸入框上，瀏覽器不會替我們捲。
+  it('方向鍵移動時把作用中的那一項捲進可視範圍', async () => {
+    const field = await open(await mountInput())
+    const input = field.get('input')
+
+    await input.trigger('keydown', { key: 'ArrowDown' })
+    await input.trigger('keydown', { key: 'ArrowDown' })
+
+    const active = field.get('[data-testid="creature-suggestion"][data-value="Centropyge heraldi"]')
+
+    expect(active.element.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' })
   })
 
   it('重新輸入後不再指著上一輪的那一項', async () => {

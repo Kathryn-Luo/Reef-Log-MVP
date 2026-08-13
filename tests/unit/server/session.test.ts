@@ -32,6 +32,21 @@ describe('buildSessionPayload', () => {
     expect(payload.displayName).toBeUndefined()
   })
 
+  // issue #165 Story⑦「Given 密封 session 的內容 / When 登入完成 / Then payload 仍然只有
+  // { userId, exp }，頭像 URL 不進 cookie」。
+  //
+  // 頭像 URL 和 email / displayName 同一類：會變的個人資料。放進密封 cookie 等於在使用者
+  // 手上留一份改不掉的舊值——換過頭像之後，畫面還是會照著舊 cookie 顯示到過期為止。
+  // schema.prisma 的 googleAvatarUrl 註解寫的就是這件事。
+  it('不夾帶頭像 URL', () => {
+    const payload = buildSessionPayload('user-1', new Date('2026-07-30T00:00:00.000Z')) as Record<string, unknown>
+
+    expect(Object.keys(payload).sort()).toEqual(['exp', 'userId'])
+    expect(payload.googleAvatarUrl).toBeUndefined()
+    expect(payload.customAvatarUrl).toBeUndefined()
+    expect(payload.avatarUrl).toBeUndefined()
+  })
+
   it('exp 為「現在 + 有效期」的 Unix 秒數', () => {
     const now = new Date('2026-07-30T00:00:00.000Z')
 

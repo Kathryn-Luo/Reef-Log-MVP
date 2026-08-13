@@ -10,13 +10,15 @@ import type { PrismaClient } from '@prisma/client'
 // 萬用字元，而 Vercel preview 每個 branch 一個動態網址。把「拿到 profile 之後要做
 // 什麼」單獨切出來，正是為了讓真正有分支的那一段測得起來。
 
-/** OAuth / OIDC 回傳的 Google 使用者資料，只取這裡用得到的三個欄位。 */
+/** OAuth / OIDC 回傳的 Google 使用者資料，只取這裡用得到的四個欄位。 */
 export interface GoogleProfile {
   /** OIDC 的 sub：Google 端那個帳號的穩定識別碼。 */
   sub: string
   /** Google 不保證給得出 email（scope 未授權、或 Apple 式的隱藏信箱）。 */
   email?: string | null
   name?: string | null
+  /** 大頭貼 URL，寫進 `User.googleAvatarUrl`（issue #165）。Google 同樣不保證給。 */
+  picture?: string | null
 }
 
 /**
@@ -27,25 +29,28 @@ export interface GoogleProfile {
  *
  *   ① `sub` 是 `@@unique([provider, providerAccountId])` 的一半。少了它就無從決定
  *      「這是誰」，此時寧可整段登入失敗，也不要拿空字串去建一列所有人都會撞在一起的 Account。
- *   ② userinfo 還會回 `picture`、`email_verified`、`locale` 等等。它們一個都不會寫進
- *      資料庫，在這裡就丟掉，而不是一路帶進 `resolveGoogleLogin` 再靠它記得不要用。
+ *   ② userinfo 還會回 `email_verified`、`locale` 等等。它們一個都不會寫進資料庫，
+ *      在這裡就丟掉，而不是一路帶進 `resolveGoogleLogin` 再靠它記得不要用。
+ *      `picture` 從 issue #165 起留下來——它是 `User.googleAvatarUrl` 的來源。
  */
 export function toGoogleProfile(raw: unknown): GoogleProfile | null {
   if (typeof raw !== 'object' || raw === null) {
     return null
   }
 
-  const { sub, email, name } = raw as Record<string, unknown>
+  const { sub, email, name, picture } = raw as Record<string, unknown>
 
   if (typeof sub !== 'string' || sub === '') {
     return null
   }
 
-  // email / name 對應的 User 欄位都是 String?，缺漏或型別不對一律當成「Google 沒給」
+  // email / name / picture 對應的 User 欄位都是 String?，缺漏或型別不對一律當成「Google 沒給」。
+  // picture 的空字串也算沒給：存進去只會讓 Profile 頁掛一張破圖，還會擋掉「名稱首字」那層備援。
   return {
     sub,
     email: typeof email === 'string' ? email : null,
     name: typeof name === 'string' ? name : null,
+    picture: typeof picture === 'string' && picture !== '' ? picture : null,
   }
 }
 
@@ -61,8 +66,13 @@ export interface GoogleLoginResult {
 /**
  * 依 Google 回傳的 profile 決定「這是誰」，必要時建立帳號。
  *
- *   ① 以 (provider, providerAccountId) 查 Account —— 命中就沿用它的 userId。
+ *   ① 以 (provider, providerAccountId) 查 Account —— 命中就沿用它的 userId，
+ *      並把 Google 這次給的頭像更新上去（issue #165，見 `refreshGoogleAvatar`）。
  *   ② 未命中 —— 建一位 User，同一次寫入掛上他的 Account。
+ *
+ * 第 ① 步在 #165 之前一個寫入都沒有。**新增的那個 update 只碰 `googleAvatarUrl`**：
+ * `displayName` 與 `customAvatarUrl` 的最新值來自使用者自己（#171、#166），不是 Google，
+ * 順手多帶一欄就會在下次登入時把它們靜默蓋掉。理由完整寫在 `refreshGoogleAvatar` 上。
  *
  * `providerAccountId` 存 OIDC 的 sub 而不是 email：email 可以變更，sub 不會
  * （schema.prisma 的 Account.providerAccountId 註解）。因此 Google 端改過 email 的人
@@ -88,6 +98,8 @@ export async function resolveGoogleLogin(
   const existing = await findAccount()
 
   if (existing) {
+    await refreshGoogleAvatar(client, existing.userId, profile.picture)
+
     return { userId: existing.userId, isNewUser: false }
   }
 
@@ -98,6 +110,9 @@ export async function resolveGoogleLogin(
       data: {
         email: profile.email ?? null,
         displayName: profile.name ?? null,
+        // 建帳號這一次沒有「既有值會被蓋掉」的問題——這一列現在才存在——所以 picture
+        // 和 displayName 一樣直接寫進來，不必另走 refreshGoogleAvatar（issue #165）。
+        googleAvatarUrl: profile.picture ?? null,
         // Google 使用者沒有訪客沙盒要複製，所以建立當下就填上現在（issue #144）。
         // 欄位語義是「沒有欠著的複製」，不是「複製過了」。
         //
@@ -127,6 +142,8 @@ export async function resolveGoogleLogin(
     const raced = await findAccount()
 
     if (raced) {
+      await refreshGoogleAvatar(client, raced.userId, profile.picture)
+
       return { userId: raced.userId, isNewUser: false }
     }
 
@@ -138,6 +155,36 @@ export async function resolveGoogleLogin(
     // 神祕帳號，比一個看得見的錯誤難查得多。原樣拋出，讓它現形。
     throw cause
   }
+}
+
+/**
+ * 既有使用者重新登入時，把 Google 這次給的頭像更新上去（issue #165）。
+ *
+ * ⚠ **`data` 只能有 `googleAvatarUrl` 一個欄位。** 這是本函式存在的全部理由，也是它
+ * 唯一會出錯的地方。`resolveGoogleLogin` 命中既有 Account 的那條路徑在此之前一個
+ * `update` 都沒有——`displayName` 只在建帳號那一次寫入。使用者可以自己改名（#171）、
+ * 自己上傳頭像（#166），那兩欄的最新值都在我們這邊，不在 Google 那邊。
+ *
+ * 所以這裡刻意不寫成 `data: { ...profile }` 之類的展開：多帶一個欄位，使用者改過的
+ * 名字就會在下次登入時被 Google 的本名蓋掉，而且是靜默的——沒有錯誤、沒有畫面異狀，
+ * 只有名字自己變回去。`google-login.test.ts` 因此斷言的是 data 的**鍵**，不是結果值。
+ *
+ * `picture` 為 null 時整個 update 不送：那代表「Google 這次沒給」，不是「Google 說沒有」。
+ * 照著寫 null 會把使用者原本好好的頭像清掉，換來的只是一個沒有憑證的空值。
+ */
+async function refreshGoogleAvatar(
+  client: PrismaClient,
+  userId: string,
+  picture: string | null | undefined,
+): Promise<void> {
+  if (!picture) {
+    return
+  }
+
+  await client.user.update({
+    where: { id: userId },
+    data: { googleAvatarUrl: picture },
+  })
 }
 
 /** Prisma 的唯一約束衝突。用 code 而不是 instanceof：不必為了認一個錯誤把 runtime 拉進來。 */

@@ -123,6 +123,21 @@ jobs:
           pnpm test --reporter=default --reporter=json --outputFile.json="$VITEST_RESULT_FILE"
           node .github/scripts/assert-vitest-discovery.mjs "$VITEST_RESULT_FILE"
 
+      # issue #176：resizeAvatar 整段建立在 createImageBitmap / canvas / toBlob 上，
+      # happy-dom 三個都沒有，unit 測試只能對著替身斷言。而它原本的真實瀏覽器覆蓋
+      # 來自 E2E，在「訪客不得上傳頭像」定案後沒了（preview 上只有訪客登得進去）。
+      #
+      # 這一步把「需要真實瀏覽器」與「需要真實部署」分開：不起 server、不登入、
+      # 不碰 Blob store，只在真的 Chromium 裡跑 tests/browser/。
+      # 只裝 chromium，與 e2e.yml 同一個理由——設定裡也只有這一個。
+      - name: Install Chromium for browser tests
+        if: ${{ !cancelled() }}
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Browser tests
+        if: ${{ !cancelled() }}
+        run: pnpm test:browser
+
       # 「只有打包才會炸」的錯誤，前面三項一個都攔不到——例如 app/ 用相對路徑
       # 跨出 srcDir 匯入根目錄的 shared/：原始碼位置正確，所以 typecheck 全綠，
       # 錯誤只發生在 Nitro 把 Vite 的 chunk 搬家之後再打包一次的那一刻（見 #43、#44）。

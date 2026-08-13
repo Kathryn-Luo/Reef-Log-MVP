@@ -129,7 +129,24 @@ fixture 本身（合法的 JPEG 骨架、EXIF 真的有那個 tag、存檔真的
 `resizeAvatar` 現在對這兩者各有一條退路（`de84217`），而守著那兩條退路的仍然是
 `tests/unit/app/resize-avatar.test.ts` 裡的替身——真實環境的驗證只有人工實機。
 
-要涵蓋這一類，得讓 `vitest.browser.config.ts` 的 `instances` 多一個 `webkit`。
-Linux 上的 Playwright WebKit 不等於真的 iOS Safari（引擎版本與系統編解碼器都不同），
-但比 Chromium 近得多。代價是 CI 變慢，而且 WebKit 專屬的失敗有時難以判斷是真 bug
-還是 provider 差異。**這個決定還沒做**，見 issue #176 的討論。
+### 決定：不把 WebKit 加進 CI（issue #187，2026-08-13）
+
+可以讓 `vitest.browser.config.ts` 的 `instances` 多一個 `webkit`，但**決定不做**。
+
+理由不是成本，是訊號品質：Linux 上的 Playwright WebKit 不等於真的 iOS Safari
+（引擎版本與系統編解碼器都不同），WebKit 專屬的失敗常常分不清是真 bug 還是
+provider 差異——而分不清的紅燈會慢慢被當成雜訊忽略，那比沒有測試更糟。
+
+所以這一類明文交給**人工實機**確認。既然是人工，就得處理「人工最容易失敗的地方是
+沒人想起來」：
+
+> CI 有一步 `Cross-browser reminder`，在 PR 動到 `app/utils/avatarImage.ts` 時
+> 留下一則 warning 與一段 run summary，說明要在實機確認什麼。
+> 它永遠成功——是提醒，不是閘門。
+
+要確認的就一件事：選一張相機拍的橫向照片，上傳後方向正確，而且沒有跳出
+「無法縮小」之類的訊息（那四句訊息各對應一個失敗的關卡，見 `app/pages/profile.vue`
+的 `OVERSIZED_MESSAGES`）。
+
+那一步是 `if` 條件下的步驟，掉了不會有任何紅燈，所以由
+`tests/unit/browser/resize-avatar-browser-spec.test.ts` 守著它還在。

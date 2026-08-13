@@ -54,8 +54,12 @@ jobs:
         ports:
           - 5433:5432
     steps:
+      # fetch-depth: 0 是給下方「跨瀏覽器提醒」那一步用的：它要比對這個 PR 動了
+      # 哪些檔案，而預設的淺 clone 拿不到 base 那一端的 commit。
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # 前置與 tdd-develop.yml 對齊：那邊跑得起來、這邊也要跑得起來，
       # 否則綠燈與 agent 的實際環境不是同一件事。
@@ -137,6 +141,36 @@ jobs:
       - name: Browser tests
         if: ${{ !cancelled() }}
         run: pnpm test:browser
+
+      # issue #187：上一步只跑 Chromium，抓不到 Safari 專屬的行為。
+      #
+      # 決定是「不把 WebKit 加進 CI」——Linux 上的 Playwright WebKit 不等於真的
+      # iOS Safari，而分不清是真 bug 還是 provider 差異的紅燈，會慢慢被當成雜訊。
+      # 代價是那一類問題只有人工實機驗得到，而「人工」最容易失敗的地方是沒人想起來。
+      #
+      # 所以在**唯一該想起來的時刻**出聲：有人動到縮圖那段程式碼的時候。
+      # 這一步永遠成功，只留一則 warning 與一段 summary——它是提醒，不是閘門。
+      # PR #185 踩過的兩個坑（imageOrientation 的列舉、toBlob 安靜退成 PNG）
+      # 都是改到這個檔案時才會踩到的，範圍抓在這裡剛好。
+      - name: Cross-browser reminder
+        if: ${{ github.event_name == 'pull_request' && !cancelled() }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          WATCHED: app/utils/avatarImage.ts
+        run: |
+          if ! git diff --name-only "$BASE_SHA" HEAD -- "$WATCHED" | grep -q .; then
+            echo "沒有動到 $WATCHED，不需要跨瀏覽器的人工確認。"
+            exit 0
+          fi
+
+          MESSAGE="這個 PR 動到 $WATCHED。自動化只跑 Chromium，Safari 專屬的行為蓋不到（見 docs/BROWSER_TESTS.md 與 issue #187），請在實機上確認一次：選一張相機拍的橫向照片，上傳後方向正確、而且沒有跳出「無法縮小」之類的訊息。"
+
+          echo "::warning file=$WATCHED::$MESSAGE"
+          {
+            echo "### ⚠️ 需要一次人工的跨瀏覽器確認"
+            echo
+            echo "$MESSAGE"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # 「只有打包才會炸」的錯誤，前面三項一個都攔不到——例如 app/ 用相對路徑
       # 跨出 srcDir 匯入根目錄的 shared/：原始碼位置正確，所以 typecheck 全綠，

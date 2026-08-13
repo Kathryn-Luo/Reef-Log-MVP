@@ -1,7 +1,9 @@
 # 真實瀏覽器的測試（`tests/browser/`）
 
-issue #176。這份說明存在的理由是：`tests/browser/` 底下有一支**現在跑不起來**的測試，
-而「為什麼放著不跑」比那支測試本身更需要寫下來。
+issue #176。`resizeAvatar` 那段程式碼有一條只有真實瀏覽器驗得到的規格，
+而它原本的覆蓋來源被授權規則堵死了。這份說明記的是那個缺口、補法，以及補法的邊界。
+
+**2026-08-13 起已啟用**（`pnpm test:browser`，CI 每個 PR 都會跑）。
 
 ---
 
@@ -11,7 +13,7 @@ issue #176。這份說明存在的理由是：`tests/browser/` 底下有一支**
 |---|---|---|
 | `tests/unit/` | happy-dom | `pnpm test`，TDD Develop 的 job 內 |
 | `tests/e2e/` | 真的 Chromium + Vercel preview | `pnpm test:e2e`，preview 部署好之後 |
-| `tests/browser/` | 真的 Chromium，**不需要 server、不需要登入** | 尚未啟用 |
+| `tests/browser/` | 真的 Chromium，**不需要 server、不需要登入** | `pnpm test:browser`，CI 的 `lint-typecheck-test` job 內 |
 
 第三列是 issue #176 開出來的缺口。`app/utils/avatarImage.ts` 的 `resizeAvatar`
 整段建立在三個只有真實瀏覽器才有的 API 上：
@@ -29,70 +31,44 @@ happy-dom 三個都沒有，所以 `tests/unit/app/resize-avatar.test.ts` 只能
 
 ---
 
-## 為什麼還沒啟用
-
-要跑它得先裝 `@vitest/browser`。CLAUDE.md 規定**相依與 CI 設定一律由人類決定**，
-agent 不自己加，所以這一輪只把「裝上去之後就能跑」的東西準備好：
-
-- `tests/browser/resize-avatar.browser.ts`——三條 Then 的測試本體
-- `tests/browser/support/exifJpeg.ts`——手工組出來的、帶 EXIF Orientation 的 JPEG fixture
-- `tests/unit/browser/`——這兩份東西在 `pnpm test` 這一側的守門
-
-檔名刻意是 `.browser.ts` 而不是 `.browser.test.ts`：vitest 預設只收 `*.test.*` 與
-`*.spec.*`，所以它天生就不會被 `pnpm test` 收進來。不這樣做的話，就得往
-`vitest.config.ts` 的 `exclude` 加一項——那份白名單是 issue #32 的防線
-（`tests/unit/workflows/ci-runner-config.test.ts` 逐項鎖住它），
-為了一個新目錄去放寬它，代價比一個檔名慣例大得多。
-
----
-
-## 要啟用的話（人類的三件事）
-
-### ① 裝開發相依
+## 怎麼跑
 
 ```sh
-pnpm add -D @vitest/browser @vitest/browser-playwright
+pnpm test:browser
 ```
 
-`@vitest/browser-playwright` 是 Vitest 4 把 provider 拆出去之後的套件名；
-Vitest 3 以前是 `@vitest/browser` 內建 `provider: 'playwright'`。裝之前先確認當下版本的
-API，本檔寫於 vitest 4.1。Playwright 本身（`@playwright/test`）已經在 devDependencies 裡。
+CI 的 `lint-typecheck-test` job 在 unit 測試之後、build 之前跑同一個指令，
+前面加一步 `pnpm exec playwright install --with-deps chromium`。
 
-### ② 新增 `vitest.browser.config.ts`
+相依是 `@vitest/browser` 與 `@vitest/browser-playwright`（Vitest 4 把 provider 拆出去
+之後的套件名；Vitest 3 以前是 `@vitest/browser` 內建 `provider: 'playwright'`）。
+Playwright 本身（`@playwright/test`）本來就在 devDependencies 裡。
 
-不共用 `vitest.config.ts`：那一份設 `environment: 'nuxt'`，而 `resizeAvatar` 沒有任何
-Nuxt 相依，在瀏覽器裡再啟動一次 Nuxt 環境只是白付代價。
+設定在 `vitest.browser.config.ts`，**不共用** `vitest.config.ts`，有兩個理由：
 
-```ts
-import { playwright } from '@vitest/browser-playwright'
-import { defineConfig } from 'vitest/config'
+1. 那一份設 `environment: 'nuxt'`，而 `resizeAvatar` 沒有任何 Nuxt 相依，在瀏覽器裡
+   再啟動一次 Nuxt 環境只是白付代價。
+2. 更重要的：那一份的 `exclude` 是 issue #32 的防線，由
+   `tests/unit/workflows/ci-runner-config.test.ts` 逐項鎖住（白名單只有 `node_modules`
+   與 `tests/e2e`）。把 `tests/browser/` 塞進去要放寬那份白名單，代價比多一支設定檔大。
 
-export default defineConfig({
-  test: {
-    include: ['tests/browser/**/*.browser.ts'],
-    browser: {
-      enabled: true,
-      headless: true,
-      provider: playwright(),
-      instances: [{ browser: 'chromium' }],
-    },
-  },
-})
+同一個理由，檔名刻意是 `.browser.ts` 而不是 `.browser.test.ts`：vitest 預設只收
+`*.test.*` 與 `*.spec.*`，所以它天生就不會被 `pnpm test` 收進來。`pnpm test` 的收檔
+範圍到現在一個字都沒有動過。
+
+### 在下載不到 Chromium 的環境裡
+
+有些開發環境（例如只開放白名單網域的沙盒）連不到 `cdn.playwright.dev`，
+`playwright install` 一定失敗，但機器上往往已經預先裝了某個版本的 Chromium。
+這種情況給一個絕對路徑就跑得起來：
+
+```sh
+PLAYWRIGHT_CHROMIUM_EXECUTABLE=/opt/pw-browsers/chromium-1194/chrome-linux/chrome pnpm test:browser
 ```
 
-再加一個 script：
-
-```json
-"test:browser": "vitest run --config vitest.browser.config.ts"
-```
-
-### ③ CI 上跑得動 Chromium
-
-`.github/workflows/` 內的 CI job 要多一步 `pnpm exec playwright install --with-deps chromium`，
-然後執行 `pnpm test:browser`。**這一步 agent 不會做**（CLAUDE.md：CI 設定一律人類處理）。
-
-> 附帶一提：`pnpm exec playwright install chromium` 在本 repo 的 runner 上實測可行
-> （chromium-headless-shell，約 115 MB，一分鐘內下載完）。
+版本因此可能與 Playwright 預期的不一致。那是刻意的取捨：這幾條測試驗的是 canvas 與
+`createImageBitmap` 這種十年沒動過的 API，差幾版不影響結論，而「完全跑不了」影響很大。
+CI 上不會用到這個開關，那裡仍然是版本對齊的那一份說了算。
 
 ---
 
@@ -131,18 +107,29 @@ fixture 本身（合法的 JPEG 骨架、EXIF 真的有那個 tag、存檔真的
 
 ### 這三條斷言的來源
 
-它們不是照著規格猜的。實作這一輪時，用 `pnpm exec playwright install chromium` 裝好的
-Chromium 151 跑過一次一次性的驗證器（把同樣的輔助函式與斷言搬進 `page.evaluate`），
-量到的就是上表那些數字：
+它們不是照著規格猜的。建立這組測試時（PR #186 的第一輪，`@vitest/browser` 還沒核准），
+先用一次性的驗證器在 Chromium 151 上量過一次，數字就是上表那些。
 
-```
-then1  { outcome: 'resized', size: { width: 512, height: 384 }, type: 'image/webp' }
-then2  { outcome: 'resized', size: { width: 200, height: 150 } }
-then3  { outcome: 'resized', size: { width: 256, height: 512 },
-         luma: { topLeft: 248, topRight: 8, bottomLeft: 248, bottomRight: 248 } }
-控制組 { outcome: 'resized', size: { width: 512, height: 256 } }
-```
+那個驗證器已經沒有用了——**這組測試現在真的跑在 `pnpm test:browser` 裡**，
+斷言由 vitest 自己驗證，不再需要旁證。
 
-那個驗證器是拋棄式的、沒有進版控（它得自己用 esbuild 打包、自己開 Playwright，
-與 `@vitest/browser` 的執行方式不同）。所以上面這段只是「斷言的數字有根據」的紀錄，
-不等於這支測試已經在 CI 裡跑過。真正把它接起來還是要走上面那三步。
+---
+
+## 這組測試守不到的東西
+
+**它只跑 Chromium，所以抓不到 Safari 專屬的坑。**
+
+這不是假設。PR #185 上線前的實機測試就踩到兩個，兩個在 Chromium 上都是綠的：
+
+- `imageOrientation` 的 `'from-image'` 是後來才加進規格的列舉值，只認得 `'none'` /
+  `'flipY'` 的舊 WebKit 會在 WebIDL 轉換那一步丟 `TypeError`——不是忽略選項，是整個
+  `createImageBitmap` 呼叫失敗。
+- `toBlob` 編不出 WebP 時**不會失敗**，它安靜地回一份 PNG。
+
+`resizeAvatar` 現在對這兩者各有一條退路（`de84217`），而守著那兩條退路的仍然是
+`tests/unit/app/resize-avatar.test.ts` 裡的替身——真實環境的驗證只有人工實機。
+
+要涵蓋這一類，得讓 `vitest.browser.config.ts` 的 `instances` 多一個 `webkit`。
+Linux 上的 Playwright WebKit 不等於真的 iOS Safari（引擎版本與系統編解碼器都不同），
+但比 Chromium 近得多。代價是 CI 變慢，而且 WebKit 專屬的失敗有時難以判斷是真 bug
+還是 provider 差異。**這個決定還沒做**，見 issue #176 的討論。

@@ -252,9 +252,30 @@ describe('ci.yml：獨立於 agent 的 PR 檢查', () => {
   })
 
   // E2E 需要 preview URL 與瀏覽器，屬於 #23 的範圍。混進來會讓這支必紅。
+  //
+  // issue #176 起 ci.yml 會裝 chromium 給 tests/browser/ 用，所以不能再一律禁止
+  // `playwright install`——那條斷言原本是「這裡沒有瀏覽器」的代理指標，而那件事
+  // 現在刻意不成立了。要守的東西沒變，改成直接說：**裝瀏覽器可以，跑 E2E 不行。**
+  //
+  // 為什麼 E2E 仍然不能進來：它要的是一個部署好的 preview URL，那個東西在這支
+  // workflow 裡不存在，混進來的結果是這支永遠紅——CI 的定位是「獨立於 agent 的
+  // 綠燈訊號」，一個永遠紅的訊號等於沒有訊號。tests/browser/ 沒有這個問題，
+  // 它不需要 server、不需要登入。
   it('不執行 E2E', () => {
     const text = code(raw())
     expect(text).not.toContain('pnpm test:e2e')
-    expect(text).not.toContain('playwright install')
+    expect(text).not.toContain('playwright test')
+    expect(text).not.toContain('tests/e2e')
+    expect(text).not.toContain('PLAYWRIGHT_BASE_URL')
+  })
+
+  // 逐字釘住：能出現的 playwright 指令只有「裝 chromium」這一種。
+  // 用白名單而不是黑名單——`playwright install` 後面能接的東西太多，
+  // 一項一項禁不完，而該准的就只有這一條。
+  it('唯一的 playwright 指令是裝 chromium 給瀏覽器測試用', () => {
+    const installs = [...code(raw()).matchAll(/playwright install[^\n]*/g)]
+      .map(match => match[0].trim())
+
+    expect(installs).toEqual(['playwright install --with-deps chromium'])
   })
 })

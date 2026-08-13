@@ -8,10 +8,10 @@ import { blockOf, read, testBlocks } from '../support/spec-source'
 //
 // ── 為什麼這一側只能比對原始碼本文 ──
 //
-// `tests/browser/` 底下那支要跑在真的 Chromium 裡（真的 `createImageBitmap`、真的 canvas、
-// 真的 WebP 編碼器）。要跑得起來得先有 `@vitest/browser`——那是新的開發相依，
-// 而 CLAUDE.md 規定相依由人類決定，agent 不自己加。所以它在 `pnpm test` 裡跑不到，
-// 現況與 `tests/e2e/` 完全同型，這一側的守法也就沿用 `tests/unit/e2e/` 那一套。
+// `tests/browser/` 底下那支跑在真的 Chromium 裡（真的 `createImageBitmap`、真的 canvas、
+// 真的 WebP 編碼器），由 `pnpm test:browser` 執行——**不是** `pnpm test`。
+// 兩者是不同的 vitest 執行，所以這一側看不到那一側的結果，情況與 `tests/e2e/` 完全同型，
+// 守法也就沿用 `tests/unit/e2e/` 那一套：比對原始碼本文。
 //
 // 檔名刻意是 `.browser.ts` 而不是 `.browser.test.ts`：vitest 預設只收 `*.test.*` /
 // `*.spec.*`，所以它天生就不會被 `pnpm test` 收進來，不必往 `vitest.config.ts` 的
@@ -22,7 +22,9 @@ import { blockOf, read, testBlocks } from '../support/spec-source'
 //
 // 守得住「修法有沒有走偏」：三條 Then 各自有一條 test、驗的是真的瀏覽器 API 而不是替身、
 // 量的是真的解回來的像素、沒有人為了讓它好過而把它改回 mock。
-// 守不住「斷言本身對不對」——那要真的跑一次，見 `docs/BROWSER_TESTS.md`。
+//
+// 守不住「斷言本身對不對」——那由 `pnpm test:browser` 自己驗，而它在 CI 上是另一個
+// 步驟。兩邊都需要：那一側證明斷言成立，這一側證明斷言還是原來要驗的那件事。
 
 const SPEC = 'tests/browser/resize-avatar.browser.ts'
 const source = read(SPEC)
@@ -193,28 +195,61 @@ describe('沒有 test 被刪掉或跳過', () => {
   })
 })
 
-// Given 領先方案需要新增開發依賴（issue #176 的「相依」段）
-// When  這一輪交件
-// Then  相依沒有被自作主張加進去，而是寫成一份人類看得懂的決策說明
+// Given 人類核准了 `@vitest/browser` 這個開發相依與對應的 CI 設定（issue #176）
+// When  瀏覽器測試被接上
+// Then  三個環節缺一不可地都在：相依、跑得起來的設定與 script、CI 真的會執行它
 //
-// 這一組是「我沒有偷偷做掉那個人類閘門」的機械證據。哪天有人核准並裝上去了，
-// 這裡會紅——那正是提醒他一併把 docs 與這條斷言改成「已啟用」的時機。
-describe('新增相依這件事留給人類決定', () => {
+// 這一組原本反過來寫——斷言相依**沒有**被自作主張加進去，是「我沒有偷偷做掉那個
+// 人類閘門」的機械證據。核准之後它的用途換了一個方向：守住「接上了就不要再掉下去」。
+//
+// 為什麼三項要一起驗：任何一項單獨存在都會產生一個**看起來有覆蓋、實際上沒有**的
+// 狀態。裝了相依卻沒有 script，或有 script 卻沒有接進 CI，`tests/browser/` 就只是
+// 一份沒有人執行的檔案——而那正是 #176 一開始要解決的問題。
+describe('瀏覽器測試真的被接起來了', () => {
   const REQUIRED_PACKAGES = ['@vitest/browser', '@vitest/browser-playwright']
-  const packageJson = read('package.json')
+  const packageJson = JSON.parse(read('package.json'))
+  const config = read('vitest.browser.config.ts')
+  const ci = read('.github/workflows/ci.yml')
   const doc = read('docs/BROWSER_TESTS.md')
 
-  it('package.json 沒有被加上瀏覽器測試的相依', () => {
-    expect(REQUIRED_PACKAGES.filter(name => packageJson.includes(name))).toEqual([])
+  it.each(REQUIRED_PACKAGES)('%s 在 devDependencies 裡', (name) => {
+    expect(packageJson.devDependencies?.[name]).toBeTruthy()
   })
 
-  it('docs 寫明了要裝哪些套件', () => {
+  // 相依只放 dependencies 的話，production bundle 會多背一整套測試工具
+  it.each(REQUIRED_PACKAGES)('%s 沒有被放進 dependencies', (name) => {
+    expect(packageJson.dependencies?.[name]).toBeUndefined()
+  })
+
+  it('有一個 test:browser script，指向獨立的那份設定', () => {
+    expect(packageJson.scripts?.['test:browser']).toBe('vitest run --config vitest.browser.config.ts')
+  })
+
+  // 這份設定**不可以**去碰 vitest.config.ts 的收檔範圍：那份白名單是 #32 的防線
+  // （ci-runner-config.test.ts 逐項鎖住）。兩邊獨立，`pnpm test` 收哪些檔一個字都沒動。
+  it('設定只收 tests/browser/，而且跑的是真的瀏覽器', () => {
+    expect(config).toContain('tests/browser/**/*.browser.ts')
+    expect(config).toContain('enabled: true')
+    expect(config).toContain('chromium')
+  })
+
+  // CI 少了任一步，這組測試就只是一份沒有人執行的檔案
+  it('CI 會裝 Chromium，而且真的執行 pnpm test:browser', () => {
+    expect(ci).toContain('playwright install --with-deps chromium')
+    expect(ci).toMatch(/run:\s*pnpm test:browser/)
+  })
+
+  // 前一步失敗不該讓它被跳過——與 ci.yml 其餘四項檢查同一個規則（ci-checks.test.ts）
+  it('CI 的瀏覽器測試步驟掛著 !cancelled()', () => {
+    const step = ci.slice(ci.indexOf('name: Browser tests'))
+    expect(step).toMatch(/if:\s*\$\{\{\s*!\s*cancelled\(\)\s*\}\}/)
+  })
+
+  it('docs 寫明了裝哪些套件，也指得到那支測試與它的設定檔', () => {
     for (const name of REQUIRED_PACKAGES) {
       expect(doc, `docs/BROWSER_TESTS.md 沒有提到 ${name}`).toContain(name)
     }
-  })
 
-  it('docs 指得到那支跑不動的測試與它的設定檔內容', () => {
     expect(doc).toContain(SPEC)
     expect(doc).toContain('vitest.browser.config.ts')
   })

@@ -76,6 +76,7 @@ const HANDLERS = [
   // 個人資料（issue #160）
   { file: 'server/api/profile.get.ts', resolver: 'resolveProfile' },
   { file: 'server/api/profile.patch.ts', resolver: 'updateOwnedProfile' },
+  { file: 'server/api/profile/avatar.post.ts', resolver: 'updateOwnedAvatar' },
 ]
 
 describe('每一支 API 都經過同一道歸屬檢查', () => {
@@ -132,6 +133,17 @@ describe('每一支 API 都經過同一道歸屬檢查', () => {
 
     expect(source).toMatch(/\(\) => readBody\(event\)/)
     expect(source).not.toMatch(/await readBody\(event\)/)
+  })
+
+  // 頭像上傳（issue #166）走的是 multipart 而不是 JSON，但要守的是同一件事，而且更嚴重：
+  // Story 明寫「未登入 → 401，且在讀取或寫入任何檔案內容之前就結束」。寫成
+  // `await readMultipartFormData(event)` 的話，完全沒登入的人也能讓 server 先把整份
+  // 檔案收進記憶體，才被告知他根本沒有身分。
+  it('server/api/profile/avatar.post.ts 把上傳的檔案延後到身分檢查之後才讀', () => {
+    const source = readCode('server/api/profile/avatar.post.ts')
+
+    expect(source).toMatch(/\(\) => readMultipartFormData\(event\)/)
+    expect(source).not.toMatch(/await readMultipartFormData\(event\)/)
   })
 })
 

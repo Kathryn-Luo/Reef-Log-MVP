@@ -2,23 +2,27 @@ import type { PrismaClient, User } from '@prisma/client'
 import type { CreatureDetailDto, CreatureDetailResponse, CreatureProfileResponse, MoveCreatureResponse, TankCreaturesData } from '#shared/types/creature'
 import type { GuestSandboxResponse } from '#shared/types/guestSandbox'
 import type { AvatarSource, UserProfileResponse } from '#shared/types/profile'
+import type { AvatarUploadPart, AvatarUploadRejection } from '#shared/utils/avatarUpload'
+import type { AvatarBlobStore } from './avatarStore'
 import type { Timer } from './requestTiming'
 import type { TankHomeData, TankOption } from '#shared/types/home'
 import type { MaintenancePageData, MaintenanceTaskDto, MaintenanceTaskResponse } from '#shared/types/maintenance'
 import type { CreateTankResponse } from '#shared/types/tank'
 import type { TrendPageData } from '#shared/types/trend'
 import type { CreateWaterLogResponse, WaterLogPageData } from '#shared/types/waterLog'
+import { parseAvatarUpload } from '#shared/utils/avatarUpload'
 import { parseCreatureStatusInput } from '#shared/utils/creatureDetail'
 import { parseCreatureProfileInput } from '#shared/utils/creatureForm'
 // completedOn 的規則與保養頁共用同一份（issue #122，與 parseWaterLogInput 同一個作法）
 import { parseCompletedOn, parseCompletedOnInput } from '#shared/utils/maintenance'
 import { parseCreateMaintenanceTaskInput, parseMaintenanceTaskInput } from '#shared/utils/maintenanceTaskForm'
-import { parseDisplayName } from '#shared/utils/profile'
+import { ownsDisplayName, parseDisplayName } from '#shared/utils/profile'
 import { parseTankInput } from '#shared/utils/tankForm'
 // 時間範圍的規則住在 shared：#123 的畫面用的是同一份四個選項（issue #126）
 import { parseTrendRange } from '#shared/utils/trend'
 // parseWaterLogInput 與記錄水質的表單共用同一份規則，所以它住在 shared（issue #124）
 import { parseWaterLogInput } from '#shared/utils/waterLog'
+import { saveCustomAvatar, vercelAvatarBlobStore } from './avatarStore'
 import { createCreatureProfile, getCreatureDetail, moveCreature, updateCreatureProfile, updateCreatureStatus } from './creatureDetail'
 import { getTankCreatures } from './creatureList'
 import { ensureGuestSandbox } from './guestSandbox'
@@ -110,6 +114,25 @@ export const GUEST_CANNOT_RENAME: ApiErrorSpec = {
   statusCode: 403,
   statusMessage: 'Guest display name is fixed',
   data: { message: '訪客的顯示名稱固定為「訪客」，改用 Google 登入後才能修改。' },
+}
+
+/**
+ * 訪客不能上傳自訂頭像（Epic #160，2026-08-12 定案）。
+ *
+ * 兩個理由都不是 UX：
+ *   1. **孤兒 Blob。** `prisma/cleanupExpiredGuests.ts` 會刪掉逾期訪客的 `User` 列。
+ *      列一刪，`customAvatarUrl` 指的那個 Blob 就再也沒有任何東西記得它——
+ *      `DELETE /api/profile/avatar` 只刪「自己 `User` 上的那一個」，永遠輪不到它。
+ *      那會是一張永久公開、無人指向的圖片，數量單調遞增。
+ *   2. **匿名上傳濫用。** 這是 public repo，訪客登入不需要任何憑證、每次進站自動建帳號。
+ *      開放上傳等於任何人都能拿 production 的 Blob store 當免費圖床。
+ *
+ * 與 `GUEST_CANNOT_RENAME` 同樣選 403 而不是 404，理由見上。
+ */
+export const GUEST_CANNOT_UPLOAD_AVATAR: ApiErrorSpec = {
+  statusCode: 403,
+  statusMessage: 'Guests cannot upload an avatar',
+  data: { message: '訪客不能上傳頭像，改用 Google 登入後才能設定。' },
 }
 
 /**
@@ -368,7 +391,8 @@ export async function resolveProfile(
   return { ok: true, value: toUserProfileResponse(fullUser) }
 }
 
-type ProfileUser = Pick<User, 'displayName' | 'email' | 'createdAt' | 'customAvatarUrl' | 'googleAvatarUrl'> & {
+/** `toUserProfileResponse` 需要的那幾欄。`saveCustomAvatar` 回的也是這個形狀。 */
+export type ProfileUser = Pick<User, 'displayName' | 'email' | 'createdAt' | 'customAvatarUrl' | 'googleAvatarUrl'> & {
   accounts: { provider: string }[]
 }
 
@@ -390,6 +414,42 @@ function toUserProfileResponse(user: ProfileUser): UserProfileResponse {
   }
 }
 
+/**
+ * 「這位是不是純訪客」——兩支寫入 API 共用的同一道閘門。
+ *
+ * 訪客不能改名（#171）、也不能上傳頭像（#166），理由不同但判斷完全一樣：
+ * **有沒有任何一個非 `GUEST` 的 provider**。判斷本身住在
+ * `shared/utils/profile.ts` 的 `ownsDisplayName`，前端藏起入口用的是同一支——
+ * 三處共用一份，才不會有人日後只改了其中一處。
+ *
+ * 不用「第一個 provider 是不是 GUEST」，也不用「名字等不等於『訪客』」：
+ * 訪客沙盒日後若接上 Google，帳號會同時掛著兩個 `Account`，那時兩件事都該放行。
+ *
+ * 這道檢查刻意排在讀取 request body / multipart **之前**（見兩個呼叫端），
+ * 所以被擋下來的請求連內容都不會進到記憶體。
+ */
+async function requireNonGuest(
+  client: PrismaClient,
+  userId: string,
+  guestError: ApiErrorSpec,
+): Promise<Authorized<ProfileUser>> {
+  const current = await client.user.findUnique({
+    where: { id: userId },
+    include: { accounts: { select: { provider: true } } },
+  })
+
+  // cookie 有效但使用者已被刪除（訪客沙盒過期）——與其他幾支同一個答案
+  if (!current) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  if (!ownsDisplayName(current.accounts.map(account => account.provider))) {
+    return { ok: false, error: guestError }
+  }
+
+  return { ok: true, value: current }
+}
+
 /** PATCH /api/profile —— 修改當前登入使用者的顯示名稱。 */
 export async function updateOwnedProfile(
   client: PrismaClient,
@@ -403,19 +463,10 @@ export async function updateOwnedProfile(
   // 先確認「這個帳號可不可以改名」，再談「這次送來的名字合不合格」。順序刻意如此：
   // 訪客不管送什麼都是 403，不會拿到一份「你的名字太長了」的檢查報告，讓人以為
   // 改短一點就能過。body 也因此完全不必讀。
-  const current = await client.user.findUnique({
-    where: { id: user.id },
-    include: { accounts: { select: { provider: true } } },
-  })
+  const allowed = await requireNonGuest(client, user.id, GUEST_CANNOT_RENAME)
 
-  if (!current) {
-    return { ok: false, error: NOT_SIGNED_IN }
-  }
-
-  // 「有沒有任何一個非 GUEST 的 provider」，而不是「第一個 provider 是不是 GUEST」：
-  // 訪客沙盒日後若接上 Google，帳號會同時掛著兩個 Account，那時應該可以改名。
-  if (!current.accounts.some(account => account.provider !== 'GUEST')) {
-    return { ok: false, error: GUEST_CANNOT_RENAME }
+  if (!allowed.ok) {
+    return allowed
   }
 
   const parsed = parseDisplayName(await readBody())
@@ -431,6 +482,74 @@ export async function updateOwnedProfile(
   })
 
   return { ok: true, value: toUserProfileResponse(updatedUser) }
+}
+
+/**
+ * 拒絕上傳的三種理由各自對應一個 statusMessage。
+ *
+ * 三種都是 400，但**不能是同一句話**：UI 要靠它們分辨顯示「檔案太大」還是
+ * 「格式不支援」（#168）。中文訊息一律在 `data.message`（h3 會過濾掉 statusMessage
+ * 裡的非 ASCII 字元，見 shared/utils/apiError.ts）。
+ */
+const AVATAR_REJECTION_STATUS: Record<AvatarUploadRejection, string> = {
+  'missing': 'Missing avatar file',
+  'too-large': 'Avatar file too large',
+  'unsupported-format': 'Unsupported avatar format',
+}
+
+/** multipart 的內容，與 body 一樣**刻意延後**到通過身分檢查之後才取得（見下方註解） */
+type MultipartReader = () => Promise<AvatarUploadPart[] | undefined>
+
+/**
+ * POST /api/profile/avatar —— 上傳一張自訂頭像（issue #166）。
+ *
+ * 順序是「先驗證登入，再讀取與驗證檔案」，而且這裡的順序比其他幾支更要緊：
+ * 未登入的人不該有辦法讓 server 先把一份 2 MB 的檔案收進記憶體，才被告知他根本沒有
+ * 身分。`readParts` 因此是一個 thunk，不是已經 await 好的值。
+ *
+ * 檔案本身的三道檢查（MIME、副檔名、magic bytes）與 2 MB 上限在
+ * `shared/utils/avatarUpload.ts`；上傳、compare-and-set 與 Blob 收拾在
+ * `server/utils/avatarStore.ts`。
+ *
+ * **訪客不能上傳**（Epic #160，2026-08-12 定案，見 GUEST_CANNOT_UPLOAD_AVATAR）。那道
+ * 檢查排在 `readParts()` 之前：未登入與訪客都不該有辦法讓 server 先把一份 2 MB 的檔案
+ * 收進記憶體，才被告知他不能傳。
+ *
+ * `store` 是預設參數而不是模組內直接呼叫，理由與 `resolveGuestSandbox` 的 `timer`
+ * 相同：測試餵得進替身，正式路徑一個字都不必改。
+ */
+export async function updateOwnedAvatar(
+  client: PrismaClient,
+  user: SessionUser | null,
+  readParts: MultipartReader,
+  store: AvatarBlobStore = vercelAvatarBlobStore,
+): Promise<Authorized<UserProfileResponse>> {
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  // 401 → 403 → 400。訪客不管送什麼檔案都是 403，multipart 因此完全不必讀——
+  // 這是這道檢查最實際的好處：匿名腳本連 2 MB 都送不進 server 的記憶體。
+  const allowed = await requireNonGuest(client, user.id, GUEST_CANNOT_UPLOAD_AVATAR)
+
+  if (!allowed.ok) {
+    return allowed
+  }
+
+  const parsed = parseAvatarUpload(await readParts())
+
+  if (!parsed.ok) {
+    return { ok: false, error: invalidInput(AVATAR_REJECTION_STATUS[parsed.reason], parsed.message) }
+  }
+
+  const owner = await saveCustomAvatar(client, user.id, parsed.value, store)
+
+  // 上面查到人之後才走到這裡，所以 null 只可能是「這一瞬間被刪掉了」——同一個答案
+  if (!owner) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  return { ok: true, value: toUserProfileResponse(owner) }
 }
 
 /** GET /api/tanks/:id/home —— screen-1 單一缸的內容 */

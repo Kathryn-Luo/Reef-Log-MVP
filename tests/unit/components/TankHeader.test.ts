@@ -156,6 +156,22 @@ describe('TankHeader', () => {
     expect(iconSpan.classes().some(cls => cls.includes('circle-user'))).toBe(true)
   })
 
+  // issue #168 的回歸保護：自訂頭像上傳之後，首頁右上角**仍然**不受影響。
+  //
+  // 「上傳成功後 Profile 頁換成新頭像」很容易順手被寫成「首頁入口也換成那張照片」，
+  // 而 Epic #160 定案首頁入口永遠是固定的 circle-user icon（見 #172）。這一條與上面
+  // 那條的差別在於它連「未來多一個 avatarUrl prop」都擋得住——整個元件的原始碼裡
+  // 不該出現任何頭像 URL 的來源。
+  it('這一輪之後首頁入口仍不渲染任何頭像照片', async () => {
+    const header = await mountHeader([MAIN_TANK])
+
+    expect(header.findAll('img')).toHaveLength(0)
+    expect(header.find('[data-testid="profile-avatar-image"]').exists()).toBe(false)
+
+    const icon = header.get('[data-testid="tank-header-profile-icon"]')
+    expect(icon.classes().some(cls => cls.includes('circle-user'))).toBe(true)
+  })
+
   // 尺寸掛在 icon 本身，不在連結上：入口拿掉了外框圓圈，會縮的是圖示
   // （2026-08-12 由人類調整視覺，#162 內文的 size-9 / size-11 是舊值）。
   it('Profile 入口的 icon 在收合時變小', async () => {

@@ -77,6 +77,9 @@ const HANDLERS = [
   { file: 'server/api/profile.get.ts', resolver: 'resolveProfile' },
   { file: 'server/api/profile.patch.ts', resolver: 'updateOwnedProfile' },
   { file: 'server/api/profile/avatar.post.ts', resolver: 'updateOwnedAvatar' },
+  // 自動完成的個人歷史建議（issue #159）。不掛在任何缸底下——建議的母體是
+  // 「我名下所有缸的生物」，不是某一缸的
+  { file: 'server/api/creature-suggestions.get.ts', resolver: 'resolveCreatureSuggestions' },
 ]
 
 describe('每一支 API 都經過同一道歸屬檢查', () => {

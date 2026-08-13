@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import type { CreatureCategoryKey } from '#shared/types/home'
-import type { CreatureProfileRequest } from '#shared/types/creature'
+import type { CreatureProfileRequest, CreatureSpeciesSuggestion, CreatureSuggestionsResponse } from '#shared/types/creature'
+import type { CreatureSuggestionItem } from './CreatureSuggestInput.vue'
 import { CREATURE_CATEGORY_OPTIONS, dateOnlyAtTimeZoneOffset, parseCreatureProfileInput } from '#shared/utils/creatureForm'
+import { searchSpeciesSuggestions, searchSubCategorySuggestions } from '#shared/utils/creatureSpecies'
 
 interface CreatureProfileInitialValue {
   name: string
@@ -64,6 +66,72 @@ onBeforeUnmount(() => {
 function chooseCategory(category: CreatureCategoryKey) {
   form.category = category
   localError.value = null
+}
+
+// ── 學名與細分類的自動完成（issue #159）──
+//
+// 建議有兩個來源：repo 內的內建物種清單（shared/utils/creatureSpecies.ts）與這位
+// 使用者過去輸入過的值。後者掛載後才取，而且**失敗不擋表單**——建議是輸入輔助，
+// 取不到就只剩內建清單，人照樣打得完字、存得下去。
+const history = ref<CreatureSuggestionsResponse>({ species: [], subCategories: [] })
+
+onMounted(async () => {
+  try {
+    // $api 而不是裸 $fetch：session 過期時要被帶去登入頁，而不是靜靜地少一份建議（#67）
+    history.value = await useNuxtApp().$api<CreatureSuggestionsResponse>('/api/creature-suggestions')
+  }
+  catch {
+    // 內建清單仍在，不必打擾使用者
+  }
+})
+
+const speciesItems = computed<CreatureSuggestionItem[]>(() =>
+  searchSpeciesSuggestions({ query: form.scientificName, history: history.value.species })
+    .map(species => ({
+      // 主標是俗名：使用者記得的是「火焰仙」，欄位要填的才是學名
+      label: species.names[0] ?? species.scientificName,
+      hint: species.scientificName,
+      value: species.scientificName,
+      history: species.source === 'history',
+    })),
+)
+
+const subCategoryItems = computed<CreatureSuggestionItem[]>(() =>
+  searchSubCategorySuggestions({
+    query: form.subCategory,
+    category: form.category,
+    history: history.value.subCategories,
+  }).map(item => ({
+    label: item.subCategory,
+    value: item.subCategory,
+    history: item.source === 'history',
+  })),
+)
+
+/** 選取的那一筆物種原始資料——建議項只帶得動字串，帶入細分類要回頭找它 */
+function findSpecies(scientificName: string): CreatureSpeciesSuggestion | undefined {
+  return searchSpeciesSuggestions({ query: scientificName, history: history.value.species })
+    .find(species => species.scientificName === scientificName)
+}
+
+/**
+ * 選取一項物種建議：帶入學名，**只在細分類還空著時**才一併帶入細分類。
+ *
+ * 「只在空著時」是 Story 的定案：已經手動填過的細分類不該被一次選取蓋掉——
+ * 那是使用者自己下的判斷，而建議永遠只是猜測。
+ */
+function chooseSpecies(item: CreatureSuggestionItem) {
+  form.scientificName = item.value
+
+  if (form.subCategory.trim()) {
+    return
+  }
+
+  const subCategory = findSpecies(item.value)?.subCategory
+
+  if (subCategory) {
+    form.subCategory = subCategory
+  }
 }
 
 function submit() {
@@ -145,14 +213,18 @@ function submit() {
           for="creature-scientific-name"
           class="block text-sm font-medium"
         >學名</label>
-        <UInput
+        <CreatureSuggestInput
           id="creature-scientific-name"
           v-model="form.scientificName"
           name="scientificName"
-          placeholder="Centropyge loriculus"
-          autocomplete="off"
-          class="mt-2 w-full"
+          placeholder="輸入俗名或學名，例：火焰仙"
+          :items="speciesItems"
+          class="mt-2"
+          @select="chooseSpecies"
         />
+        <p class="mt-1 text-xs text-dimmed">
+          可用俗名搜尋，也可以直接輸入清單以外的學名
+        </p>
       </div>
 
       <fieldset
@@ -194,13 +266,14 @@ function submit() {
           for="creature-sub-category"
           class="block text-sm font-medium"
         >細分類</label>
-        <UInput
+        <CreatureSuggestInput
           id="creature-sub-category"
           v-model="form.subCategory"
           name="subCategory"
           placeholder="神仙"
-          autocomplete="off"
-          class="mt-2 w-full"
+          :items="subCategoryItems"
+          class="mt-2"
+          @select="form.subCategory = $event.value"
         />
       </div>
 

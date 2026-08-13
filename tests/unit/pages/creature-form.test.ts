@@ -72,6 +72,10 @@ registerEndpoint('/api/tanks/tank-2/creatures', {
 
 registerEndpoint('/api/creatures/creature-1', () => ({ creature: CREATURE }))
 
+// 表單掛載後會取一次自動完成的個人歷史建議（issue #159）。
+// 這一支的行為由 creature-suggest.test.ts 驗；這裡只是讓它有東西可回。
+registerEndpoint('/api/creature-suggestions', () => ({ species: [], subCategories: [] }))
+
 registerEndpoint('/api/creatures/creature-1/profile', {
   method: 'PATCH',
   handler: (event) => {

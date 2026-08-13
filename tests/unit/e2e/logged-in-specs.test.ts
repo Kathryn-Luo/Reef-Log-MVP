@@ -58,6 +58,9 @@ const LOGGED_IN_SPECS = [
   ['tests/e2e/creature-form.spec.ts', 4],
   // 新增／編輯／停用保養任務（#17）。每條都會寫進各自的訪客沙盒。
   ['tests/e2e/maintenance-task-form.spec.ts', 3],
+  // 頭像上傳與移除的介面（#168）。訪客登入是 preview 上唯一走得通的身分，
+  // 而這一支驗的正是「訪客這個身分看得到什麼」——沒有身分就一條都不成立。
+  ['tests/e2e/profile-avatar-upload.spec.ts', 4],
 ] as const
 
 /**

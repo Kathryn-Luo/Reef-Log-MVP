@@ -10,6 +10,23 @@ import type { PrismaClient, User } from '@prisma/client'
 //
 // 這個檔案只做「什麼時候該寫、寫什麼」，Prisma Client 由呼叫端傳入：
 // 與 currentContext.ts、guestSandbox.ts 同一個作法，函式因此在連不到資料庫時也測得起來。
+//
+// ── 為什麼底下那句 updateMany 沒有 E2E 覆蓋（PR #189 的 review）──
+//
+// 這一輪曾經寫過一支 E2E，宣稱要驗「那句 updateMany 在真的資料庫上跑不跑得起來」。
+// 它**不可能失敗**：E2E 的每個 test 都先建一位新訪客，`lastActiveAt` 由資料庫預設成
+// 現在，接下來的請求全落在節流區間內，`touchLastActiveAt` 一律 early return——
+// 那句 updateMany 一次都不會執行。就算它在 production 會拋錯，那支測試照樣是綠的。
+// 已經刪掉，不要再照同樣的形狀加回來。
+//
+// 要讓它真的跑到，得先把測試使用者的 `lastActiveAt` 往回調，而 E2E 跑在 preview 上、
+// 手上沒有資料庫連線。唯一的辦法是開一支「把某人設成逾期」的測試端點，那是繞過授權的
+// 後門，這個 repo 明文不做（#176 的非目標）。
+//
+// 剩下的風險其實很薄，而且各有守門：欄位名與運算子由 Prisma Client 的型別在
+// `pnpm typecheck` 擋下；欄位在真實資料庫存不存在由 CI 的 Prisma migration drift
+// 與 `pnpm build` 的 `migrate deploy` 擋下（migration 見
+// 20260804030000_add_user_last_active_at）。判斷邏輯本身在 last-active.test.ts。
 
 /**
  * 兩次寫入之間至少要隔多久（毫秒）。

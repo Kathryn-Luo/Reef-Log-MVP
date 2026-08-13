@@ -61,9 +61,6 @@ const LOGGED_IN_SPECS = [
   // 頭像上傳與移除的介面（#168）。訪客登入是 preview 上唯一走得通的身分，
   // 而這一支驗的正是「訪客這個身分看得到什麼」——沒有身分就一條都不成立。
   ['tests/e2e/profile-avatar-upload.spec.ts', 4],
-  // lastActiveAt 的更新（#175）掛在「辨識出使用者」那一段上，所以它只在有身分的
-  // 請求上跑得到——未登入的請求連 findUnique 都不會發（#64）。
-  ['tests/e2e/last-active.spec.ts', 2],
 ] as const
 
 /**

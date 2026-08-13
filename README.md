@@ -14,6 +14,10 @@ cp .env.example .env   # 填入 Neon 的 DATABASE_URL / DIRECT_URL
 npm run dev
 ```
 
+各變數的用途、取得方式與「少了它會怎樣」都寫在 [`.env.example`](./.env.example) 裡。
+其中 `BLOB_READ_WRITE_TOKEN` 是圖片上傳（頭像 #166、生物照片 #154）用的 Vercel Blob
+憑證：**沒設定的話上傳會失敗，其餘功能一律不受影響**，所以只有要在本機試上傳時才需要。
+
 ## 常用指令
 
 | 指令 | 說明 |

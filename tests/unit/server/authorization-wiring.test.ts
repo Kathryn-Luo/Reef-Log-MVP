@@ -64,6 +64,9 @@ const HANDLERS = [
   { file: 'server/api/creatures/[id].patch.ts', resolver: 'applyCreatureStatus' },
   { file: 'server/api/creatures/[id]/move.patch.ts', resolver: 'moveOwnedCreature' },
   { file: 'server/api/creatures/[id]/profile.patch.ts', resolver: 'updateOwnedCreatureProfile' },
+  // 生物照片（issue #154）。與頭像同樣是「上傳一支、移除一支」，歸屬走 creature → tank
+  { file: 'server/api/creatures/[id]/photo.post.ts', resolver: 'updateOwnedCreaturePhoto' },
+  { file: 'server/api/creatures/[id]/photo.delete.ts', resolver: 'removeOwnedCreaturePhoto' },
   // 保養提醒（issue #122）：讀取掛在缸底下，兩支寫入掛在任務底下
   { file: 'server/api/tanks/[id]/maintenance.get.ts', resolver: 'resolveMaintenancePage' },
   { file: 'server/api/tanks/[id]/maintenance-tasks.post.ts', resolver: 'createOwnedMaintenanceTask' },
@@ -143,8 +146,14 @@ describe('每一支 API 都經過同一道歸屬檢查', () => {
   // Story 明寫「未登入 → 401，且在讀取或寫入任何檔案內容之前就結束」。寫成
   // `await readMultipartFormData(event)` 的話，完全沒登入的人也能讓 server 先把整份
   // 檔案收進記憶體，才被告知他根本沒有身分。
-  it('server/api/profile/avatar.post.ts 把上傳的檔案延後到身分檢查之後才讀', () => {
-    const source = readCode('server/api/profile/avatar.post.ts')
+  //
+  // 生物照片（#154）走同一條路，而且多守一層：那支還要先通過「這一隻是不是你的」，
+  // 所以打別人生物的請求同樣不該先把檔案收進記憶體。
+  it.each([
+    'server/api/profile/avatar.post.ts',
+    'server/api/creatures/[id]/photo.post.ts',
+  ])('%s 把上傳的檔案延後到身分檢查之後才讀', (file) => {
+    const source = readCode(file)
 
     expect(source).toMatch(/\(\) => readMultipartFormData\(event\)/)
     expect(source).not.toMatch(/await readMultipartFormData\(event\)/)
@@ -163,6 +172,19 @@ describe('每一支 API 都經過同一道歸屬檢查', () => {
     expect(source).not.toContain('readMultipartFormData')
     expect(source).not.toContain('getQuery')
     expect(source).not.toContain('getRouterParam')
+  })
+
+  // 移除生物照片（issue #154）同理，但它**需要**網址上那一段 id——那是「移除哪一隻的
+  // 照片」，不是「移除哪一個 URL」，而且 id 一樣要通過歸屬檢查。所以這裡守的是
+  // 「除了 id 之外什麼都不讀」：body 或 query 一旦被讀，日後就有人會順手把它接到
+  // 刪除的目標上，而那正是「刪掉別人的圖」的入口。
+  it('server/api/creatures/[id]/photo.delete.ts 除了網址上的 id 之外什麼都不讀', () => {
+    const source = readCode('server/api/creatures/[id]/photo.delete.ts')
+
+    expect(source).toContain('getRouterParam(event, \'id\')')
+    expect(source).not.toContain('readBody')
+    expect(source).not.toContain('readMultipartFormData')
+    expect(source).not.toContain('getQuery')
   })
 })
 

@@ -1,79 +1,34 @@
 import type { PrismaClient } from '@prisma/client'
 import type { ValidatedAvatar } from '#shared/utils/avatarUpload'
+import type { ImageBlobStore } from './blobStore'
 import type { ProfileUser } from './authorization'
-import { randomUUID } from 'node:crypto'
-import { del, put } from '@vercel/blob'
+import { buildBlobPathname, deleteQuietly as deleteBlobQuietly, vercelImageBlobStore } from './blobStore'
 
 // 自訂頭像的存放（issue #166）。
 //
 // 這一支負責「把通過檢查的位元組換成 User.customAvatarUrl 上的一個新 URL」，
 // 檢查本身在 shared/utils/avatarUpload.ts，授權在 server/utils/authorization.ts。
+// store 本身（`@vercel/blob`、pathname 的產生、best-effort 刪除）自 issue #154 起
+// 住在 `blobStore.ts`，與生物照片共用。
 //
 // Prisma Client 與 Blob store 都由呼叫端傳入（與 homeData.ts、guestSandbox.ts 同一個
 // 作法）：整段流程因此能在連不到資料庫、也連不到 Blob store 的情況下測試——而這段流程
 // 最需要被測的，恰好是三條「有東西壞掉」的路徑（DB 寫入失敗、併發輸家、舊圖刪不掉）。
-//
-// ⚠ token 不出現在這個檔案裡。`@vercel/blob` 預設讀部署環境的 `BLOB_READ_WRITE_TOKEN`，
-// 而那個值在 Vercel 上依 Production / Preview 兩個 scope 各設一份（由人類維護），
-// 於是「production 與 preview 各自打到自己的 store」是環境給的，不是程式碼判斷的。
-// 這一點很要緊：preview 的 Neon 分支是從 production 複製來的，可能帶著**一模一樣的**
-// `User.id` 與頭像 URL，共用 token 的話 preview 的一次刪除就會打掉正式環境的圖片。
-// 也因此它絕不能進 `runtimeConfig.public` 或任何前端 bundle。
 
-/**
- * Blob store 的最小介面——這支模組只需要「放上去」與「刪掉」兩件事。
- *
- * 抽這一層不是為了將來換供應商，而是為了讓上面那三條失敗路徑測得到：
- * 直接呼叫 `put` / `del` 的話，「DB 失敗時剛建立的 Blob 有沒有被刪掉」只能靠
- * 對 `@vercel/blob` 下 module mock 才驗得出來，而那驗到的是 mock 的形狀，不是流程。
- */
-export interface AvatarBlobStore {
-  put: (pathname: string, data: Uint8Array, contentType: string) => Promise<{ url: string }>
-  delete: (url: string) => Promise<void>
-}
+/** 頭像用的 store 介面。形狀與生物照片完全相同，共用同一個定義。 */
+export type AvatarBlobStore = ImageBlobStore
 
-/** 正式的實作。`@vercel/blob` 只在這裡出現一次。 */
-export const vercelAvatarBlobStore: AvatarBlobStore = {
-  async put(pathname, data, contentType) {
-    // `PutBody` 收 Buffer 而不是 Uint8Array。這是零複製的檢視：multipart 給的本來就是
-    // 一個 Buffer，這裡只是把型別接回去，不會再把整張圖抄一份。
-    const body = Buffer.from(data.buffer, data.byteOffset, data.byteLength)
+/** 正式的實作。`@vercel/blob` 只出現在 `blobStore.ts` 裡那一次。 */
+export const vercelAvatarBlobStore: AvatarBlobStore = vercelImageBlobStore
 
-    // addRandomSuffix: false —— 隨機的部分已經在 pathname 裡（見 buildAvatarPathname），
-    // 兩邊都加只會讓 URL 更長，也讓「這張圖是誰的」在 store 裡更難看出來。
-    const { url } = await put(pathname, body, { access: 'public', contentType, addRandomSuffix: false })
-
-    return { url }
-  },
-
-  async delete(url) {
-    await del(url)
-  },
-}
-
-/**
- * `avatars/{userId}/{random}.{ext}` —— **由 server 產生**，使用者送來的檔名一個字都不用。
- *
- * 兩件事各自要命：
- *   - 檔名來自使用者的話，`../` 與控制字元就跟著進了 store 的路徑。
- *   - 路徑固定的話（例如 `avatars/{userId}.png`），換頭像會覆寫同一個 URL，
- *     而 Blob 是 immutable + CDN 快取——瀏覽器會繼續顯示舊圖，看起來像「換不掉」。
- *     所以每次上傳都是一個**新的**隨機路徑。
- */
+/** `avatars/{userId}/{random}.{ext}`，由 server 產生，理由見 `buildBlobPathname`。 */
 export function buildAvatarPathname(userId: string, extension: string): string {
-  return `avatars/${userId}/${randomUUID()}.${extension}`
+  return buildBlobPathname('avatars', userId, extension)
 }
 
 /** 刪不掉不是這次請求的錯：舊圖留著只是佔空間，把它變成 500 才是把成功的上傳弄丟。 */
 async function deleteQuietly(store: AvatarBlobStore, url: string): Promise<void> {
-  try {
-    await store.delete(url)
-  }
-  catch (cause) {
-    // best-effort：這裡刻意不往外拋，也不改變呼叫端的結果。
-    // 但也不能完全沒有痕跡——留不下來的 Blob 只有 log 記得，孤兒才查得出來（issue #167）。
-    console.warn('[avatar] Blob 刪除失敗，略過（資料庫已是最新狀態）', url, cause)
-  }
+  await deleteBlobQuietly(store, url, 'avatar')
 }
 
 /**

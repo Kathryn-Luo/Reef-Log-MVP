@@ -76,6 +76,17 @@ registerEndpoint('/api/creatures/creature-1', () => ({ creature: CREATURE }))
 // 這一支的行為由 creature-suggest.test.ts 驗；這裡只是讓它有東西可回。
 registerEndpoint('/api/creature-suggestions', () => ({ species: [], subCategories: [] }))
 
+// 照片欄位要知道「這個帳號能不能上傳」（#154）。訪客那條路徑由 creature-photo.test.ts
+// 驗；這裡只是讓它有東西可回，不必走到「問不到就當作可以上傳」那條退路。
+registerEndpoint('/api/profile', () => ({
+  displayName: '林小海',
+  email: 'sea@example.test',
+  providers: ['GOOGLE'],
+  createdAt: '2026-01-01T00:00:00.000Z',
+  avatarUrl: null,
+  avatarSource: 'none',
+}))
+
 registerEndpoint('/api/creatures/creature-1/profile', {
   method: 'PATCH',
   handler: (event) => {
@@ -123,12 +134,15 @@ describe('/creatures/new', () => {
     expect(page.text()).not.toContain('還沒有任何缸')
   })
 
-  it('顯示六個基本資料欄位，不出現照片、狀態或刪除操作', async () => {
+  // 原本這一條寫的是「六個基本資料欄位，**不出現照片**」——那是 #16 拍板時
+  // 「該輪不做照片欄位」的證明（理由是上傳牽涉基礎設施設定）。issue #154 就是來補上
+  // 那個決定的，所以照片欄位從這一版起是**應該**在的，而不是被順手加進來的東西。
+  // 其餘兩件事（狀態、刪除）仍然不屬於這張表單，繼續守著。
+  it('顯示照片與六個基本資料欄位，不出現狀態或刪除操作', async () => {
     const page = await mountSuspended(NewCreaturePage, { route: '/creatures/new?tank=tank-2' })
 
     expect(page.findAll('[data-testid="creature-profile-field"]').map(field => field.attributes('data-field')))
-      .toEqual(['name', 'scientificName', 'category', 'subCategory', 'addedOn', 'price'])
-    expect(page.text()).not.toContain('上傳照片')
+      .toEqual(['photo', 'name', 'scientificName', 'category', 'subCategory', 'addedOn', 'price'])
     expect(page.text()).not.toContain('刪除生物')
     expect(page.find('[data-testid="status-option"]').exists()).toBe(false)
   })

@@ -3,7 +3,9 @@ import type { CreatureDetailDto, CreatureDetailResponse, CreatureProfileResponse
 import type { GuestSandboxResponse } from '#shared/types/guestSandbox'
 import type { AvatarSource, UserProfileResponse } from '#shared/types/profile'
 import type { AvatarUploadPart, AvatarUploadRejection } from '#shared/utils/avatarUpload'
+import type { ImageUploadRejection } from '#shared/utils/imageUpload'
 import type { AvatarBlobStore } from './avatarStore'
+import type { ImageBlobStore } from './blobStore'
 import type { Timer } from './requestTiming'
 import type { TankHomeData, TankOption } from '#shared/types/home'
 import type { MaintenancePageData, MaintenanceTaskDto, MaintenanceTaskResponse } from '#shared/types/maintenance'
@@ -13,6 +15,7 @@ import type { CreateWaterLogResponse, WaterLogPageData } from '#shared/types/wat
 import { parseAvatarUpload } from '#shared/utils/avatarUpload'
 import { parseCreatureStatusInput } from '#shared/utils/creatureDetail'
 import { parseCreatureProfileInput } from '#shared/utils/creatureForm'
+import { parseCreaturePhotoUpload } from '#shared/utils/creaturePhotoUpload'
 // completedOn 的規則與保養頁共用同一份（issue #122，與 parseWaterLogInput 同一個作法）
 import { parseCompletedOn, parseCompletedOnInput } from '#shared/utils/maintenance'
 import { parseCreateMaintenanceTaskInput, parseMaintenanceTaskInput } from '#shared/utils/maintenanceTaskForm'
@@ -23,7 +26,9 @@ import { parseTrendRange } from '#shared/utils/trend'
 // parseWaterLogInput 與記錄水質的表單共用同一份規則，所以它住在 shared（issue #124）
 import { parseWaterLogInput } from '#shared/utils/waterLog'
 import { removeCustomAvatar, saveCustomAvatar, vercelAvatarBlobStore } from './avatarStore'
+import { vercelImageBlobStore } from './blobStore'
 import { createCreatureProfile, getCreatureDetail, moveCreature, updateCreatureProfile, updateCreatureStatus } from './creatureDetail'
+import { removeCreaturePhoto, saveCreaturePhoto } from './creaturePhotoStore'
 import { getTankCreatures } from './creatureList'
 import { getCreatureSuggestions } from './creatureSuggestions'
 import { ensureGuestSandbox } from './guestSandbox'
@@ -134,6 +139,26 @@ export const GUEST_CANNOT_UPLOAD_AVATAR: ApiErrorSpec = {
   statusCode: 403,
   statusMessage: 'Guests cannot upload an avatar',
   data: { message: '訪客不能上傳頭像，改用 Google 登入後才能設定。' },
+}
+
+/**
+ * 訪客不能上傳生物照片（issue #154，理由與 `GUEST_CANNOT_UPLOAD_AVATAR` 逐條相同）。
+ *
+ *   1. **孤兒 Blob。** `prisma/cleanupExpiredGuests.ts` 刪掉逾期訪客的 `User` 列，
+ *      Creature 跟著 cascade 消失，`photoUrl` 指的那個 Blob 就再也沒有任何東西記得它。
+ *      `DELETE /api/creatures/:id/photo` 只刪得到「還查得到的那一隻」，永遠輪不到它。
+ *   2. **匿名上傳濫用。** 這是 public repo，訪客登入不需要任何憑證、每次進站自動建帳號。
+ *      開放上傳等於任何人都能拿 production 的 Blob store 當免費圖床。
+ *
+ * issue #154 的第三條驗收條件正是這一條的畫面版（表單上說明訪客無法上傳）；
+ * 那是 UX，這裡是邊界。同樣選 403 而不是 404：答案只跟呼叫者自己的 provider 有關，
+ * 藏起來不會少洩漏任何東西（每一個 id 都得到同一句話），反而讓畫面分不出
+ * 「壞掉了」與「這個帳號本來就不能傳」。
+ */
+export const GUEST_CANNOT_UPLOAD_PHOTO: ApiErrorSpec = {
+  statusCode: 403,
+  statusMessage: 'Guests cannot upload a creature photo',
+  data: { message: '訪客不能上傳照片，改用 Google 登入後才能加照片。' },
 }
 
 /**
@@ -987,6 +1012,109 @@ export async function updateOwnedCreatureProfile(
   }
 
   const creature = await updateCreatureProfile(client, owned.value.id, user.id, parsed.value)
+
+  return creature
+    ? { ok: true, value: { creature } }
+    : { ok: false, error: CREATURE_NOT_FOUND }
+}
+
+/**
+ * 拒絕照片的三種理由各自對應一個 statusMessage，與頭像那一組（AVATAR_REJECTION_STATUS）
+ * 分開：兩者都是 400，但表單要靠它們分辨顯示「檔案太大」還是「格式不支援」，
+ * 而訊息本身講的是「照片」不是「頭像」。
+ */
+const CREATURE_PHOTO_REJECTION_STATUS: Record<ImageUploadRejection, string> = {
+  'missing': 'Missing creature photo',
+  'too-large': 'Creature photo too large',
+  'unsupported-format': 'Unsupported creature photo format',
+}
+
+/**
+ * POST /api/creatures/:id/photo —— 上傳一張生物照片（issue #154）。
+ *
+ * 順序是 401 → 403 → 404 → 400，而且 multipart **最後**才讀（`readParts` 是 thunk，
+ * 不是已經 await 好的值）：未登入的人、訪客、以及打別人生物的人，都不該有辦法讓
+ * server 先把一份 2 MB 的檔案收進記憶體，才被告知這一趟走不通。
+ *
+ * 訪客那道檢查排在歸屬之前，而這**不會**多洩漏什麼：訪客拿到的 403 與 creatureId
+ * 完全無關（存在的、不存在的、別人的，都是同一句話），所以列舉不出任何東西，
+ * 卻省下一次查詢，也讓「訪客不能上傳」的答案不必先繞過一次 404。
+ *
+ * 檔案本身的三道檢查與 2 MB 上限在 `shared/utils/creaturePhotoUpload.ts`；
+ * 上傳、compare-and-set 與 Blob 收拾在 `server/utils/creaturePhotoStore.ts`。
+ *
+ * `store` 是預設參數而不是模組內直接呼叫，理由與 `updateOwnedAvatar` 相同：
+ * 測試餵得進替身，正式路徑一個字都不必改。
+ */
+export async function updateOwnedCreaturePhoto(
+  client: PrismaClient,
+  user: SessionUser | null,
+  creatureId: string | undefined,
+  readParts: MultipartReader,
+  store: ImageBlobStore = vercelImageBlobStore,
+): Promise<Authorized<CreatureProfileResponse>> {
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  const allowed = await requireNonGuest(client, user.id, GUEST_CANNOT_UPLOAD_PHOTO)
+
+  if (!allowed.ok) {
+    return allowed
+  }
+
+  const owned = await requireOwnedCreature(client, user, creatureId)
+
+  if (!owned.ok) {
+    return owned
+  }
+
+  const parsed = parseCreaturePhotoUpload(await readParts())
+
+  if (!parsed.ok) {
+    return { ok: false, error: invalidInput(CREATURE_PHOTO_REJECTION_STATUS[parsed.reason], parsed.message) }
+  }
+
+  const creature = await saveCreaturePhoto(client, owned.value.id, user.id, parsed.value, store)
+
+  // null＝查到之後、寫入之前歸屬變了（例如缸剛被封存）。回與「查不到」完全相同的 404，
+  // 與 applyCreatureStatus 同一個決定：那正是此刻為真的事。
+  return creature
+    ? { ok: true, value: { creature } }
+    : { ok: false, error: CREATURE_NOT_FOUND }
+}
+
+/**
+ * DELETE /api/creatures/:id/photo —— 移除照片，讓列表與詳情頁退回斜線佔位（issue #154）。
+ *
+ * 未登入 401、不是你的 404，其餘一律成功：本來就沒有照片時是冪等的（不報錯、不刪任何
+ * Blob），Blob 刪不掉時也仍然成功（DB 已經清乾淨，剩下的只是一個佔空間的檔案）。
+ *
+ * **這一支刻意沒有 `requireNonGuest`**，與上傳不同——理由與 `removeOwnedAvatar` 一樣：
+ * 那道 403 擋的是「製造孤兒 Blob」與「拿 store 當免費圖床」，而移除做的恰好相反，
+ * 它把 Blob 收掉。訪客在這裡被擋下來，只會讓既有的照片（示範資料、或限制放寬前留下的）
+ * 永遠拿不掉。
+ *
+ * 要刪哪一個 Blob 只由 server 從那一隻自己的 `photoUrl` 讀出來決定：這裡沒有任何參數
+ * 能讓呼叫者指定 URL，handler 也不讀 body 或 query（authorization-wiring.test.ts 守著）。
+ */
+export async function removeOwnedCreaturePhoto(
+  client: PrismaClient,
+  user: SessionUser | null,
+  creatureId: string | undefined,
+  store: ImageBlobStore = vercelImageBlobStore,
+): Promise<Authorized<CreatureProfileResponse>> {
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  const owned = await requireOwnedCreature(client, user, creatureId)
+
+  if (!owned.ok) {
+    return owned
+  }
+
+  const creature = await removeCreaturePhoto(client, owned.value.id, user.id, store)
 
   return creature
     ? { ok: true, value: { creature } }

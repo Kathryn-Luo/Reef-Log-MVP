@@ -70,7 +70,9 @@ const visibleError = computed(() => localError.value ?? props.error ?? null)
 const canSubmit = computed(() =>
   form.name.trim().length > 0
   && form.category !== ''
-  && form.addedOn.trim().length > 0,
+  && form.addedOn.trim().length > 0
+  // 縮圖還沒完成時 pendingPhoto 還是空的，這時送出等於把剛選的照片丟掉（見 photoProcessing）
+  && !photoProcessing.value,
 )
 
 const today = ref<string>()
@@ -282,6 +284,24 @@ function removePhoto() {
   photoRemoved.value = true
 }
 
+/**
+ * 縮圖還在跑。這段期間**不能送出**（PR #190 的 review）。
+ *
+ * 解一張 6 MB 的照片再重新編碼，在手機上是幾百毫秒到數秒，而使用者按下儲存的手速
+ * 遠比那快。少了這個旗標，那個視窗期裡按儲存會以 `keep` 送出——新增流程接著跳去
+ * 詳情頁，剛選的照片無聲消失，一句錯誤都沒有。
+ */
+const photoProcessing = ref(false)
+
+/**
+ * 每一次選取的序號。
+ *
+ * 連續選兩張時，先選的那一張有可能後完成（檔案大小、格式、瀏覽器排程都會影響），
+ * 而賦值發生在 await 之後——沒有這個序號的話，晚回來的舊結果會蓋掉使用者真正
+ * 選的那一張：畫面上的預覽是新的，送出去的卻是舊的。
+ */
+let photoSelectionId = 0
+
 async function onPhotoSelected(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0] ?? null
@@ -294,33 +314,52 @@ async function onPhotoSelected(event: Event) {
     return
   }
 
-  // 縮圖失敗時回的是原本那個 File，不是例外（見 resizeImage）——先看實際要送出的
-  // 那一份能不能過關，再決定要收下還是就地說明。
-  const { file: prepared, outcome } = await resizeCreaturePhoto(file)
+  const selectionId = ++photoSelectionId
 
-  releasePreview()
-  pendingPhoto.value = null
+  photoProcessing.value = true
 
-  // 「手上這一份已經超過 server 的上限」：這一趟必定被退，而退回來的
-  // 「照片請控制在 2 MB 以內」會讓使用者以為換一張就好——他換幾張相機拍的照片
-  // 都一樣大，問題不在他選的圖。看的是**實際要送出的那一份**的大小。
-  if (prepared.size > CREATURE_PHOTO_MAX_BYTES) {
-    photoError.value = OVERSIZED_MESSAGES[outcome]
-    return
+  try {
+    // 縮圖失敗時回的是原本那個 File，不是例外（見 resizeImage）——先看實際要送出的
+    // 那一份能不能過關，再決定要收下還是就地說明。
+    const { file: prepared, outcome } = await resizeCreaturePhoto(file)
+
+    // 這一次已經被後來的選取取代了，整份結果丟掉——包括錯誤訊息：
+    // 使用者早就改選了別的，替他保留一句關於舊檔案的抱怨只會讓人困惑。
+    if (selectionId !== photoSelectionId) {
+      return
+    }
+
+    releasePreview()
+    pendingPhoto.value = null
+
+    // 「手上這一份已經超過 server 的上限」：這一趟必定被退，而退回來的
+    // 「照片請控制在 2 MB 以內」會讓使用者以為換一張就好——他換幾張相機拍的照片
+    // 都一樣大，問題不在他選的圖。看的是**實際要送出的那一份**的大小。
+    if (prepared.size > CREATURE_PHOTO_MAX_BYTES) {
+      photoError.value = OVERSIZED_MESSAGES[outcome]
+      return
+    }
+
+    // 縮得動的話出來的一定是 WebP 或 JPEG（見 OUTPUT_FORMATS），所以走到這裡還不合格的
+    // 只可能是「這台裝置縮不動，而原檔本來就不是我們收的格式」——例如 HEIC 或選錯檔案。
+    if (!(ALLOWED_CREATURE_PHOTO_CONTENT_TYPES as string[]).includes(prepared.type)) {
+      photoError.value = CREATURE_PHOTO_UNSUPPORTED_MESSAGE
+      return
+    }
+
+    pendingPhoto.value = prepared
+    pendingPreview.value = previewUrlFor(prepared)
+    photoError.value = null
+    localError.value = null
+    photoRemoved.value = false
   }
-
-  // 縮得動的話出來的一定是 WebP 或 JPEG（見 OUTPUT_FORMATS），所以走到這裡還不合格的
-  // 只可能是「這台裝置縮不動，而原檔本來就不是我們收的格式」——例如 HEIC 或選錯檔案。
-  if (!(ALLOWED_CREATURE_PHOTO_CONTENT_TYPES as string[]).includes(prepared.type)) {
-    photoError.value = CREATURE_PHOTO_UNSUPPORTED_MESSAGE
-    return
+  finally {
+    // 只有「最新的那一次」有資格收掉處理中：舊的那一份晚回來時，
+    // 新的可能還在跑，讓它把旗標關掉就等於提早開放送出。
+    if (selectionId === photoSelectionId) {
+      photoProcessing.value = false
+    }
   }
-
-  pendingPhoto.value = prepared
-  pendingPreview.value = previewUrlFor(prepared)
-  photoError.value = null
-  localError.value = null
-  photoRemoved.value = false
 }
 
 /** 這次儲存要對照片做什麼。沒選也沒按移除就是 keep——照片那兩支 API 一支都不會被打。 */
@@ -333,6 +372,13 @@ function photoIntent(): CreaturePhotoIntent {
 }
 
 function submit() {
+  // 縮圖還在跑時擋下來（PR #190 的 review）。送出鈕雖然也被 disable 了，
+  // 但那擋不住表單自己的送出——在文字欄位裡按 Enter 一樣會走到這裡。
+  if (photoProcessing.value) {
+    localError.value = '照片還在處理中，請稍候再儲存。'
+    return
+  }
+
   // Story 第二條：檔案不合格時「儲存被阻擋」。照片欄位旁邊那句話說的是哪裡不合格，
   // 這裡再說一次「所以現在存不了」——按下儲存卻毫無反應才是最難理解的那一種。
   if (photoError.value) {
@@ -466,6 +512,25 @@ function submit() {
               class="text-xs text-dimmed"
             >
               訪客不能上傳照片，改用 Google 登入後才能加照片。
+            </p>
+
+            <!--
+              處理中要說得出來（PR #190 的 review）。只把送出鈕 disable 掉的話，
+              使用者看到的是「選了照片什麼都沒發生、儲存也按不動」——那比按了沒反應
+              好不了多少。預覽要等縮圖完成才出現，這句話填的正是那段空白。
+            -->
+            <p
+              v-if="photoProcessing"
+              data-testid="creature-photo-processing"
+              role="status"
+              class="mt-2 flex items-center gap-1.5 text-xs text-dimmed"
+            >
+              <UIcon
+                name="i-lucide-loader-circle"
+                class="size-3.5 animate-spin"
+                aria-hidden="true"
+              />
+              照片處理中…
             </p>
 
             <button

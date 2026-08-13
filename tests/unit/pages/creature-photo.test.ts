@@ -241,6 +241,38 @@ function stubImagePipeline(encodedBytes = 180 * 1024) {
   }
 }
 
+/**
+ * 讓縮圖**停在半路**：`toBlob` 的 callback 被收起來，由測試決定什麼時候、以什麼大小完成。
+ *
+ * 這是唯一能觀察到「處理中」那個視窗的方法。真實裝置上它是幾百毫秒到數秒
+ *（手機解一張 6 MB 的照片再重新編碼），而使用者按下儲存的手速遠比那快。
+ */
+function stubPendingImagePipeline() {
+  vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 4032, height: 3024, close: () => {} })))
+
+  const originalGetContext = HTMLCanvasElement.prototype.getContext
+  const originalToBlob = HTMLCanvasElement.prototype.toBlob
+  const pending: BlobCallback[] = []
+
+  HTMLCanvasElement.prototype.getContext = (() => ({ drawImage: () => {} })) as never
+  HTMLCanvasElement.prototype.toBlob = function (callback: BlobCallback) {
+    pending.push(callback)
+  }
+
+  return {
+    pending,
+    /** 讓第 index 次縮圖完成，產出 encodedBytes 大小的 WebP */
+    async finish(index: number, encodedBytes: number) {
+      pending[index]!(new Blob([new Uint8Array(encodedBytes)], { type: AVATAR_OUTPUT_TYPE }))
+      await settle()
+    },
+    restore() {
+      HTMLCanvasElement.prototype.getContext = originalGetContext
+      HTMLCanvasElement.prototype.toBlob = originalToBlob
+    },
+  }
+}
+
 async function fillRequired(page: Page) {
   await page.get('[name="name"]').setValue('火焰仙')
   await page.get('[name="addedOn"]').setValue('2026-08-01')
@@ -557,5 +589,95 @@ describe('編輯既有的照片', () => {
     expect(state.updateCalls).toBe(1)
     expect(page.get('[data-testid="creature-profile-error"]').text()).toContain('照片')
     expect(navigateToMock).not.toHaveBeenCalled()
+  })
+})
+
+// PR #190 的 review（P1）。
+//
+// 縮圖是 async 的，而在它完成之前 `pendingPhoto` 還沒被設定、送出鈕卻是可按的。
+// 那個視窗期在手機上是幾百毫秒到數秒（解一張 6 MB 的照片再重新編碼），而且畫面上
+// **完全沒有動靜**——預覽要等縮圖完成才出現，所以使用者很自然會以為「剛才沒選到」
+// 而直接按儲存。按下去的後果是新增流程以 keep 送出、跳轉到詳情頁，
+// 剛選的照片無聲消失，一句錯誤都沒有。
+describe('照片還在處理時不能送出', () => {
+  it('處理中送出鈕按不下去，處理完才能存', async () => {
+    const pipeline = stubPendingImagePipeline()
+
+    try {
+      const page = await openNew()
+
+      await fillRequired(page)
+      await choosePhoto(page, photo('IMG_4823.JPG', 'image/jpeg', CAMERA_PHOTO_BYTES))
+
+      // 還在處理：此刻 pendingPhoto 仍是 null，送出會以 keep 出去
+      expect(page.get('[data-testid="creature-profile-submit"]').attributes('disabled')).toBeDefined()
+
+      await save(page)
+
+      expect(state.createCalls, '處理中就把生物建出去了').toBe(0)
+      expect(navigateToMock, '處理中就跳走了，照片無聲消失').not.toHaveBeenCalled()
+
+      await pipeline.finish(0, 180 * 1024)
+
+      expect(page.get('[data-testid="creature-profile-submit"]').attributes('disabled')).toBeUndefined()
+
+      await save(page)
+
+      expect(state.createCalls).toBe(1)
+      expect(state.photoPostCalls).toBe(1)
+      expect(state.uploaded[0]).toMatchObject({ size: 180 * 1024 })
+    }
+    finally {
+      pipeline.restore()
+    }
+  })
+
+  it('處理中看得出來，處理完就收起來', async () => {
+    const pipeline = stubPendingImagePipeline()
+
+    try {
+      const page = await openNew()
+
+      await choosePhoto(page, photo('IMG_4823.JPG', 'image/jpeg', CAMERA_PHOTO_BYTES))
+
+      // 只是 disable 而不說原因的話，按不動與按了沒反應一樣難懂
+      expect(page.find('[data-testid="creature-photo-processing"]').exists()).toBe(true)
+
+      await pipeline.finish(0, 180 * 1024)
+
+      expect(page.find('[data-testid="creature-photo-processing"]').exists()).toBe(false)
+      expect(page.find('[data-testid="creature-photo-preview"]').exists()).toBe(true)
+    }
+    finally {
+      pipeline.restore()
+    }
+  })
+
+  // 同一個成因的第二個洞：清空與賦值都在 await 之後，所以先選 A 再選 B 時，
+  // 若 A 的縮圖比 B 晚完成，A 會蓋掉 B——畫面上的預覽是 B，送出去的卻是 A。
+  it('連續選兩張時以最後一次選的為準，先選的那張晚完成也蓋不掉', async () => {
+    const pipeline = stubPendingImagePipeline()
+
+    try {
+      const page = await openNew()
+
+      await fillRequired(page)
+      await choosePhoto(page, photo('FIRST.JPG', 'image/jpeg', CAMERA_PHOTO_BYTES))
+      await choosePhoto(page, photo('SECOND.JPG', 'image/jpeg', CAMERA_PHOTO_BYTES))
+
+      expect(pipeline.pending, '兩次選取各自進了一次縮圖').toHaveLength(2)
+
+      // 後選的先完成，先選的後完成——這正是「亂序」
+      await pipeline.finish(1, 120 * 1024)
+      await pipeline.finish(0, 240 * 1024)
+
+      await save(page)
+
+      expect(state.photoPostCalls).toBe(1)
+      expect(state.uploaded[0], '送出的是被放棄的那一張').toMatchObject({ size: 120 * 1024 })
+    }
+    finally {
+      pipeline.restore()
+    }
   })
 })

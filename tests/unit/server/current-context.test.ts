@@ -15,6 +15,7 @@ function fakeClient(overrides: {
     user: {
       findFirst: vi.fn().mockResolvedValue(overrides.user ?? null),
       findUnique: vi.fn().mockResolvedValue(overrides.user ?? null),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     tank: { findFirst: vi.fn().mockResolvedValue(overrides.tank ?? null) },
   }
@@ -38,18 +39,24 @@ function fakeClient(overrides: {
 describe('getUserFromSession', () => {
   const now = new Date('2026-07-30T00:00:00.000Z')
 
+  // issue #175 之後這支函式會順手更新 `lastActiveAt`，所以假使用者也要有那一欄——
+  // 少了它，節流判斷拿到的是 undefined，測試會在一個現實中不存在的狀態上跑。
+  // 剛更新過的那一位（＝節流區間內）用來驗「不該寫」的案例。
+  const ACTIVE_USER = { id: 'user-7', lastActiveAt: now }
+  const IDLE_USER = { id: 'user-7', lastActiveAt: new Date('2026-07-01T00:00:00.000Z') }
+
   // Story ③「Then 取到的是 cookie 中 userId 對應的那一位，而不是 createdAt 最早的那一位」
   it('取 session 中 userId 對應的那一位', async () => {
-    const client = fakeClient({ user: { id: 'user-7' } })
+    const client = fakeClient({ user: ACTIVE_USER })
 
     await expect(getUserFromSession(client, buildSessionPayload('user-7', now), now))
-      .resolves.toEqual({ id: 'user-7' })
+      .resolves.toEqual(ACTIVE_USER)
 
     expect(client.user.findUnique).toHaveBeenCalledWith({ where: { id: 'user-7' } })
   })
 
   it('不再退回「createdAt 最早的那一位」', async () => {
-    const client = fakeClient({ user: { id: 'user-7' } })
+    const client = fakeClient({ user: ACTIVE_USER })
 
     await getUserFromSession(client, buildSessionPayload('user-7', now), now)
 
@@ -60,6 +67,49 @@ describe('getUserFromSession', () => {
   it('session 指向的使用者已不存在時回傳 null', async () => {
     await expect(getUserFromSession(fakeClient({}), buildSessionPayload('user-7', now), now))
       .resolves.toBeNull()
+  })
+
+  // issue #175：schema 對 `User.lastActiveAt` 寫著「最近一次辨識出這位使用者並準備續發
+  // session 的時間」，而在這之前全 repo 沒有任何地方寫入它——值永遠等於 createdAt，
+  // 於是「天天在用的訪客不會被清掉」這個保證只寫在註解裡。辨識出使用者的地方只有這一支，
+  // 更新放在這裡，每一支 API handler 都不必自己記得。
+  it('辨識出使用者時把 lastActiveAt 推進到現在', async () => {
+    const client = fakeClient({ user: IDLE_USER })
+
+    await getUserFromSession(client, buildSessionPayload('user-7', now), now)
+
+    expect(client.user.updateMany).toHaveBeenCalledTimes(1)
+
+    const [args] = client.user.updateMany.mock.calls[0] as unknown as [{
+      where: { id: string }
+      data: { lastActiveAt: Date }
+    }]
+    expect(args.where.id).toBe('user-7')
+    expect(args.data.lastActiveAt).toEqual(now)
+  })
+
+  // Given 我在同一分鐘內連續打了多支 API / When 每一次請求都辨識出我
+  // Then lastActiveAt 不會被寫入 N 次
+  //
+  // 節流本身的完整案例在 last-active.test.ts；這裡守的是「這支函式真的有節流」——
+  // 少了它，每一支 API 都會多一次資料庫寫入。
+  it('剛更新過的使用者不會再寫一次', async () => {
+    const client = fakeClient({ user: ACTIVE_USER })
+
+    await getUserFromSession(client, buildSessionPayload('user-7', now), now)
+    await getUserFromSession(client, buildSessionPayload('user-7', now), now)
+    await getUserFromSession(client, buildSessionPayload('user-7', now), now)
+
+    expect(client.user.updateMany).not.toHaveBeenCalled()
+  })
+
+  // 使用者已經被清掉時沒有什麼好更新的，那句 update 也不該發出去。
+  it('session 指向的使用者已不存在時不寫入 lastActiveAt', async () => {
+    const client = fakeClient({})
+
+    await getUserFromSession(client, buildSessionPayload('user-7', now), now)
+
+    expect(client.user.updateMany).not.toHaveBeenCalled()
   })
 
   // Story ④「Given 我沒有 cookie，或 cookie 已過期／簽章驗不過 → 取到 null」
@@ -78,7 +128,7 @@ describe('getUserFromSession', () => {
   // Story ④「And 判定『未登入』的過程中沒有對資料庫發出任何查詢」
   // ——這正是第 2 節選密封 cookie（而不是 Session 表）的理由之一。
   it('判定未登入的過程中完全不查資料庫', async () => {
-    const client = fakeClient({ user: { id: 'user-7' } })
+    const client = fakeClient({ user: ACTIVE_USER })
     const expired = buildSessionPayload('user-7', new Date('2026-07-01T00:00:00.000Z'), 60)
 
     await getUserFromSession(client, undefined, now)
@@ -88,6 +138,8 @@ describe('getUserFromSession', () => {
     expect(client.user.findUnique).not.toHaveBeenCalled()
     expect(client.user.findFirst).not.toHaveBeenCalled()
     expect(client.tank.findFirst).not.toHaveBeenCalled()
+    // issue #175 的更新同樣不能破壞這一條：未登入的請求連寫入都不該有
+    expect(client.user.updateMany).not.toHaveBeenCalled()
   })
 
   // Story ⑤「Then cookie 被清除，之後的請求一律視為未登入」

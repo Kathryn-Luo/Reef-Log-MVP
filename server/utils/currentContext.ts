@@ -1,4 +1,5 @@
 import type { PrismaClient, Tank, User } from '@prisma/client'
+import { touchLastActiveAt } from './lastActive'
 import { readSessionPayload } from './session'
 
 // 「當前使用者 / 當前缸」的共用取得方式。各畫面的子 issue 由此取得資料歸屬，
@@ -32,7 +33,25 @@ export async function getUserFromSession(
 
   // 仍要查一次：cookie 只證明「簽發當時是這個人」，證明不了他現在還在
   // （訪客沙盒會被定期清掉，見 schema.prisma 的 AuthProvider.GUEST）。
-  return client.user.findUnique({ where: { id: payload.userId } })
+  const user = await client.user.findUnique({ where: { id: payload.userId } })
+
+  if (!user) {
+    return null
+  }
+
+  // 「最近一次辨識出這位使用者」就是這裡（issue #175）——schema 對 `User.lastActiveAt`
+  // 寫的正是這件事，而在這之前沒有任何地方寫入它。放在這一支而不是各 handler 各寫一次：
+  // 辨識身分只有這一個入口，寫在這裡就沒有哪支 API 會忘記，訪客清理看到的也才是
+  // 「最後一次活動」而不是「帳號建立時間」。
+  //
+  // 每個請求並不會都寫——touchLastActiveAt 自己節流（見該檔），而且這一段在上面那個
+  // early return 之後：未登入的請求仍然一次資料庫往返都沒有。
+  await touchLastActiveAt(client, user, now)
+
+  // 回傳的是**更新前**那一份快照。目前沒有任何呼叫端讀 lastActiveAt（API 回應也刻意
+  // 不含這一欄，見 authorization.test.ts），為了一個沒人讀的欄位再組一個新物件，
+  // 只是讓「這裡回傳的是不是資料庫現況」多一個要記住的例外。
+  return user
 }
 
 /**

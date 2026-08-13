@@ -18,6 +18,8 @@ function fakeClient(overrides: { account?: unknown } = {}) {
     },
     user: {
       create: vi.fn().mockResolvedValue({ id: 'user-new' }),
+      update: vi.fn().mockResolvedValue({ id: 'user-1' }),
+      updateMany: vi.fn(),
       findFirst: vi.fn(),
     },
   }
@@ -29,31 +31,43 @@ const PROFILE = {
   sub: 'google-sub-1',
   email: 'diver@example.com',
   name: '潛水的人',
+  picture: 'https://lh3.googleusercontent.com/a/avatar-1',
+}
+
+/** 第 n 次 user.update 收到的參數（issue #165） */
+function updateArgs(client: ReturnType<typeof fakeClient>, index = 0) {
+  const [args] = client.user.update.mock.calls[index] as unknown as [{
+    where: { id: string }
+    data: Record<string, unknown>
+  }]
+
+  return args
 }
 
 // `defineOAuthGoogleEventHandler` 的 onSuccess 拿到的 `user` 是 Google userinfo 端點的
 // 原始回應，型別上就是 `any`——TypeScript 在這個邊界上幫不了任何忙。把它交給 Prisma 之前
 // 先過一次這個函式，是為了「Google 給的東西長得不對」不會變成寫進資料庫的壞資料。
 describe('toGoogleProfile', () => {
-  it('取出 sub、email、name 三個欄位', () => {
+  it('取出 sub、email、name、picture 四個欄位', () => {
     expect(toGoogleProfile(PROFILE)).toEqual({
       sub: 'google-sub-1',
       email: 'diver@example.com',
       name: '潛水的人',
+      picture: 'https://lh3.googleusercontent.com/a/avatar-1',
     })
   })
 
-  // userinfo 還會回 picture、email_verified、locale 等等。它們沒有一個會被寫進資料庫，
-  // 所以在這一層就丟掉，而不是一路帶到 resolveGoogleLogin 才靠它自己記得不要用。
-  it('丟掉 picture 等用不到的欄位', () => {
+  // issue #165 起 picture 是要寫進 User.googleAvatarUrl 的資料，因此多留這一欄；
+  // email_verified、locale 等其餘欄位仍然沒有一個會被寫進資料庫，在這一層就丟掉，
+  // 而不是一路帶到 resolveGoogleLogin 才靠它自己記得不要用。
+  it('留下 picture，丟掉 email_verified、locale 等用不到的欄位', () => {
     const profile = toGoogleProfile({
       ...PROFILE,
-      picture: 'https://example.com/avatar.png',
       email_verified: true,
       locale: 'zh-TW',
     })
 
-    expect(Object.keys(profile ?? {}).sort()).toEqual(['email', 'name', 'sub'])
+    expect(Object.keys(profile ?? {}).sort()).toEqual(['email', 'name', 'picture', 'sub'])
   })
 
   // sub 是唯一約束的一半，缺了它就無從決定「這是誰」——寧可整個登入失敗，
@@ -73,16 +87,27 @@ describe('toGoogleProfile', () => {
 
   // User.email / User.displayName 都是 String?，缺了照樣登得進來（Story ① 已測過 null 的寫入）
   it('email 或 name 缺漏、型別不對時一律收斂成 null', () => {
-    expect(toGoogleProfile({ sub: 'google-sub-1' })).toEqual({
+    expect(toGoogleProfile({ sub: 'google-sub-1' })).toMatchObject({
       sub: 'google-sub-1',
       email: null,
       name: null,
     })
-    expect(toGoogleProfile({ sub: 'google-sub-1', email: 42, name: {} })).toEqual({
+    expect(toGoogleProfile({ sub: 'google-sub-1', email: 42, name: {} })).toMatchObject({
       sub: 'google-sub-1',
       email: null,
       name: null,
     })
+  })
+
+  // issue #165 的 Story④「Given Google 的回應沒有 picture、或 picture 不是字串
+  // Then 當成『Google 沒給』，不寫入垃圾值」——收斂在這一層，寫入端因此只要處理 null。
+  // 空字串一併當成沒給：它進了 <img src=""> 只會是一張破圖。
+  it('picture 缺漏、型別不對或為空字串時一律收斂成 null', () => {
+    expect(toGoogleProfile({ sub: 'google-sub-1' })!.picture).toBeNull()
+    expect(toGoogleProfile({ sub: 'google-sub-1', picture: 42 })!.picture).toBeNull()
+    expect(toGoogleProfile({ sub: 'google-sub-1', picture: {} })!.picture).toBeNull()
+    expect(toGoogleProfile({ sub: 'google-sub-1', picture: null })!.picture).toBeNull()
+    expect(toGoogleProfile({ sub: 'google-sub-1', picture: '' })!.picture).toBeNull()
   })
 })
 
@@ -153,6 +178,43 @@ describe('resolveGoogleLogin — 尚未註冊過的 Google 使用者', () => {
       displayName: null,
     })
   })
+
+  // issue #165 Story①「Given Google 的 OAuth 回應包含 picture / When 我完成 Google 登入
+  // / Then User.googleAvatarUrl 被寫入或更新為該 picture URL」——首次登入這一半。
+  //
+  // 建帳號這一次沒有「既有值會被蓋掉」的問題（這一列現在才存在），所以和 displayName
+  // 一樣直接寫進 nested create，不需要另一次 update。
+  it('建立 User 時把 picture 寫進 googleAvatarUrl', async () => {
+    const client = fakeClient()
+
+    await resolveGoogleLogin(client, PROFILE)
+
+    expect(client.user.create.mock.calls[0]![0].data).toMatchObject({
+      googleAvatarUrl: 'https://lh3.googleusercontent.com/a/avatar-1',
+    })
+  })
+
+  // Story④：Google 沒給 picture 時不寫入垃圾值，登入照常成功
+  it('Google 沒給 picture 時 googleAvatarUrl 存成 null，登入仍然成功', async () => {
+    const client = fakeClient()
+
+    await expect(resolveGoogleLogin(client, { sub: 'google-sub-2' })).resolves.toEqual({
+      userId: 'user-new',
+      isNewUser: true,
+    })
+
+    expect(client.user.create.mock.calls[0]![0].data.googleAvatarUrl).toBeNull()
+  })
+
+  // 建帳號這一次**不**寫 customAvatarUrl：自訂頭像只能由使用者自己上傳
+  // （POST /api/profile/avatar），Google 這條路徑一步都不該碰它。
+  it('不寫入 customAvatarUrl', async () => {
+    const client = fakeClient()
+
+    await resolveGoogleLogin(client, PROFILE)
+
+    expect(client.user.create.mock.calls[0]![0].data).not.toHaveProperty('customAvatarUrl')
+  })
 })
 
 describe('resolveGoogleLogin — 已用同一個 Google 帳號登入過', () => {
@@ -191,7 +253,7 @@ describe('resolveGoogleLogin — 已用同一個 Google 帳號登入過', () => 
     expect(client.account.create).not.toHaveBeenCalled()
   })
 
-  // 換過 email 的人仍然是同一位：命中 Account 之後不改寫 User 的個人資料，
+  // 換過 email 的人仍然是同一位：命中 Account 之後不改寫 User 的 email，
   // 也不會因為 email 撞到 @unique 而登不進來
   it('Google 端改過 email 也照樣沿用同一位 User', async () => {
     const client = fakeClient({ account: { id: 'account-1', userId: 'user-1' } })
@@ -201,6 +263,82 @@ describe('resolveGoogleLogin — 已用同一個 Google 帳號登入過', () => 
     ).resolves.toEqual({ userId: 'user-1', isNewUser: false })
 
     expect(client.user.create).not.toHaveBeenCalled()
+    expect(updateArgs(client).data).not.toHaveProperty('email')
+  })
+
+  // issue #165 Story①（既有使用者這一半）：「Then User.googleAvatarUrl 被寫入或更新為該 picture URL」
+  it('把最新的 picture 更新到那一位的 googleAvatarUrl', async () => {
+    const client = fakeClient({ account: { id: 'account-1', userId: 'user-1' } })
+
+    await resolveGoogleLogin(client, { ...PROFILE, picture: 'https://lh3.googleusercontent.com/a/avatar-2' })
+
+    expect(client.user.update).toHaveBeenCalledTimes(1)
+    expect(updateArgs(client)).toEqual({
+      where: { id: 'user-1' },
+      data: { googleAvatarUrl: 'https://lh3.googleusercontent.com/a/avatar-2' },
+    })
+  })
+
+  // ⚠ 這是本 issue 的主要風險，也是它唯一新增 update 的理由。
+  //
+  // Story②「customAvatarUrl 完全不被觸碰」與 Story③「displayName 完全不被觸碰」：
+  // 斷言的是 **update 收到的 data 只有 googleAvatarUrl 一個鍵**，而不是「結果值碰巧沒變」。
+  // 後者在假的 Prisma Client 上恆真——真正會出事的寫法（把整個 profile 物件展開進 data）
+  // 只有從 data 的形狀看得出來。
+  it('update 的 data 只有 googleAvatarUrl 一個欄位', async () => {
+    const client = fakeClient({ account: { id: 'account-1', userId: 'user-1' } })
+
+    await resolveGoogleLogin(client, PROFILE)
+
+    expect(Object.keys(updateArgs(client).data)).toEqual(['googleAvatarUrl'])
+  })
+
+  // Story②：使用者上傳過自訂頭像之後再登入，customAvatarUrl 不進 update 的 data，
+  // 所以 Profile 頁的 custom → google → 名稱首字優先序仍然停在 custom。
+  it('使用者上傳過自訂頭像時，update 不碰 customAvatarUrl', async () => {
+    const client = fakeClient({ account: { id: 'account-1', userId: 'user-1' } })
+
+    await resolveGoogleLogin(client, PROFILE)
+
+    expect(updateArgs(client).data).not.toHaveProperty('customAvatarUrl')
+  })
+
+  // Story③：使用者把顯示名稱改成「小魚缸管理員」（#171）之後再登入，
+  // Google 端的本名不該把它蓋回去——而且蓋掉是靜默的，只有這條測試攔得住。
+  it('使用者改過顯示名稱時，update 不碰 displayName', async () => {
+    const client = fakeClient({ account: { id: 'account-1', userId: 'user-1' } })
+
+    await resolveGoogleLogin(client, { ...PROFILE, name: 'Google 上的本名' })
+
+    expect(updateArgs(client).data).not.toHaveProperty('displayName')
+  })
+
+  // Story④：這次的回應沒有 picture，不代表使用者的頭像該被清掉——那是「Google 這次
+  // 沒給」，不是「Google 說沒有」。整個 update 就不送，既有值原樣留著，登入照常完成。
+  it('Google 沒給 picture 時完全不送 update，登入仍然成功', async () => {
+    const client = fakeClient({ account: { id: 'account-1', userId: 'user-1' } })
+
+    await expect(
+      resolveGoogleLogin(client, { sub: 'google-sub-1', picture: null }),
+    ).resolves.toEqual({ userId: 'user-1', isNewUser: false })
+
+    expect(client.user.update).not.toHaveBeenCalled()
+  })
+
+  // Story⑤「Given 我是在本功能上線前就存在的 Google 使用者 / When 我還沒有重新登入過
+  // / Then googleAvatarUrl 維持 null，不做任何無憑證的資料回填」。
+  //
+  // 唯一的憑證是「這次登入的 Google 回應」，所以寫入永遠指名登入中的那一位（where: { id }）。
+  // 沒有批次回填的路徑——沒重新登入的人，這支函式根本不會碰到他那一列。
+  it('只更新登入中的那一位，沒有任何批次回填', async () => {
+    const client = fakeClient({ account: { id: 'account-1', userId: 'user-1' } })
+
+    await resolveGoogleLogin(client, PROFILE)
+
+    expect(client.user.updateMany).not.toHaveBeenCalled()
+    expect(client.user.update.mock.calls.every(
+      ([args]) => (args as { where: { id: string } }).where.id === 'user-1',
+    )).toBe(true)
   })
 })
 
@@ -215,7 +353,12 @@ describe('resolveGoogleLogin — 唯一約束衝突（P2002）', () => {
 
     const client = {
       account: { findUnique, create: vi.fn() },
-      user: { create: vi.fn().mockRejectedValue(createError), findFirst: vi.fn() },
+      user: {
+        create: vi.fn().mockRejectedValue(createError),
+        update: vi.fn().mockResolvedValue({ id: 'user-1' }),
+        updateMany: vi.fn(),
+        findFirst: vi.fn(),
+      },
     }
 
     return client as unknown as PrismaClient & typeof client
@@ -236,6 +379,22 @@ describe('resolveGoogleLogin — 唯一約束衝突（P2002）', () => {
     })
 
     expect(client.account.findUnique).toHaveBeenCalledTimes(2)
+  })
+
+  // 重查沿用的那一位走的是「既有使用者」那條路，頭像的處理因此完全一樣：
+  // 只更新 googleAvatarUrl，一個字都不碰 displayName / customAvatarUrl（issue #165）。
+  it('重查沿用既有 userId 時，同樣只更新 googleAvatarUrl', async () => {
+    const client = racingClient(
+      [null, { id: 'account-1', userId: 'user-1' }],
+      { code: 'P2002' },
+    )
+
+    await resolveGoogleLogin(client, PROFILE)
+
+    expect(client.user.update.mock.calls[0]![0]).toEqual({
+      where: { id: 'user-1' },
+      data: { googleAvatarUrl: 'https://lh3.googleusercontent.com/a/avatar-1' },
+    })
   })
 
   // 撞的不是 sub 而是 User.email（String? @unique）——例如這個 email 已經屬於

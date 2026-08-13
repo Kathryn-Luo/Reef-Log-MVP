@@ -245,6 +245,28 @@ describe('瀏覽器測試真的被接起來了', () => {
     expect(step).toMatch(/if:\s*\$\{\{\s*!\s*cancelled\(\)\s*\}\}/)
   })
 
+  // issue #187：決定是不把 WebKit 加進 CI，代價是 Safari 專屬的行為只有人工實機
+  // 驗得到。而「人工」最容易失敗的地方是沒人想起來——所以那個提醒必須是機制，
+  // 不是記性。它永遠成功、只留一則 warning，因此**不會**有任何紅燈提醒我們它掉了，
+  // 只能由這一組守著。
+  it('CI 會在動到縮圖程式碼時提醒人工做跨瀏覽器確認', () => {
+    const step = ci.slice(ci.indexOf('name: Cross-browser reminder'))
+
+    expect(ci, '找不到跨瀏覽器提醒的步驟').toContain('name: Cross-browser reminder')
+    // 盯的是縮圖本體：PR #185 那兩個坑都是改到這個檔案時才踩得到的
+    expect(step).toContain('app/utils/avatarImage.ts')
+    // 出聲的方式要看得見，而不是只印在 log 裡
+    expect(step).toContain('::warning')
+    expect(step).toContain('GITHUB_STEP_SUMMARY')
+    // 指得回「為什麼只有人工能驗」的說明
+    expect(step).toContain('docs/BROWSER_TESTS.md')
+  })
+
+  // 沒有 base 那一端的 commit 就比不出這個 PR 動了哪些檔案，提醒會變成靜默的空轉
+  it('checkout 取得完整歷史，比對得出這個 PR 的異動', () => {
+    expect(ci).toMatch(/uses:\s*actions\/checkout@v4\s*\n\s*with:\s*\n\s*fetch-depth:\s*0/)
+  })
+
   it('docs 寫明了裝哪些套件，也指得到那支測試與它的設定檔', () => {
     for (const name of REQUIRED_PACKAGES) {
       expect(doc, `docs/BROWSER_TESTS.md 沒有提到 ${name}`).toContain(name)

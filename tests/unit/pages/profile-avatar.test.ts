@@ -145,12 +145,22 @@ afterEach(() => {
 
 type Page = VueWrapper<InstanceType<typeof ProfilePage>>
 
-async function open(profile?: Record<string, unknown>): Promise<Page> {
+/**
+ * `attached`＝把畫面真的掛進 document。
+ *
+ * 焦點只存在於「文件裡的元素」上：沒掛進去的話 `element.focus()` 一律無效，
+ * `document.activeElement` 永遠是 body，驗焦點的測試會恆綠。只有需要驗焦點的那幾條
+ * 才開，其餘維持原本的離線掛載（比較快，也不必自己收拾 document）。
+ */
+async function open(profile?: Record<string, unknown>, attached = false): Promise<Page> {
   if (profile) {
     state.profile = profile
   }
 
-  const page = await mountSuspended(ProfilePage, { route: '/profile' }) as unknown as Page
+  const page = await mountSuspended(ProfilePage, {
+    route: '/profile',
+    ...(attached ? { attachTo: document.body } : {}),
+  }) as unknown as Page
   await flushPromises()
   return page
 }
@@ -538,5 +548,54 @@ describe('/profile 移除頭像', () => {
 
     expect(page.find('[data-testid="profile-avatar-upload"]').exists()).toBe(false)
     expect(page.find('[data-testid="profile-avatar-remove"]').exists()).toBe(true)
+  })
+
+  // PR #185 的 review：能上傳頭像的都是 Google 使用者，他們移除後退回的是 Google 頭像，
+  // 不是名稱首字——照原本的文案，多數人在按下這個破壞性動作之前看到的是錯的結果。
+  //
+  // 而 GET /api/profile 只給 avatarUrl 與 avatarSource（見 shared/types/profile.ts），
+  // 前端無從得知「移除之後會退回哪一種」。既然說不準，就不要承諾特定來源。
+  it('確認文案不承諾會退回哪一種頭像', async () => {
+    const page = await open(CUSTOM_AVATAR_PROFILE)
+
+    await page.get('[data-testid="profile-avatar-remove"]').trigger('click')
+
+    const copy = page.findAll('[data-testid="avatar-remove-line"]').map(line => line.text()).join('')
+
+    expect(copy).not.toContain('名稱')
+    expect(copy).not.toContain('第一個字')
+    // 但「會變成什麼」與「還救得回來」兩件事仍要說到
+    expect(copy).toContain('預設頭像')
+    expect(copy).toContain('再上傳')
+  })
+
+  // PR #185 的 review：移除成功的那一刻，「移除頭像」那顆按鈕自己就不見了
+  // （canRemoveAvatar 轉 false），焦點無處可還。還給一個已經脫離 DOM 的元素等於沒還，
+  // 鍵盤使用者會掉回 body，得從頁首重新 Tab 一次。
+  it('移除成功後焦點落在仍然存在的元素上，不會掉回 body', async () => {
+    const page = await open(CUSTOM_AVATAR_PROFILE, true)
+
+    await page.get('[data-testid="profile-avatar-remove"]').trigger('click')
+    await page.get('[data-testid="avatar-remove-confirm"]').trigger('click')
+    await settle()
+
+    expect(page.find('[data-testid="profile-avatar-remove"]').exists()).toBe(false)
+    expect(document.activeElement).not.toBe(document.body)
+    expect(document.activeElement?.isConnected).toBe(true)
+    expect(document.activeElement).toBe(page.get('[data-testid="profile-avatar-region"]').element)
+  })
+
+  // 反過來這一條守著上面那個修法別把原本的行為換掉：按下取消時那顆按鈕還在，
+  // 焦點就該回到它身上，而不是被一律送去頭像區塊。
+  it('取消時焦點回到「移除頭像」那顆按鈕', async () => {
+    const page = await open(CUSTOM_AVATAR_PROFILE, true)
+    const remove = page.get('[data-testid="profile-avatar-remove"]')
+
+    ;(remove.element as HTMLElement).focus()
+    await remove.trigger('click')
+    await page.get('[data-testid="avatar-remove-cancel"]').trigger('click')
+    await flushPromises()
+
+    expect(document.activeElement).toBe(remove.element)
   })
 })

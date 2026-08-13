@@ -110,6 +110,7 @@ async function saveName() {
 // 擋不掉的東西一律由 server 回 400，訊息直接顯示給使用者看。
 
 const avatarInput = useTemplateRef<HTMLInputElement>('avatarInput')
+const avatarRegion = useTemplateRef<HTMLElement>('avatarRegion')
 const uploading = ref(false)
 const removing = ref(false)
 const confirmingRemove = ref(false)
@@ -245,7 +246,17 @@ async function removeAvatar() {
         class="px-4 pt-10"
       >
         <div class="flex flex-col items-center">
-          <div class="relative">
+          <!--
+            tabindex="-1"：移除成功後「移除頭像」那顆按鈕會跟著消失，焦點沒有原路
+            可還（見 AvatarRemoveSheet 的 returnFocusFallback）。頭像區塊是這一頁上
+            最靠近、又一定還在的落點，而且它正是剛才變動的那個東西。
+          -->
+          <div
+            ref="avatarRegion"
+            data-testid="profile-avatar-region"
+            tabindex="-1"
+            class="relative outline-none"
+          >
             <ProfileAvatar
               :avatar-url="profile.avatarUrl"
               :avatar-source="profile.avatarSource"
@@ -454,6 +465,7 @@ async function removeAvatar() {
         <AvatarRemoveSheet
           :open="confirmingRemove"
           :removing="removing"
+          :return-focus-fallback="avatarRegion"
           @close="confirmingRemove = false"
           @confirm="removeAvatar"
         />

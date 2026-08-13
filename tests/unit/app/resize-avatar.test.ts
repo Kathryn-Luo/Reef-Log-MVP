@@ -174,13 +174,18 @@ describe('resizeAvatar', () => {
     expect(canvas.encoded[0]).toMatchObject({ width: AVATAR_MAX_EDGE, height: 256 })
   })
 
-  // Given 我選的照片帶有 EXIF 方向資訊（手機橫拿拍的）
-  // When  上傳完成
-  // Then  顯示的頭像方向與我在相簿裡看到的一致，不會躺著
+  // 這一條**不是**「頭像不會躺著」那條 Then 的證明，別把它當成證明（PR #185 的 review）。
   //
-  // 方向要在「解碼成 bitmap」那一刻就套用。先塞進 <img> 再 drawImage 的話，EXIF 在
-  // 畫進 canvas 之後就沒了——預覽是正的、上傳後躺著。
-  it('解碼時要求套用 EXIF 方向', async () => {
+  // 替身只記錄收到的參數，輸出的像素方向從頭到尾沒有人看過：瀏覽器若忽略或做錯
+  // `imageOrientation`，這條照樣綠。jsdom 裡沒有解碼器，這件事在這個環境裡驗不到。
+  //
+  // 它守得住的是另一件小事，而那件事值得守：方向必須在「解碼成 bitmap」那一刻就套用。
+  // 先塞進 <img> 再 drawImage 的話，EXIF 在畫進 canvas 之後就沒了——預覽是正的、
+  // 上傳後躺著。這個選項被誰順手拿掉時，這裡會轉紅。
+  //
+  // 使用者看得到的那條 Then 由人類在實機確認一次（見 issue #168 的驗收清單）；
+  // 要把它變成自動化的，得先有真實瀏覽器的測試環境——#176。
+  it('解碼時要求套用 EXIF 方向（只驗選項有送出，不驗輸出像素）', async () => {
     await resizeAvatar(photo())
 
     expect(bitmap.options).toEqual([{ imageOrientation: 'from-image' }])

@@ -10,6 +10,13 @@
 const props = defineProps<{
   open: boolean
   removing: boolean
+  /**
+   * 開啟這個 sheet 的那顆按鈕消失時，焦點改還給誰。
+   *
+   * 移除成功的那一刻「移除頭像」自己就不見了（沒有東西可以移除了），所以這個備援
+   * 不是防禦性寫法，而是成功路徑的常態。由頁面指定，因為只有它知道哪個元素留得住。
+   */
+  returnFocusFallback?: HTMLElement | null
 }>()
 
 const emit = defineEmits<{
@@ -57,7 +64,13 @@ watch(() => props.open, async (open) => {
     return
   }
 
-  returnFocusTo.value?.focus()
+  // 先等這一輪的 DOM 補完，記住的那個元素才知道自己還在不在：移除成功時
+  // 「移除頭像」與這個 sheet 是同一拍消失的，早一步問到的答案是「還在」
+  await nextTick()
+
+  const target = returnFocusTo.value?.isConnected ? returnFocusTo.value : props.returnFocusFallback
+
+  target?.focus()
   returnFocusTo.value = null
 }, { immediate: true })
 </script>
@@ -122,13 +135,18 @@ watch(() => props.open, async (open) => {
         <!--
           兩行分開寫，不是一段話裡的兩句：第一行說「會變成什麼」、第二行說「還救得回來」。
           擠成一段時，讀者容易只讀到前半就以為這一步不可逆。
+
+          第一行刻意**不說**退回哪一種頭像（PR #185 的 review）：Google 使用者退回的是
+          Google 頭像、其他人才是名稱首字，而 GET /api/profile 只回 avatarUrl 與
+          avatarSource，畫面根本算不出這一次會是哪一種。說不準的事就不要在破壞性動作
+          前面承諾——多數使用者會看到一個與實際結果不符的預告。
         -->
         <div
           :id="descriptionId"
           class="mt-3 space-y-1 text-toned"
         >
           <p data-testid="avatar-remove-line">
-            移除後將改為顯示名稱的第一個字。
+            移除後將改回預設頭像。
           </p>
           <p data-testid="avatar-remove-line">
             你隨時可以再上傳新的頭像。

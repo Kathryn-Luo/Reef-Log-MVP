@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import type { TankOption } from '#shared/types/home'
 import type { CreatureProfileRequest, CreatureProfileResponse } from '#shared/types/creature'
+import type { CreaturePhotoIntent } from '~/components/CreatureProfileForm.vue'
 import { apiErrorMessage } from '#shared/utils/apiError'
+import { CREATURE_PHOTO_FIELD_NAME } from '#shared/utils/creaturePhotoUpload'
 
 useSeoMeta({ title: '新增生物 · ReefLog' })
 
@@ -32,7 +34,16 @@ watch(tanks, () => {
   }
 }, { immediate: true })
 
-async function submit(input: CreatureProfileRequest) {
+/**
+ * 已經建立好的那一隻（issue #154）。
+ *
+ * 照片必須等生物有了 id 才上傳得了，所以這一頁是「兩趟」：先 POST 建立，再 POST 照片。
+ * 第二趟失敗時**不能**讓下一次儲存又建一隻新的——使用者按下「儲存」的意思從頭到尾
+ * 只有一個。記著 id 之後，重試就只重試照片那一趟。
+ */
+const createdCreatureId = ref<string | null>(null)
+
+async function submit(input: CreatureProfileRequest, photo: CreaturePhotoIntent) {
   if (!currentTank.value) {
     error.value = '找不到可加入生物的缸。'
     return
@@ -41,13 +52,15 @@ async function submit(input: CreatureProfileRequest) {
   error.value = null
   submitting.value = true
 
-  let created: CreatureProfileResponse
-
   try {
-    created = await $api<CreatureProfileResponse>(`/api/tanks/${currentTank.value.id}/creatures`, {
-      method: 'POST',
-      body: input,
-    })
+    if (!createdCreatureId.value) {
+      const created = await $api<CreatureProfileResponse>(`/api/tanks/${currentTank.value.id}/creatures`, {
+        method: 'POST',
+        body: input,
+      })
+
+      createdCreatureId.value = created.creature.id
+    }
   }
   catch (cause) {
     error.value = apiErrorMessage(cause, '建立失敗，請稍後再試。')
@@ -57,7 +70,28 @@ async function submit(input: CreatureProfileRequest) {
     submitting.value = false
   }
 
-  await navigateTo(`/creatures/${created.creature.id}`)
+  // 新增這一頁沒有「移除」可言（還沒有照片），所以只處理 replace
+  if (photo.action === 'replace') {
+    submitting.value = true
+
+    try {
+      const body = new FormData()
+
+      body.append(CREATURE_PHOTO_FIELD_NAME, photo.file, photo.file.name)
+      await $api<CreatureProfileResponse>(`/api/creatures/${createdCreatureId.value}/photo`, { method: 'POST', body })
+    }
+    catch (cause) {
+      // 生物已經建立了，所以話要說清楚：再按一次儲存只會重試照片，不會多一隻。
+      // 「檔案過大」與「格式不支援」是 server 給的兩則不同訊息，原樣顯示。
+      error.value = `${apiErrorMessage(cause, '照片上傳失敗，請確認網路後再試一次。')}（生物已建立，再按一次儲存只會重試照片）`
+      return
+    }
+    finally {
+      submitting.value = false
+    }
+  }
+
+  await navigateTo(`/creatures/${createdCreatureId.value}`)
 }
 </script>
 

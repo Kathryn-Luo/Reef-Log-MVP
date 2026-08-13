@@ -61,6 +61,9 @@ const LOGGED_IN_SPECS = [
   // 頭像上傳與移除的介面（#168）。訪客登入是 preview 上唯一走得通的身分，
   // 而這一支驗的正是「訪客這個身分看得到什麼」——沒有身分就一條都不成立。
   ['tests/e2e/profile-avatar-upload.spec.ts', 4],
+  // 生物照片（#154）。與頭像同一個處境：訪客是 preview 上唯一走得通的身分，
+  // 而訪客不能上傳，所以這一支驗的正是「訪客這個身分看得到什麼、擋得住什麼」。
+  ['tests/e2e/creature-photo.spec.ts', 4],
 ] as const
 
 /**

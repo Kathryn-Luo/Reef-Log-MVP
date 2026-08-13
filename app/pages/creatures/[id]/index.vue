@@ -208,8 +208,9 @@ const PLACEHOLDER_ICONS: Record<CreatureCategoryKey, string> = {
   OTHER: 'i-lucide-shell',
 }
 
-// 沒有照片的縮圖：設計稿的斜線佔位（與庫存列表同一組漸層）
-const PHOTO_PLACEHOLDER = 'repeating-linear-gradient(135deg, rgba(148,163,184,0.16) 0 6px, transparent 6px 12px)'
+// 沒有照片的縮圖：設計稿的斜線佔位（與庫存列表同一組漸層）。
+// 定義住在 app/utils/creaturePhotoImage.ts，三個畫面共用同一份（#154）。
+const PHOTO_PLACEHOLDER = CREATURE_PHOTO_PLACEHOLDER
 
 // 選中的狀態用該狀態自己的顏色：「生病」是橘、「死亡」是灰、「存活」是主色，
 // 與首頁卡片、庫存列表上的狀態點同一組語彙。

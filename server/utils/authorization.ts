@@ -22,7 +22,7 @@ import { parseTankInput } from '#shared/utils/tankForm'
 import { parseTrendRange } from '#shared/utils/trend'
 // parseWaterLogInput 與記錄水質的表單共用同一份規則，所以它住在 shared（issue #124）
 import { parseWaterLogInput } from '#shared/utils/waterLog'
-import { saveCustomAvatar, vercelAvatarBlobStore } from './avatarStore'
+import { removeCustomAvatar, saveCustomAvatar, vercelAvatarBlobStore } from './avatarStore'
 import { createCreatureProfile, getCreatureDetail, moveCreature, updateCreatureProfile, updateCreatureStatus } from './creatureDetail'
 import { getTankCreatures } from './creatureList'
 import { getCreatureSuggestions } from './creatureSuggestions'
@@ -546,6 +546,40 @@ export async function updateOwnedAvatar(
   const owner = await saveCustomAvatar(client, user.id, parsed.value, store)
 
   // 上面查到人之後才走到這裡，所以 null 只可能是「這一瞬間被刪掉了」——同一個答案
+  if (!owner) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  return { ok: true, value: toUserProfileResponse(owner) }
+}
+
+/**
+ * DELETE /api/profile/avatar —— 移除自訂頭像，讓畫面退回 Google 頭像或首字頭像（issue #167）。
+ *
+ * 未登入回 401，其餘一律成功：本來就沒有自訂頭像時是冪等的（不報錯、不刪任何 Blob），
+ * Blob 刪不掉時也仍然成功（DB 已經清乾淨，剩下的只是一個佔空間的檔案）。
+ *
+ * **這一支刻意沒有 `requireNonGuest`**，與上傳（`GUEST_CANNOT_UPLOAD_AVATAR`）不同。
+ * 那道 403 擋的是「訪客製造孤兒 Blob」與「拿 production 的 store 當免費圖床」，
+ * 而移除做的恰好相反——它把 Blob 收掉。訪客在這裡被擋下來，只會讓既有的自訂頭像
+ * （例如日後從 Google 帳號降級、或限制放寬前留下的）永遠拿不掉。issue #167 的第二條
+ * 驗收條件寫的正是訪客這條路徑。
+ *
+ * 要刪哪一個 Blob 只由 server 從自己的 `User.customAvatarUrl` 決定：這裡沒有任何參數
+ * 能讓呼叫者指定 URL，handler 也不讀 body 或 query（authorization-wiring.test.ts 守著）。
+ */
+export async function removeOwnedAvatar(
+  client: PrismaClient,
+  user: SessionUser | null,
+  store: AvatarBlobStore = vercelAvatarBlobStore,
+): Promise<Authorized<UserProfileResponse>> {
+  if (!user) {
+    return { ok: false, error: NOT_SIGNED_IN }
+  }
+
+  const owner = await removeCustomAvatar(client, user.id, store)
+
+  // cookie 有效但使用者已被刪除（訪客沙盒過期）——與其他幾支同一個答案
   if (!owner) {
     return { ok: false, error: NOT_SIGNED_IN }
   }

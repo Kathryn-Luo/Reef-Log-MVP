@@ -78,3 +78,68 @@ test.describe('訪客不得上傳頭像', () => {
     expect(response.status()).toBe(403)
   })
 })
+
+// 移除自訂頭像（issue #167）。
+//
+// ⚠ 這一組能驗的同樣比 Story 少，而且原因與上面那組是同一個：preview 上唯一登得進去的
+// 身分是訪客，而訪客傳不了頭像（#166 的 403），所以這裡永遠沒有一張「自訂頭像」可以移除。
+// 「清成 null、退回 Google 頭像、舊 Blob 被刪掉」那幾條由
+// tests/unit/server/avatar-remove.test.ts 覆蓋（Prisma 與 Blob store 都是替身）。
+//
+// 跑得到的是**未登入**與**冪等**這兩條，而後者恰好是最容易被實作成 404 的那一條。
+// 不要為了測到更多而在 E2E 裡直接改資料庫，也不要放寬 #166 的 403。
+test.describe('移除自訂頭像', () => {
+  // Given 我未登入
+  // When  我呼叫 DELETE /api/profile/avatar
+  // Then  回傳 401
+  base('未登入打 DELETE /api/profile/avatar 得到 401', async ({ request }) => {
+    const response = await request.delete('/api/profile/avatar')
+
+    expect(response.status()).toBe(401)
+    expect((await response.json() as { data?: { message?: string } }).data?.message)
+      .toBe('未登入，請先登入後再試一次。')
+  })
+
+  // Given 我本來就沒有自訂頭像
+  // When  我呼叫 DELETE /api/profile/avatar（連兩次）
+  // Then  兩次都成功、都不報錯，回應仍是目前的有效頭像
+  test('本來就沒有自訂頭像時是冪等的，不是 404', async ({ page }) => {
+    const before = await (await page.request.get('/api/profile')).json() as {
+      avatarUrl: string | null
+      avatarSource: string
+    }
+
+    for (const attempt of [1, 2]) {
+      const response = await page.request.delete('/api/profile/avatar')
+
+      expect(response.status(), `第 ${attempt} 次移除`).toBe(200)
+
+      const body = await response.json() as { avatarUrl: string | null, avatarSource: string }
+      expect(body.avatarUrl).toBe(before.avatarUrl)
+      expect(body.avatarSource).toBe(before.avatarSource)
+    }
+
+    // 移除本身沒有副作用：訪客本來就沒有自訂頭像，畫面上該顯示的東西一點都沒變
+    const after = await (await page.request.get('/api/profile')).json() as {
+      avatarUrl: string | null
+      avatarSource: string
+    }
+    expect(after.avatarUrl).toBe(before.avatarUrl)
+    expect(after.avatarSource).toBe(before.avatarSource)
+  })
+
+  // Given 我傳入別人的 Blob URL
+  // When  請求送達 API
+  // Then  該輸入完全被忽略——server 只看自己 DB 上的 customAvatarUrl
+  test('送進來的 URL 完全被忽略', async ({ page }) => {
+    const response = await page.request.delete('/api/profile/avatar', {
+      data: { url: 'https://store.example/avatars/someone-else/victim.png' },
+    })
+
+    expect(response.status()).toBe(200)
+
+    // 訪客自己的頭像沒有被這個 body 影響（他本來就沒有自訂頭像）
+    const body = await response.json() as { avatarSource: string }
+    expect(body.avatarSource).not.toBe('custom')
+  })
+})

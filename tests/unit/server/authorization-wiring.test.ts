@@ -77,6 +77,7 @@ const HANDLERS = [
   { file: 'server/api/profile.get.ts', resolver: 'resolveProfile' },
   { file: 'server/api/profile.patch.ts', resolver: 'updateOwnedProfile' },
   { file: 'server/api/profile/avatar.post.ts', resolver: 'updateOwnedAvatar' },
+  { file: 'server/api/profile/avatar.delete.ts', resolver: 'removeOwnedAvatar' },
   // 自動完成的個人歷史建議（issue #159）。不掛在任何缸底下——建議的母體是
   // 「我名下所有缸的生物」，不是某一缸的
   { file: 'server/api/creature-suggestions.get.ts', resolver: 'resolveCreatureSuggestions' },
@@ -147,6 +148,21 @@ describe('每一支 API 都經過同一道歸屬檢查', () => {
 
     expect(source).toMatch(/\(\) => readMultipartFormData\(event\)/)
     expect(source).not.toMatch(/await readMultipartFormData\(event\)/)
+  })
+
+  // 移除自訂頭像（issue #167）不讀取請求裡的任何內容。
+  //
+  // Story 明寫「傳入別人的 Blob URL 或任意 URL → 該輸入完全被忽略」，而最徹底的
+  // 「忽略」是根本不去讀：handler 一旦讀了 body 或 query，日後就有人會順手把它接到
+  // 刪除的目標上，而那正是「刪掉別人的圖」的入口。`removeOwnedAvatar` 的參數列裡
+  // 沒有 URL 可以傳，這一條守的是 handler 這一端也不要生出一個。
+  it('server/api/profile/avatar.delete.ts 不讀取 client 送來的任何內容', () => {
+    const source = readCode('server/api/profile/avatar.delete.ts')
+
+    expect(source).not.toContain('readBody')
+    expect(source).not.toContain('readMultipartFormData')
+    expect(source).not.toContain('getQuery')
+    expect(source).not.toContain('getRouterParam')
   })
 })
 

@@ -69,8 +69,10 @@ async function deleteQuietly(store: AvatarBlobStore, url: string): Promise<void>
   try {
     await store.delete(url)
   }
-  catch {
-    // best-effort：這裡刻意不往外拋，也不改變呼叫端的結果
+  catch (cause) {
+    // best-effort：這裡刻意不往外拋，也不改變呼叫端的結果。
+    // 但也不能完全沒有痕跡——留不下來的 Blob 只有 log 記得，孤兒才查得出來（issue #167）。
+    console.warn('[avatar] Blob 刪除失敗，略過（資料庫已是最新狀態）', url, cause)
   }
 }
 
@@ -145,4 +147,62 @@ export async function saveCustomAvatar(
     where: { id: userId },
     include: { accounts: { select: { provider: true } } },
   })
+}
+
+/** 一次把「目前這個人長什麼樣」讀齊，回應與判斷用的是同一列（issue #167） */
+async function loadProfileUser(client: PrismaClient, userId: string): Promise<ProfileUser | null> {
+  return await client.user.findUnique({
+    where: { id: userId },
+    include: { accounts: { select: { provider: true } } },
+  })
+}
+
+/**
+ * 清掉 `User.customAvatarUrl` 並 best-effort 收掉那個 Blob，回傳更新後的使用者（含 accounts）。
+ * 使用者已不存在時回 `null`——呼叫端把它折成 401。
+ *
+ * ── 三個順序上的決定 ──
+ *
+ * 1. **要刪哪一個只從 DB 讀。** 呼叫端連一個能傳 URL 的參數都沒有，這是 issue #167 的
+ *    第六條驗收條件：接受 client 指定的話，任何人都能拿別人的 Blob URL 來刪別人的圖。
+ *
+ * 2. **先清 DB，再刪 Blob。** 反過來的話，Blob 刪掉但 DB 清除失敗，使用者會停在一個指向
+ *    已不存在檔案的破圖 URL——比「頭像還在」難救得多。刪除失敗只留 log（見 `deleteQuietly`）：
+ *    清不掉的檔案只是佔空間，拿它讓整支請求變成 500，等於讓人卡在自己已經按過移除的頭像上。
+ *
+ * 3. **compare-and-set，不是無條件 `update`。** 與 `saveCustomAvatar` 同一個手法，理由也一樣：
+ *    讀到舊值之後、寫入之前若有一次上傳插進來，無條件寫 null 會把剛上傳那一張的 Blob
+ *    變成沒有人指向的孤兒（而且照 `previousUrl` 刪掉的還是別人已經處理過的舊圖）。
+ *    `count === 0` 的一方什麼都不做，回報目前真正生效的狀態就好。
+ */
+export async function removeCustomAvatar(
+  client: PrismaClient,
+  userId: string,
+  store: AvatarBlobStore,
+): Promise<ProfileUser | null> {
+  const current = await loadProfileUser(client, userId)
+
+  if (!current) {
+    return null
+  }
+
+  const previousUrl = current.customAvatarUrl
+
+  // 本來就沒有自訂頭像：冪等地成功。不寫入、不刪除、也不回 404——
+  // 連點兩次「移除」不該有第二次的錯誤（issue #167）。
+  if (!previousUrl) {
+    return current
+  }
+
+  const cleared = await client.user.updateMany({
+    where: { id: userId, customAvatarUrl: previousUrl },
+    data: { customAvatarUrl: null },
+  })
+
+  if (cleared.count === 1) {
+    await deleteQuietly(store, previousUrl)
+  }
+
+  // 與上傳同一個作法：回應來自寫入之後重新讀到的那一列，而不是上面那份可能已經過期的快照
+  return await loadProfileUser(client, userId)
 }
